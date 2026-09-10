@@ -77,6 +77,7 @@ from backend.api.features.library.exceptions import (
     FolderAlreadyExistsError,
     FolderValidationError,
 )
+from backend.api.features.tasks import routes as tasks_routes
 from backend.blocks.llm import DEFAULT_LLM_MODEL
 from backend.copilot.bot.bot_backend import BotBackend
 from backend.copilot.bot.webhook_routes import register_webhook_adapters
@@ -489,6 +490,7 @@ app.include_router(experts_routes.public_router, tags=["v2", "experts"], prefix=
 app.include_router(experts_routes.router, tags=["v2", "experts"], prefix="/api")
 app.include_router(memory_routes.router, tags=["v2", "memory"], prefix="/api")
 app.include_router(home_routes.router, prefix="/api")
+app.include_router(tasks_routes.router, prefix="/api")
 app.include_router(
     backend.api.features.otto.routes.router, tags=["v2", "otto"], prefix="/api/otto"
 )

@@ -72,6 +72,7 @@ ToolName = Literal[
     # Platform tools (must match keys in TOOL_REGISTRY)
     "add_understanding",
     "ask_question",
+    "manage_tasks",
     "bash_exec",
     "browser_act",
     "browser_navigate",

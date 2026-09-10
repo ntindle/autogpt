@@ -1,4 +1,5 @@
 "use client";
+import { useTaskQuestionAnswer } from "./useTaskQuestionAnswer";
 import type { ToolUIPart } from "ai";
 import { ClarificationQuestionsCard } from "../../components/ClarificationQuestionsCard/ClarificationQuestionsCard";
 import { useCopilotChatActions } from "../../components/CopilotChatActionsProvider/useCopilotChatActions";
@@ -20,6 +21,7 @@ interface Props {
 export function AskQuestionTool({ part }: Props) {
   const text = getAnimationText(part);
   const { onSend } = useCopilotChatActions();
+  const answerTaskQuestion = useTaskQuestionAnswer();
 
   const isStreaming =
     part.state === "input-streaming" || part.state === "input-available";
@@ -27,8 +29,16 @@ export function AskQuestionTool({ part }: Props) {
 
   const output = getAskQuestionOutput(part);
 
-  function handleAnswers(answers: Record<string, string>) {
+  async function handleAnswers(answers: Record<string, string>) {
     if (!output || !isClarificationOutput(output)) return;
+    if (output.task_id && output.task_question_id) {
+      await answerTaskQuestion(
+        output.task_id,
+        output.task_question_id,
+        answers,
+      );
+      return;
+    }
     const questions = normalizeClarifyingQuestions(output.questions ?? []);
     const message = questions
       .map((q) => {
@@ -36,7 +46,7 @@ export function AskQuestionTool({ part }: Props) {
         return `> ${q.question}\n\n${answer}`;
       })
       .join("\n\n");
-    onSend(`**Here are my answers:**\n\n${message}\n\nPlease proceed.`);
+    await onSend(`**Here are my answers:**\n\n${message}\n\nPlease proceed.`);
   }
 
   if (output && isClarificationOutput(output)) {

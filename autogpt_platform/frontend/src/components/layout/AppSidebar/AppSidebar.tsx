@@ -59,6 +59,7 @@ const MAIN_LINKS: NavLink[] = [
 const HOME_LINK: NavLink = { name: "Home", href: "/home", icon: Home10Icon };
 
 const WORKSPACE_LINKS: NavLink[] = [
+  { name: "Tasks", href: "/tasks", icon: NoteEditIcon },
   { name: "Files", href: "/artifacts", icon: Folder01Icon },
 ];
 

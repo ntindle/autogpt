@@ -4,8 +4,9 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from backend.api.features.tasks.models import TaskQuestion, TaskQuestionItem
 from backend.copilot.model import ChatSession, PendingQuestion
-from backend.data.db_accessors import chat_db
+from backend.data.db_accessors import chat_db, tasks_db
 
 from .base import BaseTool
 from .models import ClarificationNeededResponse, ClarifyingQuestion, ToolResponseBase
@@ -103,13 +104,37 @@ class AskQuestionTool(BaseTool):
                 "ask_question requires at least one valid question in 'questions'"
             )
 
+        task_question = None
         text = "; ".join(q.question for q in questions)
         if session:
+            if session.metadata.workspace_task_id and session.user_id:
+                task_question = TaskQuestion(
+                    questions=[
+                        TaskQuestionItem(
+                            question=q.question,
+                            keyword=q.keyword or str(i),
+                            options=q.options or [],
+                        )
+                        for i, q in enumerate(questions)
+                    ]
+                )
+                await tasks_db().workspace_task_run_event(
+                    session.user_id,
+                    session.session_id,
+                    "question",
+                    question=task_question,
+                )
+                questions = [
+                    q.model_copy(update={"keyword": task_question.questions[i].keyword})
+                    for i, q in enumerate(questions)
+                ]
             await _mark_pending(session, text)
         return ClarificationNeededResponse(
             message=text,
             session_id=session.session_id if session else None,
             questions=questions,
+            task_id=session.metadata.workspace_task_id if task_question else None,
+            task_question_id=task_question.id if task_question else None,
         )
 
 

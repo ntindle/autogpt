@@ -263,6 +263,12 @@ async def _execute_graph(**kwargs):
         )
 
 
+def dispatch_workspace_tasks():
+    from backend.api.features.tasks.dispatcher import dispatch_pending_workspace_tasks
+
+    run_async(dispatch_pending_workspace_tasks())
+
+
 def execute_copilot_turn(**kwargs):
     """Enqueue a copilot turn on the executor queue and wait for completion.
 
@@ -338,6 +344,11 @@ async def _skip_inactive_expert_scope(
 async def _execute_copilot_turn(**kwargs):
     expert_scope_was_persisted = "expert_id" in kwargs
     args = CopilotTurnJobArgs(**kwargs)
+    if args.workspace_task_id:
+        from backend.api.features.tasks.schedules import run_task_occurrence
+
+        await run_task_occurrence(args)
+        return
     start_time = asyncio.get_event_loop().time()
     try:
         # Resolve the target session.  ``session_id=None`` means "fire into
@@ -1480,6 +1491,7 @@ class CopilotTurnJobArgs(BaseModel):
     # ``create_chat_session`` and routes the turn into the newly-minted
     # session. A non-null value pins the followup to an existing session
     # owned by the same user and in the persisted persona scope.
+    workspace_task_id: str | None = None
     session_id: str | None = None
     message: str
     cron: str | None = None
@@ -1766,6 +1778,15 @@ class Scheduler(AppService):
         )
 
         if self.register_system_tasks:
+            self.scheduler.add_job(
+                dispatch_workspace_tasks,
+                id="dispatch_workspace_tasks",
+                trigger="interval",
+                seconds=10,
+                replace_existing=True,
+                max_instances=1,
+                jobstore=Jobstores.WEEKLY_NOTIFICATIONS.value,
+            )
             # ALERTS — empty the ten-minute debounce window. Runs every
             # minute so a condition raised at :01 goes out at :11, not at the
             # next quarter hour.
@@ -2045,6 +2066,8 @@ class Scheduler(AppService):
         organization_id: str | None = None,
         team_id: str | None = None,
         expert_id: str | None = None,
+        workspace_task_id: str | None = None,
+        schedule_id: str | None = None,
     ) -> CopilotTurnJobInfo:
         """Schedule a copilot turn at a future time.
 
@@ -2069,7 +2092,8 @@ class Scheduler(AppService):
         user_timezone = _resolve_timezone(user_timezone, user_id)
         trigger = _build_trigger(cron=cron, run_at=run_at, user_timezone=user_timezone)
         job_args = CopilotTurnJobArgs(
-            schedule_id=str(uuid.uuid4()),
+            schedule_id=schedule_id or str(uuid.uuid4()),
+            workspace_task_id=workspace_task_id,
             user_id=user_id,
             session_id=session_id,
             message=message,

@@ -52,6 +52,7 @@ from .manage_folders import (
 )
 from .manage_presets import DeletePresetTool, ListPresetsTool, UpdatePresetTool
 from .manage_schedules import DeleteScheduleTool, ListSchedulesTool
+from .manage_tasks import ManageTasksTool
 from .models import ErrorResponse
 from .platform_info import PlatformInfoTool
 from .raise_expert import RaiseExpertTool
@@ -106,6 +107,7 @@ TOOL_REGISTRY: dict[str, BaseTool] = {
     "move_agents_to_folder": MoveAgentsToFolderTool(),
     "run_agent": RunAgentTool(),
     # Schedule management
+    "manage_tasks": ManageTasksTool(),
     "list_schedules": ListSchedulesTool(),
     "delete_schedule": DeleteScheduleTool(),
     "schedule_followup": ScheduleFollowupTool(),

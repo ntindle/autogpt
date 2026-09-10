@@ -111,6 +111,7 @@ class ChatSessionMetadata(BaseModel):
     # this graph and reject calls targeting a different agent.  Also used
     # as a lookup key so refreshing the builder resumes the same chat.
     builder_graph_id: str | None = None
+    workspace_task_id: str | None = None
     source_platform: str | None = None
 
     # ``None`` means the row was persisted before this field existed, and is
@@ -1324,6 +1325,7 @@ async def create_chat_session(
     user_id: str,
     *,
     dry_run: bool,
+    workspace_task_id: str | None = None,
     session_id: str | None = None,
     builder_graph_id: str | None = None,
     organization_id: str | None = None,
@@ -1387,6 +1389,8 @@ async def create_chat_session(
         delegated_by_session_id=delegated_by_session_id,
         handed_off_from_expert_id=handed_off_from_expert_id,
     )
+
+    session.metadata.workspace_task_id = workspace_task_id
 
     # Create in database first - fail fast if this fails
     try:

@@ -49,6 +49,8 @@ from backend.api.features.store.db import (
     get_store_agents,
 )
 from backend.api.features.store.embeddings import backfill_missing_embeddings
+from backend.api.features.tasks import db as tasks_db
+from backend.api.features.tasks import lifecycle as tasks_lifecycle
 from backend.copilot import db as chat_db
 from backend.copilot.sharing.db import link_new_execution_to_chat_share
 from backend.data import bot_analytics as bot_analytics_db
@@ -526,6 +528,23 @@ class DatabaseManager(AppService):
     # ============ Experts ============ #
     # Exposed so the Prisma-less copilot executor can resolve expert
     # identity/team context via db_accessors.experts_db().
+    configure_workspace_task_schedule = _(tasks_db.configure_workspace_task_schedule)
+    create_workspace_task_occurrence = _(tasks_db.create_workspace_task_occurrence)
+    add_workspace_task_step = _(tasks_db.add_workspace_task_step)
+    unfinished_workspace_task_dispatches = _(
+        tasks_db.unfinished_workspace_task_dispatches
+    )
+    start_workspace_task_run = _(tasks_db.start_workspace_task_run)
+    list_workspace_tasks = _(tasks_db.list_workspace_tasks)
+    create_workspace_task = _(tasks_db.create_workspace_task)
+    command_workspace_task = _(tasks_db.command_workspace_task)
+    claim_workspace_task_dispatch = _(tasks_db.claim_workspace_task_dispatch)
+    update_workspace_task_dispatch = _(tasks_db.update_workspace_task_dispatch)
+    bind_workspace_task_session = _(tasks_db.bind_workspace_task_session)
+    pending_workspace_task_dispatches = _(tasks_db.pending_workspace_task_dispatches)
+    workspace_task_for_session = _(tasks_lifecycle.workspace_task_for_session)
+    workspace_task_run_event = _(tasks_lifecycle.workspace_task_run_event)
+
     get_expert = _(experts_db.get_expert)
     expert_row_exists = _(experts_db.expert_row_exists)
     resolve_attributable_expert = _(experts_db.resolve_attributable_expert)
@@ -700,6 +719,21 @@ class DatabaseManagerClient(AppServiceClient):
 
 class DatabaseManagerAsyncClient(AppServiceClient):
     d = DatabaseManager
+
+    start_workspace_task_run = d.start_workspace_task_run
+    list_workspace_tasks = d.list_workspace_tasks
+    create_workspace_task = d.create_workspace_task
+    command_workspace_task = d.command_workspace_task
+    claim_workspace_task_dispatch = d.claim_workspace_task_dispatch
+    update_workspace_task_dispatch = d.update_workspace_task_dispatch
+    bind_workspace_task_session = d.bind_workspace_task_session
+    pending_workspace_task_dispatches = d.pending_workspace_task_dispatches
+    unfinished_workspace_task_dispatches = d.unfinished_workspace_task_dispatches
+    workspace_task_for_session = d.workspace_task_for_session
+    workspace_task_run_event = d.workspace_task_run_event
+    configure_workspace_task_schedule = d.configure_workspace_task_schedule
+    create_workspace_task_occurrence = d.create_workspace_task_occurrence
+    add_workspace_task_step = d.add_workspace_task_step
 
     @classmethod
     def get_service_type(cls):

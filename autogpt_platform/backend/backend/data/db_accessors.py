@@ -259,3 +259,13 @@ def bot_installs_db():
         bot_installs_db = get_database_manager_async_client()
 
     return bot_installs_db
+
+
+def tasks_db():
+    if db.is_connected():
+        from backend.api.features.tasks import db as _tasks_db
+
+        return _tasks_db
+    from backend.util.clients import get_database_manager_async_client
+
+    return get_database_manager_async_client()

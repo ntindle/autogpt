@@ -7,6 +7,8 @@ export interface AskQuestionOutput {
   message: string;
   questions: ClarifyingQuestion[];
   session_id?: string;
+  task_id?: string;
+  task_question_id?: string;
 }
 
 interface ErrorOutput {

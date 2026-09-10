@@ -6,6 +6,7 @@ export const PROTECTED_PAGES = [
   "/auth/integrations",
   "/copilot",
   "/home",
+  "/tasks",
   "/monitor",
   "/build",
   "/onboarding",

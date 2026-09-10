@@ -14,6 +14,8 @@ import time
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Callable, cast
 
+from backend.api.features.tasks.execution_policy import task_execution_policy
+from backend.api.features.tasks.hooks import notify_task_lifecycle
 from backend.copilot import stream_registry
 from backend.copilot.baseline import stream_chat_completion_baseline
 from backend.copilot.config import ChatConfig
@@ -513,6 +515,7 @@ class CoPilotProcessor:
         last_refresh = time.monotonic()
         refresh_interval = 30.0  # Refresh lock every 30 seconds
         error_msg = None
+        task_bound = False
         credential_lease = None
         cost_context_stack = AsyncExitStack()
 
@@ -642,6 +645,15 @@ class CoPilotProcessor:
             # (e.g. wait_for_session_result, SSE clients) receive the
             # same events as they are produced.
             envelope = taint_for_source_platform(entry.envelope, session)
+            task_bound = bool(session.metadata.workspace_task_id)
+            task_permissions, task_context = await task_execution_policy(
+                session, entry.permissions, entry.turn_id
+            )
+            if task_context:
+                entry.context = {
+                    **(entry.context or {}),
+                    "workspace_task": task_context,
+                }
             raw_stream = stream_fn(
                 session_id=entry.session_id,
                 message=entry.message or None,
@@ -650,7 +662,7 @@ class CoPilotProcessor:
                 context=entry.context,
                 file_ids=entry.file_ids,
                 model=entry.model,
-                permissions=entry.permissions,
+                permissions=task_permissions,
                 envelope=envelope,
                 request_arrival_at=entry.request_arrival_at,
                 organization_id=(
@@ -728,6 +740,14 @@ class CoPilotProcessor:
                         log.error(f"Failed to release Codex credential: {release_err}")
             finally:
                 try:
+                    if task_bound:
+                        await notify_task_lifecycle(
+                            entry.user_id,
+                            entry.session_id,
+                            "finished",
+                            error_msg or "",
+                            entry.turn_id,
+                        )
                     await stream_registry.mark_session_completed(
                         entry.session_id, error_message=error_msg
                     )

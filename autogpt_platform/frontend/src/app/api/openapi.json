@@ -15320,6 +15320,259 @@
         }
       }
     },
+    "/api/tasks": {
+      "get": {
+        "tags": ["tasks", "private"],
+        "summary": "List Tasks",
+        "operationId": "list_workspace_tasks",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TaskListResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          }
+        },
+        "security": [{ "HTTPBearerJWT": [] }]
+      },
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Create Task",
+        "operationId": "create_workspace_task",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TaskCreate" }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceTask" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        },
+        "security": [{ "HTTPBearerJWT": [] }]
+      }
+    },
+    "/api/tasks/schedules": {
+      "get": {
+        "tags": ["tasks", "private"],
+        "summary": "Get Schedules",
+        "operationId": "list_task_schedules",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": { "$ref": "#/components/schemas/TaskScheduleInfo" },
+                  "type": "array",
+                  "title": "Response List Task Schedules"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          }
+        },
+        "security": [{ "HTTPBearerJWT": [] }]
+      }
+    },
+    "/api/tasks/schedules/{schedule_id}/pause": {
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Pause Task Schedule",
+        "operationId": "pause_task_schedule",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Schedule Id" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": { "type": "boolean" },
+                  "title": "Response Pause Task Schedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/schedules/{schedule_id}/resume": {
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Resume Task Schedule",
+        "operationId": "resume_task_schedule",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "schedule_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Schedule Id" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": { "type": "boolean" },
+                  "title": "Response Resume Task Schedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{task_id}/commands": {
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Command Task",
+        "operationId": "command_workspace_task",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Task Id" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TaskCommand" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceTask" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{task_id}/schedule": {
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Create Task Schedule",
+        "operationId": "schedule_workspace_task",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Task Id" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TaskScheduleRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceTask" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/transfers": {
       "get": {
         "tags": ["v2", "transfers", "transfers"],
@@ -18118,6 +18371,10 @@
             "anyOf": [{ "type": "string" }, { "type": "null" }],
             "title": "Builder Graph Id"
           },
+          "workspace_task_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Workspace Task Id"
+          },
           "source_platform": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
             "title": "Source Platform"
@@ -18240,6 +18497,14 @@
           "session_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
             "title": "Session Id"
+          },
+          "task_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Task Id"
+          },
+          "task_question_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Task Question Id"
           },
           "questions": {
             "items": { "$ref": "#/components/schemas/ClarifyingQuestion" },
@@ -18651,6 +18916,10 @@
             "title": "Schedule Id"
           },
           "user_id": { "type": "string", "title": "User Id" },
+          "workspace_task_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Workspace Task Id"
+          },
           "session_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
             "title": "Session Id"
@@ -26674,6 +26943,7 @@
           "agent_builder_validation_result",
           "agent_builder_fix_result",
           "task_decomposition",
+          "workspace_tasks",
           "block_list",
           "block_details",
           "block_output",
@@ -28815,6 +29085,153 @@
         "required": ["recent_searches", "providers", "top_blocks"],
         "title": "SuggestionsResponse"
       },
+      "TaskAssignee": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["human", "auto", "expert"],
+            "title": "Kind"
+          },
+          "id": { "type": "string", "title": "Id" },
+          "name": { "type": "string", "title": "Name" },
+          "avatar_url": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Avatar Url"
+          },
+          "reason": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": ["kind", "id", "name"],
+        "title": "TaskAssignee"
+      },
+      "TaskCommand": {
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "edit",
+              "assign",
+              "suggest",
+              "complete",
+              "reopen",
+              "cancel",
+              "hold",
+              "activate",
+              "pause",
+              "resume",
+              "retry",
+              "answer",
+              "accept_scope",
+              "accept_result",
+              "request_changes",
+              "discuss"
+            ],
+            "title": "Operation"
+          },
+          "version": { "type": "integer", "title": "Version" },
+          "title": {
+            "anyOf": [
+              { "type": "string", "maxLength": 500, "minLength": 1 },
+              { "type": "null" }
+            ],
+            "title": "Title"
+          },
+          "description": {
+            "anyOf": [
+              { "type": "string", "maxLength": 20000 },
+              { "type": "null" }
+            ],
+            "title": "Description"
+          },
+          "project": {
+            "anyOf": [
+              { "type": "string", "maxLength": 100 },
+              { "type": "null" }
+            ],
+            "title": "Project"
+          },
+          "assignee": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ]
+          },
+          "parent_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Parent Id"
+          },
+          "dependencies": {
+            "anyOf": [
+              { "items": { "type": "string" }, "type": "array" },
+              { "type": "null" }
+            ],
+            "title": "Dependencies"
+          },
+          "question_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Question Id"
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "additionalProperties": { "type": "string" },
+                "type": "object"
+              },
+              { "type": "null" }
+            ],
+            "title": "Answers"
+          },
+          "feedback": {
+            "type": "string",
+            "maxLength": 10000,
+            "title": "Feedback",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["operation", "version"],
+        "title": "TaskCommand"
+      },
+      "TaskCreate": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 20000,
+            "title": "Description",
+            "default": ""
+          },
+          "project": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Project",
+            "default": ""
+          },
+          "parent_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Parent Id"
+          },
+          "plan_only": {
+            "type": "boolean",
+            "title": "Plan Only",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["title"],
+        "title": "TaskCreate"
+      },
       "TaskDecompositionResponse": {
         "properties": {
           "type": {
@@ -28847,6 +29264,176 @@
         "required": ["message", "goal", "steps"],
         "title": "TaskDecompositionResponse",
         "description": "Response for decompose_goal tool — shows the plan to the user."
+      },
+      "TaskEvent": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "at": { "type": "string", "format": "date-time", "title": "At" },
+          "actor": { "type": "string", "title": "Actor" },
+          "text": { "type": "string", "title": "Text" }
+        },
+        "type": "object",
+        "required": ["actor", "text"],
+        "title": "TaskEvent"
+      },
+      "TaskListResponse": {
+        "properties": {
+          "tasks": {
+            "items": { "$ref": "#/components/schemas/WorkspaceTask" },
+            "type": "array",
+            "title": "Tasks"
+          },
+          "assignees": {
+            "items": { "$ref": "#/components/schemas/TaskAssignee" },
+            "type": "array",
+            "title": "Assignees"
+          }
+        },
+        "type": "object",
+        "required": ["tasks", "assignees"],
+        "title": "TaskListResponse"
+      },
+      "TaskQuestion": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "questions": {
+            "items": { "$ref": "#/components/schemas/TaskQuestionItem" },
+            "type": "array",
+            "title": "Questions"
+          },
+          "answers": {
+            "anyOf": [
+              {
+                "additionalProperties": { "type": "string" },
+                "type": "object"
+              },
+              { "type": "null" }
+            ],
+            "title": "Answers"
+          },
+          "answered_by": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Answered By"
+          },
+          "asked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Asked At"
+          }
+        },
+        "type": "object",
+        "required": ["questions"],
+        "title": "TaskQuestion"
+      },
+      "TaskQuestionItem": {
+        "properties": {
+          "question": { "type": "string", "title": "Question" },
+          "keyword": { "type": "string", "title": "Keyword" },
+          "options": {
+            "items": { "type": "string" },
+            "type": "array",
+            "title": "Options"
+          }
+        },
+        "type": "object",
+        "required": ["question", "keyword"],
+        "title": "TaskQuestionItem"
+      },
+      "TaskSchedule": {
+        "properties": {
+          "id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Id"
+          },
+          "cron": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Cron"
+          },
+          "run_at": {
+            "anyOf": [
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ],
+            "title": "Run At"
+          },
+          "timezone": {
+            "type": "string",
+            "title": "Timezone",
+            "default": "UTC"
+          },
+          "paused": { "type": "boolean", "title": "Paused", "default": false },
+          "next_run": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Next Run"
+          }
+        },
+        "type": "object",
+        "title": "TaskSchedule"
+      },
+      "TaskScheduleInfo": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "name": { "type": "string", "title": "Name" },
+          "kind": {
+            "type": "string",
+            "enum": ["graph", "copilot_turn"],
+            "title": "Kind"
+          },
+          "cron": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Cron"
+          },
+          "run_at": {
+            "anyOf": [
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ],
+            "title": "Run At"
+          },
+          "timezone": { "type": "string", "title": "Timezone" },
+          "next_run_time": { "type": "string", "title": "Next Run Time" },
+          "paused": { "type": "boolean", "title": "Paused", "default": false },
+          "session_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Session Id"
+          },
+          "expert_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Expert Id"
+          },
+          "task_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Task Id"
+          }
+        },
+        "type": "object",
+        "required": ["id", "name", "kind", "timezone", "next_run_time"],
+        "title": "TaskScheduleInfo"
+      },
+      "TaskScheduleRequest": {
+        "properties": {
+          "version": { "type": "integer", "title": "Version" },
+          "cron": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Cron"
+          },
+          "run_at": {
+            "anyOf": [
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ],
+            "title": "Run At"
+          },
+          "timezone": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Timezone",
+            "default": "UTC"
+          }
+        },
+        "type": "object",
+        "required": ["version"],
+        "title": "TaskScheduleRequest"
       },
       "TeamMemberResponse": {
         "properties": {
@@ -31630,6 +32217,190 @@
         },
         "type": "object",
         "title": "WorkspaceFolderUpdateRequest"
+      },
+      "WorkspaceTask": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "user_id": { "type": "string", "title": "User Id" },
+          "organization_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Organization Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 20000,
+            "title": "Description",
+            "default": ""
+          },
+          "project": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Project",
+            "default": ""
+          },
+          "parent_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Parent Id"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": true
+          },
+          "accepted": {
+            "type": "boolean",
+            "title": "Accepted",
+            "default": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "todo",
+              "working",
+              "needs_you",
+              "blocked",
+              "done",
+              "canceled"
+            ],
+            "title": "Status",
+            "default": "todo"
+          },
+          "activity": { "type": "string", "title": "Activity", "default": "" },
+          "assignee": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ]
+          },
+          "suggestion": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ]
+          },
+          "plan_only": {
+            "type": "boolean",
+            "title": "Plan Only",
+            "default": false
+          },
+          "paused": { "type": "boolean", "title": "Paused", "default": false },
+          "dependencies": {
+            "items": { "type": "string" },
+            "type": "array",
+            "title": "Dependencies"
+          },
+          "session_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Session Id"
+          },
+          "previous_session_ids": {
+            "items": { "type": "string" },
+            "type": "array",
+            "title": "Previous Session Ids"
+          },
+          "started_turn_ids": {
+            "items": { "type": "string" },
+            "type": "array",
+            "title": "Started Turn Ids"
+          },
+          "last_turn_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Last Turn Id"
+          },
+          "coordination_state": {
+            "type": "string",
+            "title": "Coordination State",
+            "default": ""
+          },
+          "dispatch_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Dispatch Id"
+          },
+          "dispatch_state": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": ["pending", "claimed", "sent", "finished"]
+              },
+              { "type": "null" }
+            ],
+            "title": "Dispatch State"
+          },
+          "dispatch_claimed_at": {
+            "anyOf": [
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ],
+            "title": "Dispatch Claimed At"
+          },
+          "dispatch_message": {
+            "type": "string",
+            "title": "Dispatch Message",
+            "default": ""
+          },
+          "question": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskQuestion" },
+              { "type": "null" }
+            ]
+          },
+          "result": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Result"
+          },
+          "review_of": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Review Of"
+          },
+          "review_version": {
+            "anyOf": [{ "type": "integer" }, { "type": "null" }],
+            "title": "Review Version"
+          },
+          "result_version": {
+            "type": "integer",
+            "title": "Result Version",
+            "default": 0
+          },
+          "schedule": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskSchedule" },
+              { "type": "null" }
+            ]
+          },
+          "occurrence_of": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Occurrence Of"
+          },
+          "source_url": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Source Url"
+          },
+          "events": {
+            "items": { "$ref": "#/components/schemas/TaskEvent" },
+            "type": "array",
+            "title": "Events"
+          },
+          "version": { "type": "integer", "title": "Version", "default": 1 },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": ["user_id", "title"],
+        "title": "WorkspaceTask"
       },
       "WriteSummary": {
         "properties": {

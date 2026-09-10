@@ -17,7 +17,7 @@ interface Props {
   questions: ClarifyingQuestion[];
   message: string;
   sessionId?: string;
-  onSubmitAnswers: (answers: Record<string, string>) => void;
+  onSubmitAnswers: (answers: Record<string, string>) => void | Promise<void>;
   onCancel?: () => void;
   isAnswered?: boolean;
   className?: string;
@@ -34,6 +34,8 @@ export function ClarificationQuestionsCard({
 }: Props) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const lastSessionIdRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -82,20 +84,27 @@ export function ClarificationQuestionsCard({
     setAnswers((prev) => ({ ...prev, [keyword]: value }));
   }
 
-  function handleSubmit() {
-    const allAnswered = questions.every((q) => answers[q.keyword]?.trim());
-    if (!allAnswered) {
+  async function handleSubmit() {
+    if (isSubmitting || !questions.every((q) => answers[q.keyword]?.trim()))
       return;
-    }
-    setIsSubmitted(true);
-    onSubmitAnswers(answers);
-
-    const storageKey = getStorageKey(sessionId);
+    setIsSubmitting(true);
+    setSubmitError("");
     try {
-      if (storageKey) {
-        localStorage.removeItem(storageKey);
-      }
-    } catch {}
+      await onSubmitAnswers(answers);
+      setIsSubmitted(true);
+      const storageKey = getStorageKey(sessionId);
+      try {
+        if (storageKey) localStorage.removeItem(storageKey);
+      } catch {}
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Could not submit answers. Please try again.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   const allAnswered = questions.every((q) => answers[q.keyword]?.trim());
@@ -214,10 +223,15 @@ export function ClarificationQuestionsCard({
               })}
             </div>
 
+            {submitError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {submitError}
+              </p>
+            ) : null}
             <div className="flex max-w-[25rem] gap-2">
               <Button
                 onClick={handleSubmit}
-                disabled={!allAnswered}
+                disabled={!allAnswered || isSubmitting}
                 className="w-auto flex-1"
                 variant="primary"
               >

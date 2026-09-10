@@ -39,6 +39,7 @@ class ResponseType(str, Enum):
 
     # Task decomposition (goal → sub-instructions)
     TASK_DECOMPOSITION = "task_decomposition"
+    WORKSPACE_TASKS = "workspace_tasks"
 
     # Block
     BLOCK_LIST = "block_list"
@@ -731,6 +732,8 @@ class ClarificationNeededResponse(ToolResponseBase):
     """Response when the LLM needs more information from the user."""
 
     type: ResponseType = ResponseType.AGENT_BUILDER_CLARIFICATION_NEEDED
+    task_id: str | None = None
+    task_question_id: str | None = None
     questions: list[ClarifyingQuestion] = Field(default_factory=list)
 
 
