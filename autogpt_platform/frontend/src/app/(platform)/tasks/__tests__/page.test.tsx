@@ -142,3 +142,21 @@ test("human work can be completed without opening a chat", async () => {
     }),
   );
 });
+
+test("capture works on a plain HTTP LAN origin without crypto.randomUUID", async () => {
+  const originalCrypto = globalThis.crypto;
+  vi.stubGlobal("crypto", {
+    getRandomValues: originalCrypto.getRandomValues.bind(originalCrypto),
+    randomUUID: undefined,
+  });
+  try {
+    render(<TasksPage />);
+    const input = await screen.findByRole("textbox", { name: "Add a task" });
+    await userEvent.type(input, "Save over HTTP");
+    await userEvent.click(screen.getByRole("button", { name: /^Add$/ }));
+    await waitFor(() => expect(created).toHaveBeenCalledOnce());
+    expect(created.mock.calls[0][0].id).toMatch(/^[0-9a-f-]{36}$/);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

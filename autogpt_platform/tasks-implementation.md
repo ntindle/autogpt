@@ -51,3 +51,9 @@ This development deployment reuses the installed single-container runtime and
 updates the three changed locked Python packages, generated Prisma client,
 application source, and standalone frontend. Final source packaging runs on the
 local Linux machine. The new instance uses its own data and private LAN port.
+
+The development image enables the existing frontend overrides
+`AUTOGPT_NEW_LAYOUT`, `HIRE_EXPERTS`, `CHAT_WORKSPACE_FILES`, and
+`ARTIFACTS_PAGE` using `NEXT_PUBLIC_FORCE_FLAG_*` build variables. The backend
+uses `FORCE_FLAG_HIRE_EXPERTS=true` for the matching Expert surfaces.
+Task capture supports plain HTTP LAN addresses using the existing UUID library.

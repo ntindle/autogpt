@@ -1,5 +1,6 @@
 import { useCreateWorkspaceTask } from "@/app/api/__generated__/endpoints/tasks/tasks";
 import { useRef, useState } from "react";
+import { v4 as uuidv4 } from "uuid";
 
 interface Entry {
   id: string;
@@ -37,7 +38,7 @@ export function useTaskCapture({ project, refresh, report }: Options) {
         titles.join("\n")
     ) {
       queue.current = {
-        entries: titles.map((title) => ({ id: crypto.randomUUID(), title })),
+        entries: titles.map((title) => ({ id: uuidv4(), title })),
         parent: addParent,
         project,
       };
