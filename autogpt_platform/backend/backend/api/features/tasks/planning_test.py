@@ -143,10 +143,12 @@ def test_full_context_and_inherited_dependencies_follow_nested_work():
     tasks = [prerequisite, root, child]
     assert not is_runnable(child, tasks)
     prerequisite.status = "done"
+    prerequisite.result = "Approved kit contents: blue thread and a small canvas"
     assert is_runnable(child, tasks)
     context = execution_context(child, tasks)
     assert "Needlepoint kits, business constraints" in context
     assert "AutoPilot retains ownership" in context
+    assert prerequisite.result in context
     root.dependencies = [child.id]
     with pytest.raises(TaskConflict):
         check_structure(child, tasks)

@@ -139,3 +139,14 @@ The regular-chat nesting report was reproduced and covered by a tool-through-
 database regression. Late additions also cover stable checklist ordering and
 rejection of premature coordinator results. The task suite now has 30 passing
 tests, alongside 131 existing worker/question/permission regressions.
+
+Shared AutoPilot prompt guidance now teaches actual Expert selection, durable
+capture and nesting from regular chat, task-owned versus ad hoc delegation,
+AutoPilot parent ownership, prerequisite-aware handoffs, and result acceptance.
+The shared notes reach both baseline and SDK transports after the configurable
+base prompt, while Expert-specific guidance remains gated by the existing team
+feature flag.
+
+Downstream task turns also receive prerequisite results and recent activity from
+parent outcomes, so an Expert gets the accepted handoff details with its task
+brief instead of only prerequisite IDs.
