@@ -102,6 +102,12 @@ def _assign(task: WorkspaceTask, command: TaskCommand) -> None:
         return
     task.assignee = command.assignee
     task.suggestion = None
+    task.suggestion_state, task.suggestion_error, task.suggestion_request_id = (
+        "idle",
+        "",
+        "",
+    )
+    task.suggestion_alternatives = []
     task.status = "todo"
     task.activity = ""
     task.dispatch_state = None

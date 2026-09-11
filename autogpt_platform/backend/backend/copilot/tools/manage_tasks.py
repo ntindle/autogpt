@@ -36,7 +36,10 @@ class ManageTasksTool(BaseTool):
             "Manage durable Tasks in the workspace. Capture saves a task without execution. "
             "In a delegated task chat, inspect the branch, add necessary child tasks, report activity, "
             "or submit_result with evidence for acceptance. New commitments should be proposed, not assumed. "
-            "Auto can accept or request changes to a child's result; no executor can accept its own result. "
+            "AutoPilot retains parent ownership and delegates specialist child tasks to existing Experts from list_team. "
+            "AutoPilot can accept or request changes to a child's result; no executor can accept its own result. "
+            "Use assign_step with task_id for existing unassigned steps; preserve confirmed owners and never duplicate a planned step. "
+            "In any chat, add_step with task_id creates a real child under that owned parent. Outside a delegated task conversation its owner remains a suggestion. Never simulate nesting with title prefixes. "
             "Keep visible tasks at deliverable granularity. Use ask_question for human questions."
         )
 
@@ -51,6 +54,7 @@ class ManageTasksTool(BaseTool):
                         "list",
                         "capture",
                         "add_step",
+                        "assign_step",
                         "activity",
                         "submit_result",
                         "accept_result",
@@ -59,7 +63,7 @@ class ManageTasksTool(BaseTool):
                 },
                 "task_id": {
                     "type": "string",
-                    "description": "A child task ID for review; omitted uses this chat's task.",
+                    "description": "For add_step, the parent task ID (works from a regular chat). For review or assign_step, the child ID. Omitted uses this chat's linked task.",
                 },
                 "title": {"type": "string"},
                 "description": {"type": "string"},
@@ -75,6 +79,11 @@ class ManageTasksTool(BaseTool):
                 "assignee_id": {
                     "type": "string",
                     "description": "Existing eligible user or Expert ID. For Auto use auto.",
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Existing prerequisite child task IDs. This step waits for their accepted results; add prerequisites first.",
                 },
                 "proposed": {
                     "type": "boolean",
@@ -100,7 +109,9 @@ class ManageTasksTool(BaseTool):
         if not user_id:
             return ErrorResponse(message="Authentication required")
         root = await tasks_db().workspace_task_for_session(user_id, session.session_id)
-        if operation == "add_step" and root:
+        if operation in ("add_step", "assign_step") and (
+            root or (operation == "add_step" and task_id)
+        ):
             kind = kwargs.get("assignee_kind")
             assignee = (
                 TaskAssignee(
@@ -112,6 +123,18 @@ class ManageTasksTool(BaseTool):
                 if kind
                 else None
             )
+            if operation == "assign_step":
+                if not assignee or not task_id:
+                    return ErrorResponse(
+                        message="Choose an existing step and eligible assignee"
+                    )
+                task = await tasks_db().assign_workspace_task_step(
+                    user_id, session.session_id, task_id, assignee
+                )
+                return WorkspaceTasksResponse(
+                    message="Existing step delegated within the outcome; other owners preserved",
+                    tasks=[task],
+                )
             task = await tasks_db().add_workspace_task_step(
                 user_id,
                 session.session_id,
@@ -119,9 +142,15 @@ class ManageTasksTool(BaseTool):
                 description,
                 assignee,
                 bool(kwargs.get("proposed", False)),
+                dependencies=kwargs.get("dependencies"),
+                parent_id=task_id or None,
             )
             return WorkspaceTasksResponse(
-                message="Step saved within the delegated outcome; uncertain new scope stays proposed.",
+                message=(
+                    "Step delegated within the linked outcome"
+                    if task.assignee
+                    else "Nested step saved with proposed ownership; no execution was authorized by this chat"
+                ),
                 tasks=[task],
             )
         if operation == "capture":
@@ -133,6 +162,13 @@ class ManageTasksTool(BaseTool):
             return WorkspaceTasksResponse(
                 message="Captured; ownership is suggested, not delegated.", tasks=[task]
             )
+        if operation == "list" and not root:
+            tasks = await tasks_db().list_workspace_tasks(user_id)
+            if task_id:
+                if not any(task.id == task_id for task in tasks):
+                    return ErrorResponse(message="Task not found in your workspace")
+                tasks = branch(task_id, tasks)
+            return WorkspaceTasksResponse(message="Your workspace tasks", tasks=tasks)
         if not root:
             return ErrorResponse(
                 message="Open a task's linked conversation to manage its work. You can capture tasks here without starting them."

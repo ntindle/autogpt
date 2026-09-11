@@ -160,3 +160,142 @@ test("capture works on a plain HTTP LAN origin without crypto.randomUUID", async
     vi.unstubAllGlobals();
   }
 });
+
+test("the suggested identity names the actual Expert and exposes role-specific alternatives", async () => {
+  const designer = {
+    kind: "expert" as const,
+    id: "grid-expert",
+    name: "Grid designer",
+    role: "3D fabrication",
+    reason: "Fits the needlepoint grid design.",
+  };
+  server.use(
+    getListWorkspaceTasksMockHandler({
+      tasks: [
+        task({
+          suggestion: designer,
+          suggestion_state: "ready",
+          suggestion_alternatives: [
+            { ...AUTO, reason: "Coordinates several disciplines." },
+          ],
+        }),
+      ],
+      assignees: [designer, AUTO],
+    }),
+  );
+  render(<TasksPage />);
+  expect(await screen.findByText("Grid designer")).toBeTruthy();
+  await userEvent.click(
+    screen.getByRole("button", { name: /Suggested: Grid designer/ }),
+  );
+  expect(screen.getByText("Fits the needlepoint grid design.")).toBeTruthy();
+  expect(screen.getByText("Coordinates several disciplines.")).toBeTruthy();
+  expect(commands).not.toHaveBeenCalled();
+});
+
+test("breakdown stays a selectable editable preview and accepts only the chosen steps", async () => {
+  const { getAcceptWorkspaceTaskBreakdownMockHandler200 } = await import(
+    "@/app/api/__generated__/endpoints/tasks/tasks.msw"
+  );
+  const accepted = vi.fn();
+  const item = task({
+    title: "Set up sample kits",
+    breakdown: {
+      id: "preview-1",
+      context: "snapshot",
+      state: "ready",
+      steps: [
+        {
+          id: "grid",
+          title: "Design the grid",
+          description: "Fit the chosen kit contents",
+          suggestion: AUTO,
+        },
+        {
+          id: "website",
+          title: "Add kits to the website",
+          description: "Prepare product listings",
+          suggestion: AUTO,
+        },
+      ],
+    },
+  });
+  server.use(
+    getListWorkspaceTasksMockHandler({ tasks: [item], assignees: [AUTO] }),
+    getAcceptWorkspaceTaskBreakdownMockHandler200(async ({ request }) => {
+      accepted(await request.json());
+      return item;
+    }),
+  );
+  render(<TasksPage />);
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Break down Set up sample kits",
+    }),
+  );
+  expect(await screen.findByText(/Owners remain suggestions/)).toBeTruthy();
+  expect(accepted).not.toHaveBeenCalled();
+  expect(commands).not.toHaveBeenCalled();
+  const title = screen.getByRole("textbox", { name: "Step 1" });
+  await userEvent.clear(title);
+  await userEvent.type(title, "Design and test the needlepoint grid");
+  await userEvent.click(
+    screen.getByRole("checkbox", { name: "Include step 2" }),
+  );
+  await userEvent.click(
+    screen.getByRole("button", { name: "Accept 1 selected step" }),
+  );
+  await waitFor(() =>
+    expect(accepted).toHaveBeenCalledWith({
+      preview_id: "preview-1",
+      steps: [
+        {
+          id: "grid",
+          title: "Design and test the needlepoint grid",
+          assignee: AUTO,
+        },
+      ],
+    }),
+  );
+});
+
+test("deselecting a prerequisite also deselects dependent steps", async () => {
+  server.use(
+    getListWorkspaceTasksMockHandler({
+      tasks: [
+        task({
+          breakdown: {
+            id: "preview-deps",
+            context: "snapshot",
+            state: "ready",
+            steps: [
+              { id: "grid", title: "Design the grid", suggestion: AUTO },
+              {
+                id: "bulk",
+                title: "Prepare bulk printing",
+                suggestion: AUTO,
+                dependencies: ["grid"],
+              },
+            ],
+          },
+        }),
+      ],
+      assignees: [AUTO],
+    }),
+  );
+  render(<TasksPage />);
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Break down Compare camera mounts",
+    }),
+  );
+  await userEvent.click(
+    await screen.findByRole("checkbox", { name: "Include step 1" }),
+  );
+  expect(
+    screen.getByRole("checkbox", { name: "Include step 2" }),
+  ).toHaveProperty("checked", false);
+  expect(
+    screen.getByRole("button", { name: "Accept 0 selected steps" }),
+  ).toHaveProperty("disabled", true);
+});

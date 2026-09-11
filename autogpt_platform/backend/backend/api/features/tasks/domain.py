@@ -44,7 +44,11 @@ def is_runnable(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> bool:
     ):
         return False
     by_id = {t.id: t for t in tasks}
-    return all(d in by_id and by_id[d].status == "done" for d in task.dependencies)
+    return all(
+        d in by_id and by_id[d].status == "done"
+        for item in ancestors(task, tasks)
+        for d in item.dependencies
+    )
 
 
 def progress(task_id: str, tasks: list[WorkspaceTask]) -> tuple[int, int]:
@@ -88,9 +92,15 @@ def check_structure(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> None:
         item = by_id.get(task_id)
         if item is None:
             raise TaskConflict("Dependency not found")
-        for dependency in item.dependencies:
-            if dependency in {t.id for t in ancestors(item, tasks)}:
-                raise TaskConflict("A task cannot depend on its parent outcome")
+        for dependency in {
+            d for parent in ancestors(item, tasks) for d in parent.dependencies
+        }:
+            if dependency in {t.id for t in ancestors(item, tasks)} or dependency in {
+                t.id for t in branch(item.id, tasks)
+            }:
+                raise TaskConflict(
+                    "A task cannot depend on its parent outcome or its own steps"
+                )
             visit(dependency)
         seen.remove(task_id)
         checked.add(task_id)

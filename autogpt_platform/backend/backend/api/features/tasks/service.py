@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 async def task_assignees(user_id: str) -> list[TaskAssignee]:
     user = await user_db().get_user_by_id(user_id)
-    experts = await experts_db().list_experts(user_id)
+    experts = await experts_db().list_experts(user_id, with_metrics=False)
     return [
         TaskAssignee(kind="human", id=user_id, name=user.name or "You"),
-        TaskAssignee(kind="auto", id="auto", name="Auto"),
+        TaskAssignee(kind="auto", id="auto", name="AutoPilot"),
         *[
             TaskAssignee(
                 kind="expert",
@@ -38,6 +38,8 @@ async def task_assignees(user_id: str) -> list[TaskAssignee]:
                 name=e.name,
                 avatar_url=e.avatar_url,
                 reason=e.role,
+                role=e.role,
+                color=e.color,
             )
             for e in experts
             if not e.schedules_paused_at
@@ -174,7 +176,7 @@ def task_prompt(task: WorkspaceTask) -> str:
         f"Project context: {task.project or 'None'}\nTask ID: {task.id}\n\n"
         "Work toward the actual outcome using your existing permissions. Use manage_tasks to inspect the shared task and necessary steps. "
         "Keep task granularity useful; tool calls are not subtasks. Respect explicit human assignments and planning holds. "
-        "Auto coordinates the outcome: reject unnecessary scope, ask for evidence, and prefer the smallest sufficient approach. "
+        "AutoPilot coordinates the outcome: reject unnecessary scope, ask for evidence, and prefer the smallest sufficient approach. "
         "Use ask_question for a real question or authorization gap. Continue independent steps when possible. "
         "Use manage_tasks with operation submit_result and evidence when the deliverable is ready. Ending a chat does not complete the task. "
         "Never treat a plan or instructions as proof that the requested action happened. Acceptance of a draft does not authorize publication."

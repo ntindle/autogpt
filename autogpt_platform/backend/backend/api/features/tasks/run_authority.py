@@ -32,7 +32,8 @@ async def start_workspace_task_run(
         )
         dependencies_done = all(
             any(item.id == dependency and item.status == "done" for item in tasks)
-            for dependency in task.dependencies
+            for parent in ancestors(task, tasks)
+            for dependency in parent.dependencies
         )
         if (
             held

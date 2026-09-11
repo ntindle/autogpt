@@ -354,6 +354,8 @@ export function useChatSession({
     [sessionQuery.data, freshSessionData],
   );
 
+  const sessionWorkspaceTaskId = freshSessionData?.metadata?.workspace_task_id;
+
   const sessionChatStatus = (
     freshSessionData as { chat_status?: string } | undefined
   )?.chat_status;
@@ -404,6 +406,7 @@ export function useChatSession({
     isCreatingSession,
     refetchSession: sessionQuery.refetch,
     sessionDryRun,
+    sessionWorkspaceTaskId,
     sessionChatStatus,
   };
 }

@@ -38,6 +38,7 @@ export function TaskList({ page }: Props) {
                 onToggle={() => view.toggle(task.id)}
                 onDetails={() => view.update({ selected: task.id })}
                 onChat={() => page.openChat(task)}
+                onBreakdown={() => page.breakdown.open(task)}
                 onCommand={(command) => page.act(task, command)}
               />
               {!view.collapsed.includes(task.id)
@@ -72,7 +73,7 @@ export function TaskList({ page }: Props) {
           <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {tasks.length
               ? "Try another filter or add a task."
-              : "Add a task or paste a whole list. Keep some for yourself and hand others to Auto or your Experts."}
+              : "Add a task or paste a whole list. Keep some for yourself and hand others to AutoPilot or your Experts."}
           </p>
         </div>
       )}

@@ -5,9 +5,12 @@ import {
   AvatarImage,
 } from "@/components/atoms/Avatar/Avatar";
 import { BotAvatar } from "@/components/molecules/BotAvatar/BotAvatar";
-import { expertAvatarConfig } from "@/components/molecules/BotAvatar/helpers";
+import {
+  AUTOPILOT_AVATAR,
+  expertAvatarConfig,
+} from "@/components/molecules/BotAvatar/helpers";
 import { cn } from "@/lib/utils";
-import { Sparkle, User } from "@phosphor-icons/react";
+import { User } from "@phosphor-icons/react";
 
 interface Props {
   assignee?: TaskAssignee | null;
@@ -28,16 +31,19 @@ export function TaskIdentity({ assignee, suggested = false }: Props) {
           config={expertAvatarConfig({
             name: assignee.name,
             avatarUrl: assignee.avatar_url,
-            color: null,
+            color: assignee.color ?? null,
           })}
           size={26}
           showBadge={false}
           title={assignee.name}
         />
       ) : assignee?.kind === "auto" ? (
-        <span className="flex size-7 items-center justify-center rounded-full bg-violet-100 text-violet-700">
-          <Sparkle size={17} weight="fill" />
-        </span>
+        <BotAvatar
+          config={AUTOPILOT_AVATAR}
+          size={26}
+          showBadge={false}
+          title="AutoPilot"
+        />
       ) : (
         <Avatar className="size-7 bg-zinc-100">
           <AvatarImage

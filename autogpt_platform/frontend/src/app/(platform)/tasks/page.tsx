@@ -7,6 +7,7 @@ import { TaskDetails } from "./components/TaskDetails";
 import { TaskSchedules } from "./components/TaskSchedules";
 import { TaskList } from "./components/TaskList";
 import { TasksHeader } from "./components/TasksHeader";
+import { TaskBreakdownDialog } from "./components/TaskBreakdown/TaskBreakdownDialog";
 import { useTasksPage } from "./useTasksPage";
 
 export default function TasksPage() {
@@ -39,6 +40,11 @@ export default function TasksPage() {
         <TaskList page={page} />
       )}
       <TaskCapture page={page} />
+      <TaskBreakdownDialog
+        breakdown={page.breakdown}
+        tasks={page.tasks}
+        assignees={page.assignees}
+      />
       <TaskDetails
         task={page.tasks.find((task) => task.id === page.view.selected)}
         page={page}

@@ -12,14 +12,17 @@ separate actions. Only confirmed agent ownership starts eligible work.
 
 - Capture one or multiple tasks, nest and edit them, mark manual work complete,
   reopen outcomes, filter/search projects, and restore list context after chat.
-- Suggested identities, explicit human/Auto/Expert assignments, inherited planning
+  Regular chats can list owned tasks and call `add_step` with a parent `task_id`
+  to create real children at any depth; this planning action does not grant
+  execution authority or require switching to a task-linked conversation.
+- Suggested identities, explicit human/AutoPilot/Expert assignments, inherited planning
   holds, pause/retry, dependency gates, and progress over accepted required leaves.
 - Task conversations use the existing chat routes and permission intersection.
   Existing executor admission and credential routing remain authoritative.
 - Durable questions can be answered from Tasks or the existing chat question card.
   The question ID prevents stale answers; failed submissions retain the draft.
 - Agent results require explicit acceptance. Review items remain ordinary tasks;
-  Auto can review delegated child results, and changed child work wakes its
+  AutoPilot can review delegated child results, and changed child work wakes its
   coordinator once. Finishing a chat never implicitly completes an outcome.
 - Existing scheduled graphs and CoPilot jobs appear in Scheduled. New task
   schedules use the existing scheduler with separate, idempotent occurrences.
@@ -33,10 +36,31 @@ Tasks are private to their owner. The current user is the supported human
 assignee; project labels do not grant access. Eligible Experts use existing
 private ownership checks. Shared organizational task access is not introduced.
 
-Assignment suggestions use task/project context and existing Expert profiles;
-this is a small ranking heuristic, not a new recommendation model or memory
-service. Tasks use existing chat permissions and budgets rather than defining a
-second execution or authorization system. A workspace is capped at 1,000 tasks.
+Owner suggestions now use the configured `CHAT_FAST_STANDARD_MODEL` through the
+existing model transport, with task/ancestor/project context and the eligible
+Expert roster's actual roles, skills, and identities. Responses can only select
+existing owners; model failures are visible and retryable. Recommendation-only
+updates do not invalidate a user's pending assignment command. Context edits
+invalidate unconfirmed suggestions; confirmed owners stay in place.
+
+Break down produces a durable, editable preview at milestone, actionable-step,
+or smaller-step detail. Acceptance adds selected steps and prerequisite links
+atomically and idempotently. Existing children remain untouched; prior leaf work,
+its conversation, and its result review are preserved as an original-work child.
+An undelegated outcome leaves new owners as suggestions. A delegated outcome
+passes its scope to newly accepted steps while inherited holds and dependencies
+continue to gate execution. A running attempt must be stopped before accepting
+changes to its scope; generating and editing a preview does not stop it.
+
+AutoPilot retains parent ownership and uses the existing task tool to assign
+unassigned planned children or add necessary new children to eligible Experts.
+Confirmed child owners cannot be silently replaced. A coordinator cannot submit
+an outcome result while required child work is unfinished. Linked chats show the task
+brief immediately and receive the current outcome, ancestors, steps, questions,
+and results in their model context. Review tasks open the deliverable's chat.
+
+Tasks use existing chat permissions and budgets rather than defining a second
+execution or authorization system. A workspace is capped at 1,000 tasks.
 
 ## Validation
 
@@ -81,9 +105,37 @@ revision `40dc02d846`. It runs as one healthy container with dedicated data at
   horizontal overflow. Screenshots are in `/tmp/autogpt-tasks-desktop.png` and
   `/tmp/autogpt-tasks-mobile.png` on the local development machine.
 
-Live agent execution reached the worker, but the existing local model server
-at `192.168.1.31:8099` (embeddings at `:8100`) was not responding. The new
-instance points to the existing router on Unraid's current address,
-`http://192.168.1.193:8098/v1`. A working model endpoint is still required to
-finish the live question-answer-result-acceptance check. This is not recorded
-as a successful end-to-end model run. The test schedule is paused.
+The instance is managed by Unraid Docker Manager, using the user template
+`/boot/config/plugins/dockerMan/templates-user/my-AutoGPT-Tasks.xml`, based on
+`my-AutoGPT-Orgs-Stack-Latest.xml`. It has a working Edit action, editable provider
+settings, masked credential fields, and the existing LAN binding. The Tasks
+template and dedicated appdata are preserved during updates; the source Orgs
+Stack template and other instances are unchanged.
+
+After adopting the Orgs Stack model configuration, a live test completed the
+existing worker -> question -> answer -> resumed result -> human acceptance flow
+in one linked conversation. The previous local-model outage is no longer a
+blocker for this deployment. The test schedule remains paused.
+
+## UX correction validation
+
+The September 10 correction replaces heuristic routing with configured-model
+selection, adds nested decomposition previews, restores the real AutoPilot
+identity, and supplies immediate chat context. The v0.4 demo is the interaction
+reference. Goblin Tools Magic ToDo was exercised with two large outcomes and a
+nested branch to compare progressive decomposition.
+
+Frontend task and affected chat integration tests passed: 364 tests across 34
+files. Frontend-wide formatting, lint, types, and the local production build also
+passed. Database regressions cover stale planning responses, concurrent explicit
+assignment, preview acceptance without execution, inherited prerequisites,
+planning holds, existing-step delegation, and preserved results/conversations.
+The configured provider also passed a live model test using only synthetic
+profiles: AutoPilot retained the parent and each of five specialist workstreams
+was routed to its matching fictional Expert. No private Expert profile or real
+user task was submitted during that model acceptance test.
+
+The regular-chat nesting report was reproduced and covered by a tool-through-
+database regression. Late additions also cover stable checklist ordering and
+rejection of premature coordinator results. The task suite now has 30 passing
+tests, alongside 131 existing worker/question/permission regressions.

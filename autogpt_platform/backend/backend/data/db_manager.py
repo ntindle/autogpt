@@ -531,10 +531,16 @@ class DatabaseManager(AppService):
     configure_workspace_task_schedule = _(tasks_db.configure_workspace_task_schedule)
     create_workspace_task_occurrence = _(tasks_db.create_workspace_task_occurrence)
     add_workspace_task_step = _(tasks_db.add_workspace_task_step)
+    assign_workspace_task_step = _(tasks_db.assign_workspace_task_step)
     unfinished_workspace_task_dispatches = _(
         tasks_db.unfinished_workspace_task_dispatches
     )
     start_workspace_task_run = _(tasks_db.start_workspace_task_run)
+    begin_workspace_task_suggestion = _(tasks_db.begin_workspace_task_suggestion)
+    finish_workspace_task_suggestion = _(tasks_db.finish_workspace_task_suggestion)
+    begin_workspace_task_breakdown = _(tasks_db.begin_workspace_task_breakdown)
+    finish_workspace_task_breakdown = _(tasks_db.finish_workspace_task_breakdown)
+    accept_workspace_task_breakdown = _(tasks_db.accept_workspace_task_breakdown)
     list_workspace_tasks = _(tasks_db.list_workspace_tasks)
     create_workspace_task = _(tasks_db.create_workspace_task)
     command_workspace_task = _(tasks_db.command_workspace_task)
@@ -721,6 +727,11 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     d = DatabaseManager
 
     start_workspace_task_run = d.start_workspace_task_run
+    begin_workspace_task_suggestion = d.begin_workspace_task_suggestion
+    finish_workspace_task_suggestion = d.finish_workspace_task_suggestion
+    begin_workspace_task_breakdown = d.begin_workspace_task_breakdown
+    finish_workspace_task_breakdown = d.finish_workspace_task_breakdown
+    accept_workspace_task_breakdown = d.accept_workspace_task_breakdown
     list_workspace_tasks = d.list_workspace_tasks
     create_workspace_task = d.create_workspace_task
     command_workspace_task = d.command_workspace_task
@@ -734,6 +745,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     configure_workspace_task_schedule = d.configure_workspace_task_schedule
     create_workspace_task_occurrence = d.create_workspace_task_occurrence
     add_workspace_task_step = d.add_workspace_task_step
+    assign_workspace_task_step = d.assign_workspace_task_step
 
     @classmethod
     def get_service_type(cls):

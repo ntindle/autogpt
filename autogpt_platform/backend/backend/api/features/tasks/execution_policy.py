@@ -1,5 +1,6 @@
 from typing import get_args
 
+from backend.api.features.tasks.context import execution_context
 from backend.copilot.model import ChatSession
 from backend.copilot.permissions import CopilotPermissions, ToolName
 from backend.data.db_accessors import tasks_db
@@ -39,7 +40,9 @@ async def task_execution_policy(
             CopilotPermissions(tools=[], tools_exclude=False),
             "The linked task is unavailable. No execution is authorized.",
         )
-    context = f"This conversation is linked to task {task.id}: {task.title}. Use manage_tasks to read its current context and steps. "
+    context = execution_context(
+        task, await tasks_db().list_workspace_tasks(session.user_id)
+    )
     if authority.can_execute:
         return (
             permissions,

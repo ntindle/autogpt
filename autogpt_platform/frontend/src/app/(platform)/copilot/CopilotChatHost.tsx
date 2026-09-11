@@ -1,4 +1,5 @@
 "use client";
+import { TaskConversationContext } from "./components/TaskConversationContext/TaskConversationContext";
 import { ChatContainer } from "./components/ChatContainer/ChatContainer";
 import { ProviderLimitDialog } from "./components/ProviderLimitDialog/ProviderLimitDialog";
 import { RateLimitGate } from "./components/RateLimitResetDialog/RateLimitGate";
@@ -53,6 +54,7 @@ export function CopilotChatHost({
     providerLimit,
     dismissProviderLimit,
     sessionDryRun,
+    sessionWorkspaceTaskId,
     sessionChatStatus,
     expertIdentity,
     isResolvingExpertIdentity,
@@ -71,6 +73,9 @@ export function CopilotChatHost({
           Test mode — this session runs agents as simulation
         </div>
       )}
+      {sessionId && sessionWorkspaceTaskId ? (
+        <TaskConversationContext sessionId={sessionId} />
+      ) : null}
       <div className="min-h-0 flex-1 overflow-hidden">
         <ChatContainer
           messages={messages}

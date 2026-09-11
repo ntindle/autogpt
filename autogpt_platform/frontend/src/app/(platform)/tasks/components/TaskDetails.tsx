@@ -118,6 +118,7 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
         pending={page.pending}
         onCommand={(command) => page.act(task, command)}
         onChat={() => page.openChat(task)}
+        onBreakdown={() => page.breakdown.open(task)}
         onAdd={() => {
           page.setAddParent(task.id);
           page.view.update({

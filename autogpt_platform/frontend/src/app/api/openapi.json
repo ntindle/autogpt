@@ -15376,6 +15376,43 @@
         "security": [{ "HTTPBearerJWT": [] }]
       }
     },
+    "/api/tasks/conversation/{session_id}": {
+      "get": {
+        "tags": ["tasks", "private"],
+        "summary": "Conversation Context",
+        "operationId": "get_workspace_task_context",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Session Id" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TaskContextResponse" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks/schedules": {
       "get": {
         "tags": ["tasks", "private"],
@@ -15483,6 +15520,96 @@
         }
       }
     },
+    "/api/tasks/{task_id}/breakdown": {
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Preview Breakdown",
+        "operationId": "preview_workspace_task_breakdown",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Task Id" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TaskBreakdownRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceTask" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{task_id}/breakdown/accept": {
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Accept Breakdown",
+        "operationId": "accept_workspace_task_breakdown",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Task Id" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TaskBreakdownAccept" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceTask" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks/{task_id}/commands": {
       "post": {
         "tags": ["tasks", "private"],
@@ -15550,6 +15677,43 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/WorkspaceTask" }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HTTPValidationError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/{task_id}/suggest": {
+      "post": {
+        "tags": ["tasks", "private"],
+        "summary": "Suggest Owner",
+        "operationId": "suggest_workspace_task_owner",
+        "security": [{ "HTTPBearerJWT": [] }],
+        "parameters": [
+          {
+            "name": "task_id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "title": "Task Id" }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -29101,11 +29265,134 @@
           "reason": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
             "title": "Reason"
+          },
+          "role": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Role"
+          },
+          "color": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Color"
           }
         },
         "type": "object",
         "required": ["kind", "id", "name"],
         "title": "TaskAssignee"
+      },
+      "TaskBreakdown": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "context": { "type": "string", "title": "Context" },
+          "detail": {
+            "type": "string",
+            "enum": ["milestones", "steps", "small_steps"],
+            "title": "Detail",
+            "default": "steps"
+          },
+          "guidance": { "type": "string", "title": "Guidance", "default": "" },
+          "state": {
+            "type": "string",
+            "enum": ["pending", "ready", "error", "accepted"],
+            "title": "State",
+            "default": "pending"
+          },
+          "error": { "type": "string", "title": "Error", "default": "" },
+          "steps": {
+            "items": { "$ref": "#/components/schemas/TaskBreakdownStep" },
+            "type": "array",
+            "title": "Steps"
+          }
+        },
+        "type": "object",
+        "required": ["context"],
+        "title": "TaskBreakdown"
+      },
+      "TaskBreakdownAccept": {
+        "properties": {
+          "preview_id": { "type": "string", "title": "Preview Id" },
+          "steps": {
+            "items": { "$ref": "#/components/schemas/TaskBreakdownSelection" },
+            "type": "array",
+            "maxItems": 12,
+            "minItems": 1,
+            "title": "Steps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["preview_id", "steps"],
+        "title": "TaskBreakdownAccept"
+      },
+      "TaskBreakdownRequest": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "enum": ["milestones", "steps", "small_steps"],
+            "title": "Detail",
+            "default": "steps"
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Guidance",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "TaskBreakdownRequest"
+      },
+      "TaskBreakdownSelection": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "assignee": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": ["id", "title"],
+        "title": "TaskBreakdownSelection"
+      },
+      "TaskBreakdownStep": {
+        "properties": {
+          "id": { "type": "string", "title": "Id" },
+          "title": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 20000,
+            "title": "Description",
+            "default": ""
+          },
+          "suggestion": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ]
+          },
+          "dependencies": {
+            "items": { "type": "string" },
+            "type": "array",
+            "title": "Dependencies"
+          }
+        },
+        "type": "object",
+        "required": ["title"],
+        "title": "TaskBreakdownStep"
       },
       "TaskCommand": {
         "properties": {
@@ -29195,6 +29482,24 @@
         "type": "object",
         "required": ["operation", "version"],
         "title": "TaskCommand"
+      },
+      "TaskContextResponse": {
+        "properties": {
+          "task": { "$ref": "#/components/schemas/WorkspaceTask" },
+          "ancestors": {
+            "items": { "$ref": "#/components/schemas/WorkspaceTask" },
+            "type": "array",
+            "title": "Ancestors"
+          },
+          "children": {
+            "items": { "$ref": "#/components/schemas/WorkspaceTask" },
+            "type": "array",
+            "title": "Children"
+          }
+        },
+        "type": "object",
+        "required": ["task", "ancestors", "children"],
+        "title": "TaskContextResponse"
       },
       "TaskCreate": {
         "properties": {
@@ -32281,6 +32586,45 @@
           "suggestion": {
             "anyOf": [
               { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ]
+          },
+          "suggestion_state": {
+            "type": "string",
+            "enum": ["idle", "pending", "ready", "error"],
+            "title": "Suggestion State",
+            "default": "idle"
+          },
+          "suggestion_error": {
+            "type": "string",
+            "title": "Suggestion Error",
+            "default": ""
+          },
+          "suggestion_started_at": {
+            "anyOf": [
+              { "type": "string", "format": "date-time" },
+              { "type": "null" }
+            ],
+            "title": "Suggestion Started At"
+          },
+          "suggestion_request_id": {
+            "type": "string",
+            "title": "Suggestion Request Id",
+            "default": ""
+          },
+          "suggestion_context": {
+            "type": "string",
+            "title": "Suggestion Context",
+            "default": ""
+          },
+          "suggestion_alternatives": {
+            "items": { "$ref": "#/components/schemas/TaskAssignee" },
+            "type": "array",
+            "title": "Suggestion Alternatives"
+          },
+          "breakdown": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskBreakdown" },
               { "type": "null" }
             ]
           },

@@ -1,6 +1,6 @@
 import { Button } from "@/components/atoms/Button/Button";
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
-import { ChatCircle, Plus } from "@phosphor-icons/react";
+import { ChatCircle, Plus, TreeStructure } from "@phosphor-icons/react";
 import type { Task } from "../helpers";
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
   onCommand: (command: Omit<TaskCommand, "version">) => Promise<unknown>;
   onAdd: () => void;
   onChat: () => void;
+  onBreakdown: () => void;
 }
 
 export function TaskActions({
@@ -17,11 +18,22 @@ export function TaskActions({
   onCommand,
   onAdd,
   onChat,
+  onBreakdown,
 }: Props) {
   const active =
     task.dispatch_state === "sent" || task.dispatch_state === "claimed";
   return (
     <div className="flex flex-wrap gap-2">
+      {!task.review_of && !task.schedule && task.status !== "canceled" ? (
+        <Button
+          size="small"
+          variant="secondary"
+          leftIcon={<TreeStructure size={14} />}
+          onClick={onBreakdown}
+        >
+          Break down
+        </Button>
+      ) : null}
       <Button
         size="small"
         variant="secondary"

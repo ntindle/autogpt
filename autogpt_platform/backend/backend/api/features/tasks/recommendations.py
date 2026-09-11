@@ -1,110 +1,73 @@
 import logging
-import re
 
-from backend.api.features.tasks.domain import ancestors
-from backend.api.features.tasks.models import TaskAssignee, TaskCommand, WorkspaceTask
-from backend.api.features.tasks.service import task_assignees
+from pydantic import BaseModel, Field
+
+from backend.api.features.tasks.context import planning_context
+from backend.api.features.tasks.models import WorkspaceTask
+from backend.api.features.tasks.planning_model import (
+    planning_completion,
+    planning_roster,
+    resolve_candidate,
+)
 from backend.data.db_accessors import tasks_db
 
 logger = logging.getLogger(__name__)
-_STOP_WORDS = {
-    "this",
-    "that",
-    "with",
-    "from",
-    "your",
-    "have",
-    "work",
-    "task",
-    "expert",
-    "help",
-    "make",
-    "create",
-    "write",
-    "draft",
-    "about",
-    "their",
-    "will",
-    "into",
-    "need",
-}
 
 
-async def suggest_task_assignee(user_id: str, task_id: str) -> None:
+class OwnerChoice(BaseModel):
+    assignee_id: str
+    reason: str = Field(min_length=1, max_length=300)
+
+
+class OwnerRecommendation(BaseModel):
+    choice: OwnerChoice
+    alternatives: list[OwnerChoice] = Field(default_factory=list, max_length=3)
+
+
+_PROMPT = """Choose who should own this task using its meaning, parent outcome, project,
+existing steps, and the actual roster's roles, skills and identities. For a concrete
+specialist deliverable choose the best relevant existing Expert, even when the task
+and their title use different words. For an epic or outcome spanning multiple
+specialties choose AutoPilot, who retains parent ownership and delegates subtasks to
+Experts. Human physical work, personal decisions and approvals belong to the user.
+Return the exact eligible assignee_id, a short specific explanation, and up to three
+credible alternatives with their tradeoffs. Never invent an Expert, use an Expert
+outside this roster, or treat an existing confirmed assignment as a suggestion.
+This is a recommendation only. No work is executed or assigned by this response."""
+
+
+async def suggest_task_assignee(
+    user_id: str, task_id: str, force: bool = False
+) -> None:
+    task = await tasks_db().begin_workspace_task_suggestion(user_id, task_id, force)
+    if task:
+        await generate_task_suggestion(user_id, task)
+
+
+async def generate_task_suggestion(user_id: str, task: WorkspaceTask) -> None:
+    suggestion, alternatives, error = None, [], ""
     try:
         tasks = await tasks_db().list_workspace_tasks(user_id)
-        task = next((task for task in tasks if task.id == task_id), None)
-        if task is None or task.assignee:
-            return
-        candidates = await task_assignees(user_id)
-        suggestion = recommend_assignee(task, tasks, candidates)
-        await tasks_db().command_workspace_task(
-            user_id,
-            task_id,
-            TaskCommand(operation="suggest", version=task.version, assignee=suggestion),
+        candidates, roster = await planning_roster(user_id)
+        response = await planning_completion(
+            _PROMPT,
+            {**planning_context(task, tasks), "roster": roster},
+            OwnerRecommendation,
         )
+        suggestion = resolve_candidate(
+            candidates, response.choice.assignee_id, response.choice.reason
+        )
+        alternatives = [
+            resolve_candidate(candidates, item.assignee_id, item.reason)
+            for item in response.alternatives
+            if item.assignee_id != suggestion.id
+        ]
     except Exception:
-        logger.info("Task %s kept its existing recommendation", task_id, exc_info=True)
-
-
-def recommend_assignee(
-    task: WorkspaceTask, tasks: list[WorkspaceTask], candidates: list[TaskAssignee]
-) -> TaskAssignee:
-    context = " ".join(
-        f"{item.title} {item.description} {item.project}"
-        for item in ancestors(task, tasks)
-    ).lower()
-    human = next(
-        (candidate for candidate in candidates if candidate.kind == "human"), None
-    )
-    if human and re.search(
-        r"\b(clean|plug in|connect the camera|choose a date|pick a date|approve|review and approve)\b",
-        task.title,
-        re.IGNORECASE,
-    ):
-        return human.model_copy(
-            update={
-                "reason": "This looks like a personal decision or physical step. You can choose another owner."
-            }
+        logger.warning(
+            "Task owner recommendation failed for %s", task.id, exc_info=True
         )
-    words = set(re.findall(r"[a-z]{4,}", context)) - _STOP_WORDS
-    scored = sorted(
-        [
-            (
-                len(
-                    words
-                    & (
-                        set(
-                            re.findall(
-                                r"[a-z]{4,}",
-                                f"{candidate.name} {candidate.reason or ''}".lower(),
-                            )
-                        )
-                        - _STOP_WORDS
-                    )
-                ),
-                candidate,
-            )
-            for candidate in candidates
-            if candidate.kind == "expert"
-        ],
-        key=lambda entry: entry[0],
-        reverse=True,
-    )
-    if (
-        scored
-        and scored[0][0] > 0
-        and (len(scored) == 1 or scored[0][0] > scored[1][0])
-    ):
-        candidate = scored[0][1]
-        return candidate.model_copy(
-            update={
-                "reason": f"{candidate.name}'s existing role matches this task and its project context. Confirm to delegate."
-            }
-        )
-    return TaskAssignee(
-        kind="auto",
-        id="auto",
-        name="Auto",
-        reason="Auto can clarify the outcome and coordinate your Experts. No work starts until you confirm.",
+        suggestion, alternatives = None, []
+        error = "Could not get an owner suggestion from the configured model. Try again or choose an owner."
+    await tasks_db().finish_workspace_task_suggestion(
+        user_id, task.id, task.suggestion_request_id, suggestion, alternatives, error
     )

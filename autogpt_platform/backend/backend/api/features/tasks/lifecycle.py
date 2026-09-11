@@ -94,6 +94,19 @@ def _submit_result(task: WorkspaceTask, tasks: list[WorkspaceTask], text: str) -
         )
     ):
         raise TaskConflict("This task is not delegated for execution")
+    if any(
+        child.parent_id == task.id
+        and child.accepted
+        and child.required
+        and not child.review_of
+        and child.status not in ("done", "canceled")
+        for child in tasks
+    ):
+        raise TaskConflict(
+            "Required steps still need their results accepted. Assign unowned steps, "
+            "coordinate their work and review their results before submitting the outcome. "
+            "Use activity for progress updates while waiting."
+        )
     if task.result == text and task.status == "needs_you":
         return
     for review in tasks:

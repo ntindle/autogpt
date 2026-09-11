@@ -4,6 +4,9 @@ from uuid import uuid4
 from backend.api.features.tasks.agent_steps import (
     add_workspace_task_step as add_workspace_task_step,
 )
+from backend.api.features.tasks.agent_steps import (
+    assign_workspace_task_step as assign_workspace_task_step,
+)
 from backend.api.features.tasks.commands import apply_command
 from backend.api.features.tasks.domain import TaskConflict, is_runnable, record
 from backend.api.features.tasks.lifecycle import (
@@ -12,11 +15,21 @@ from backend.api.features.tasks.lifecycle import (
 from backend.api.features.tasks.lifecycle import (
     workspace_task_run_event as workspace_task_run_event,
 )
-from backend.api.features.tasks.models import (
-    TaskAssignee,
-    TaskCommand,
-    TaskCreate,
-    WorkspaceTask,
+from backend.api.features.tasks.models import TaskCommand, TaskCreate, WorkspaceTask
+from backend.api.features.tasks.planning_db import (
+    accept_workspace_task_breakdown as accept_workspace_task_breakdown,
+)
+from backend.api.features.tasks.planning_db import (
+    begin_workspace_task_breakdown as begin_workspace_task_breakdown,
+)
+from backend.api.features.tasks.planning_db import (
+    begin_workspace_task_suggestion as begin_workspace_task_suggestion,
+)
+from backend.api.features.tasks.planning_db import (
+    finish_workspace_task_breakdown as finish_workspace_task_breakdown,
+)
+from backend.api.features.tasks.planning_db import (
+    finish_workspace_task_suggestion as finish_workspace_task_suggestion,
 )
 from backend.api.features.tasks.repository import (
     _decode,
@@ -62,12 +75,6 @@ async def create_workspace_task(
             task.project = task.project or parent.project
             if parent.status in ("done", "canceled"):
                 raise TaskConflict("Reopen the outcome before adding steps")
-        task.suggestion = TaskAssignee(
-            kind="auto",
-            id="auto",
-            name="Auto",
-            reason="Auto can coordinate this outcome and involve your Experts. Confirm to delegate.",
-        )
         record(task, user_id, "Task captured")
         await _save(tx, task)
         return task
@@ -81,6 +88,14 @@ async def command_workspace_task(
         tasks = await _load(tx, user_id)
         task = _get(tasks, task_id)
         apply_command(task, command, tasks, actor)
+        if command.operation == "edit":
+            from backend.api.features.tasks.domain import branch
+
+            for member in branch(task.id, tasks):
+                if not member.assignee:
+                    member.suggestion, member.suggestion_alternatives = None, []
+                    member.suggestion_state, member.suggestion_request_id = "idle", ""
+
         if command.operation != "suggest":
             _prepare_dispatches(tasks)
         for changed in tasks:

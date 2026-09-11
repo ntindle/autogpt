@@ -52,7 +52,10 @@ async def _load(tx: Prisma, user_id: str) -> list[WorkspaceTask]:
     rows = await tx.workspacetask.find_many(
         where={"userId": user_id}, order={"createdAt": "asc"}
     )
-    return [_decode(row.payload) for row in rows]
+    return sorted(
+        (_decode(row.payload) for row in rows),
+        key=lambda task: (task.created_at, task.id),
+    )
 
 
 def _decode(payload: Json) -> WorkspaceTask:

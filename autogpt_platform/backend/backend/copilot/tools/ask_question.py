@@ -105,6 +105,7 @@ class AskQuestionTool(BaseTool):
             )
 
         task_question = None
+        task_id = None
         text = "; ".join(q.question for q in questions)
         if session:
             if session.metadata.workspace_task_id and session.user_id:
@@ -118,14 +119,28 @@ class AskQuestionTool(BaseTool):
                         for i, q in enumerate(questions)
                     ]
                 )
-                await tasks_db().workspace_task_run_event(
+                updated_task = await tasks_db().workspace_task_run_event(
                     session.user_id,
                     session.session_id,
                     "question",
                     question=task_question,
                 )
+                if (
+                    updated_task
+                    and updated_task.question
+                    and updated_task.question.id == task_question.id
+                ):
+                    task_id = updated_task.id
+                else:
+                    task_question = None
                 questions = [
-                    q.model_copy(update={"keyword": task_question.questions[i].keyword})
+                    (
+                        q.model_copy(
+                            update={"keyword": task_question.questions[i].keyword}
+                        )
+                        if task_question
+                        else q
+                    )
                     for i, q in enumerate(questions)
                 ]
             await _mark_pending(session, text)
@@ -133,7 +148,7 @@ class AskQuestionTool(BaseTool):
             message=text,
             session_id=session.session_id if session else None,
             questions=questions,
-            task_id=session.metadata.workspace_task_id if task_question else None,
+            task_id=task_id,
             task_question_id=task_question.id if task_question else None,
         )
 

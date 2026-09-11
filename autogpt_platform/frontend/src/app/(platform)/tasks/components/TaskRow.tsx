@@ -2,6 +2,7 @@ import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
 import { cn } from "@/lib/utils";
 import {
+  TreeStructure,
   CaretDown,
   CaretRight,
   ChatCircle,
@@ -29,6 +30,7 @@ interface Props {
   onToggle: () => void;
   onDetails: () => void;
   onChat: () => void;
+  onBreakdown: () => void;
   onCommand: (command: Omit<TaskCommand, "version">) => Promise<unknown>;
 }
 
@@ -41,6 +43,7 @@ export function TaskRow({
   onToggle,
   onDetails,
   onChat,
+  onBreakdown,
   onCommand,
 }: Props) {
   const parent = tasks.some((item) => item.parent_id === task.id);
@@ -64,7 +67,7 @@ export function TaskRow({
     ).values(),
   );
   return (
-    <div className="group grid min-h-16 grid-cols-[1rem_1.25rem_minmax(0,1fr)_auto] items-center gap-2 rounded-lg px-1 py-2 hover:bg-muted/40 sm:gap-3 sm:px-2">
+    <div className="group grid min-h-16 grid-cols-[1rem_1.25rem_minmax(0,1fr)] items-center gap-2 rounded-lg px-1 py-2 hover:bg-muted/40 sm:grid-cols-[1rem_1.25rem_minmax(0,1fr)_auto] sm:gap-3 sm:px-2">
       {parent ? (
         <button
           type="button"
@@ -149,7 +152,7 @@ export function TaskRow({
           ) : null}
         </span>
       </button>
-      <div className="flex items-center gap-1 sm:gap-3">
+      <div className="col-start-3 flex flex-wrap items-center gap-2 sm:col-start-auto sm:flex-nowrap sm:gap-3">
         {task.status === "needs_you" ? (
           <button
             type="button"
@@ -178,17 +181,26 @@ export function TaskRow({
               <span className="pl-2 text-xs">+{participants.length - 3}</span>
             ) : null}
           </button>
-        ) : (
-          <TaskAssigneePicker
-            task={task}
-            assignees={assignees}
-            held={held}
-            disabled={pending || active}
-            onAssign={(assignee) =>
-              onCommand({ operation: "assign", assignee })
-            }
-          />
-        )}
+        ) : null}
+        <TaskAssigneePicker
+          task={task}
+          assignees={assignees}
+          held={held}
+          disabled={pending || active}
+          onAssign={(assignee) => onCommand({ operation: "assign", assignee })}
+        />
+        {!task.review_of && !task.schedule && task.status !== "canceled" ? (
+          <button
+            type="button"
+            onClick={onBreakdown}
+            disabled={pending}
+            aria-label={`Break down ${task.title}`}
+            className="flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <TreeStructure size={15} />
+            <span className="hidden lg:inline">Break down</span>
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={onChat}
