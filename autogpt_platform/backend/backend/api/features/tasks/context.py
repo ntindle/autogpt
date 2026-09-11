@@ -58,7 +58,15 @@ def execution_context(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> str:
     brief["prerequisites"] = [
         item.model_dump(
             mode="json",
-            include={"id", "title", "description", "status", "result", "question"},
+            include={
+                "id",
+                "title",
+                "description",
+                "project",
+                "status",
+                "result",
+                "question",
+            },
         )
         for item in tasks
         if item.id in dependencies

@@ -40,6 +40,7 @@ class ManageTasksTool(BaseTool):
             "AutoPilot can accept or request changes to a child's result; no executor can accept its own result. "
             "Use assign_step with task_id for existing unassigned steps; preserve confirmed owners and never duplicate a planned step. "
             "In any chat, add_step with task_id creates a real child under that owned parent. Outside a delegated task conversation its owner remains a suggestion. Never simulate nesting with title prefixes. "
+            "Use list with all_projects=true or project to find existing prerequisites across projects. Cross-project links do not grant permission to assign or approve that outside work. "
             "Keep visible tasks at deliverable granularity. Use ask_question for human questions."
         )
 
@@ -63,7 +64,7 @@ class ManageTasksTool(BaseTool):
                 },
                 "task_id": {
                     "type": "string",
-                    "description": "For add_step, the parent task ID (works from a regular chat). For review or assign_step, the child ID. Omitted uses this chat's linked task.",
+                    "description": "For list, an owned branch to inspect, including another project. For add_step, the parent task ID (works from a regular chat). For review or assign_step, the child ID. Omitted uses this chat's linked task.",
                 },
                 "title": {"type": "string"},
                 "description": {"type": "string"},
@@ -71,7 +72,14 @@ class ManageTasksTool(BaseTool):
                     "type": "string",
                     "description": "Actual result, evidence, output links, or requested changes. Never claim completion just because a run ended.",
                 },
-                "project": {"type": "string"},
+                "project": {
+                    "type": "string",
+                    "description": "Project label for capture; for list, find the user's tasks in this project even outside the linked outcome.",
+                },
+                "all_projects": {
+                    "type": "boolean",
+                    "description": "For list, search all of the user's projects instead of only this chat's linked branch. Read access does not expand delegation authority.",
+                },
                 "assignee_kind": {
                     "type": "string",
                     "enum": ["human", "auto", "expert"],
@@ -83,7 +91,7 @@ class ManageTasksTool(BaseTool):
                 "dependencies": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Existing prerequisite child task IDs. This step waits for their accepted results; add prerequisites first.",
+                    "description": "Existing prerequisite task or outcome IDs owned by this user, including other projects. This step waits for all of their accepted results; use list to find real IDs first.",
                 },
                 "proposed": {
                     "type": "boolean",
@@ -162,12 +170,16 @@ class ManageTasksTool(BaseTool):
             return WorkspaceTasksResponse(
                 message="Captured; ownership is suggested, not delegated.", tasks=[task]
             )
-        if operation == "list" and not root:
+        if operation == "list":
             tasks = await tasks_db().list_workspace_tasks(user_id)
             if task_id:
                 if not any(task.id == task_id for task in tasks):
                     return ErrorResponse(message="Task not found in your workspace")
                 tasks = branch(task_id, tasks)
+            elif project:
+                tasks = [task for task in tasks if task.project == project]
+            elif root and not kwargs.get("all_projects", False):
+                tasks = branch(root.id, tasks)
             return WorkspaceTasksResponse(message="Your workspace tasks", tasks=tasks)
         if not root:
             return ErrorResponse(
@@ -212,18 +224,6 @@ class ManageTasksTool(BaseTool):
         description: str,
         evidence: str,
     ) -> ToolResponseBase:
-        if operation == "list":
-            return WorkspaceTasksResponse(message="Shared task branch", tasks=scope)
-        if operation == "add_step":
-            task = await tasks_db().create_workspace_task(
-                user_id,
-                TaskCreate(title=title, description=description, parent_id=root.id),
-                root.organization_id,
-            )
-            return WorkspaceTasksResponse(
-                message="Added a step. Existing ownership and planning holds remain in effect.",
-                tasks=[task],
-            )
         if operation in ("activity", "submit_result"):
             if (
                 not root.assignee

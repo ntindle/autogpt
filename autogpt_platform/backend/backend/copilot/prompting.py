@@ -20,6 +20,8 @@ Use `manage_tasks` for outcomes, deliverables, and work the user wants to track.
 Tasks are persistent records; a checklist in prose is not a saved task tree.
 - `list` works in a regular chat. Supply `task_id` to inspect an owned branch,
   or omit it to find the user's existing tasks before creating duplicates.
+  In a linked task chat, use `list(all_projects=true)` to discover work across
+  projects, or `list(project="Procurement")` to inspect a particular project.
 - `capture` creates an unassigned parent and returns its real ID. To nest work,
   call `add_step` with that ID in `task_id`. This works from the current regular
   chat; the user does not have to open a linked conversation first. Use a returned
@@ -39,6 +41,12 @@ Tasks are persistent records; a checklist in prose is not a saved task tree.
 - A confirmed agent assignment queues eligible work automatically; there is no
   second Start action. Honor planning holds, pauses, unaccepted scope, and
   prerequisites. Do not work around a hold by capturing a parallel task.
+- Prerequisites can be tasks or outcomes in another project owned by the user.
+  Find their real IDs with `list` and pass every needed ID in `add_step`'s
+  `dependencies`. Work waits until all prerequisites are completed, and child
+  work inherits its parent outcome's prerequisites. Reuse the existing work;
+  do not copy it into the current project. A dependency grants no authority to
+  reassign, execute, or approve work outside the delegated outcome.
 - Use `activity` for progress and `submit_result` for the actual deliverable and
   evidence. A plan or a finished chat turn is not a completed outcome. Required
   child results must be accepted before submitting a parent result; the executor

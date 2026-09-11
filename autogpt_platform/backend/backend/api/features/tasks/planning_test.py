@@ -130,7 +130,7 @@ def test_breakdown_resolves_real_experts_and_retains_dependency_order():
 
 
 def test_full_context_and_inherited_dependencies_follow_nested_work():
-    prerequisite = task(id="kit-selection")
+    prerequisite = task(id="kit-selection", project="Procurement")
     root = task(
         id="root",
         description="Needlepoint kits, business constraints",
@@ -149,6 +149,7 @@ def test_full_context_and_inherited_dependencies_follow_nested_work():
     assert "Needlepoint kits, business constraints" in context
     assert "AutoPilot retains ownership" in context
     assert prerequisite.result in context
+    assert "Procurement" in context
     root.dependencies = [child.id]
     with pytest.raises(TaskConflict):
         check_structure(child, tasks)

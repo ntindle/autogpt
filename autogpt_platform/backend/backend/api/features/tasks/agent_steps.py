@@ -62,9 +62,13 @@ async def add_workspace_task_step(
             and root.assignee.kind != "human"
             and root.accepted
         )
-        scope_ids = {item.id for item in branch(root.id, tasks)} - {root.id}
-        if any(dependency not in scope_ids for dependency in dependencies or []):
-            raise TaskConflict("Dependencies must be existing steps in this outcome")
+        prerequisite_ids = {
+            item.id for item in tasks if not item.schedule and not item.review_of
+        }
+        if any(dependency not in prerequisite_ids for dependency in dependencies or []):
+            raise TaskConflict(
+                "Dependencies must reference existing tasks in your workspace, not schedules or review items"
+            )
         task = WorkspaceTask(
             id=task_id,
             user_id=user_id,

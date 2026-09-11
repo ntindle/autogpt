@@ -150,3 +150,21 @@ feature flag.
 Downstream task turns also receive prerequisite results and recent activity from
 parent outcomes, so an Expert gets the accepted handoff details with its task
 brief instead of only prerequisite IDs.
+
+
+## Cross-project prerequisites
+
+The task editor supports multiple prerequisites across the user's projects,
+with task/project search and visible completion state. Editing a title preserves
+all prerequisite links. Project filters do not hide other projects from the
+picker; parent outcomes and their descendants cannot be selected as their own
+prerequisites.
+
+The existing dependency engine gates nested work until every prerequisite is
+completed. The task tool now accepts owned prerequisite IDs outside the current
+outcome and can discover them using `list(all_projects=true)` or
+`list(project="Procurement")`. Linked chats default to their existing branch;
+reading or depending on another project does not grant permission to assign or
+approve its work. Shared prompt guidance explains these rules, and prerequisite
+handoffs include their source project. Database tests cover cross-project
+unblocking, cycles, chat discovery, and rejection of another user's task IDs.
