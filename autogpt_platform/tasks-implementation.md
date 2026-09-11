@@ -151,7 +151,6 @@ Downstream task turns also receive prerequisite results and recent activity from
 parent outcomes, so an Expert gets the accepted handoff details with its task
 brief instead of only prerequisite IDs.
 
-
 ## Cross-project prerequisites
 
 The task editor supports multiple prerequisites across the user's projects,
@@ -168,3 +167,28 @@ reading or depending on another project does not grant permission to assign or
 approve its work. Shared prompt guidance explains these rules, and prerequisite
 handoffs include their source project. Database tests cover cross-project
 unblocking, cycles, chat discovery, and rejection of another user's task IDs.
+
+## September 11 deployment verification
+
+The UX correction and cross-project follow-up are live on `AutoGPT-Tasks` at
+`http://192.168.1.193:3004/tasks`, with source revision `6915b6ba73` and image
+`autogpt-tasks:release`. Both builds ran on the local Linux development machine.
+The running backend source hashes match the committed files, the container is
+healthy, and the login page and frontend assets return HTTP 200.
+
+The update used Unraid's native Docker Manager command generated from the current
+Orgs Stack-based Tasks template. All 21 editable variables, the dedicated data
+mount, LAN port, and working Edit action were verified after replacement. The
+other AutoGPT/Orgs/Executor container IDs and the source Orgs template are
+unchanged. The previous release image remains available for rollback.
+
+Validation passed: whole-backend and whole-frontend formatting, lint, and types;
+33 Tasks backend tests; 73 shared prompt tests; 10 Tasks frontend integration
+tests; and a local production frontend build. In the isolated local container,
+browser-driven selection saved two prerequisites across three projects while a
+project filter was active. Editing the title preserved both links in the database
+without starting execution. Desktop and 390px phone layouts were inspected; the
+phone document width remained 390px. Screenshots are saved locally at
+`/tmp/tasks-cross-project-desktop.png` and `/tmp/tasks-cross-project-mobile.png`.
+The disposable QA container and temporary source/build copies were removed after
+deployment; the worktree and release images were retained.
