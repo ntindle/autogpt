@@ -456,3 +456,11 @@ as `autogpt_proxy`. Running the check as root had changed temporary-directory
 ownership to `nobody`, truncating large proxied asset responses. The five nginx
 temporary directories were restored to their entrypoint-defined service owner;
 complete asset downloads and ownership were verified after the corrected reload.
+
+After the host reboot, Unraid returned at `192.168.1.192`. Tasks could not
+start because its saved port binding still used `192.168.1.193`. The Tasks
+container was recreated from the same image and persistent data, changing only
+its template's port host address and `AUTOGPT_PUBLIC_URL`. The current endpoint
+is `http://192.168.1.192:3004/tasks`. Startup health, the Tasks page, a complete
+CSS download, the restored prototype, and Unraid Edit were verified. All 21
+variables and other container IDs were preserved; the host was already online.
