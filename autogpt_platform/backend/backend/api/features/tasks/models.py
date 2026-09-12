@@ -219,6 +219,7 @@ class TaskCommand(BaseModel):
         "submit_result",
         "assign",
         "suggest",
+        "dismiss_suggestion",
         "complete",
         "reopen",
         "cancel",
@@ -241,6 +242,7 @@ class TaskCommand(BaseModel):
     assignee: TaskAssignee | None = None
     parent_id: str | None = None
     dependencies: list[str] | None = None
+    suggestion_request_id: str | None = Field(default=None, max_length=100)
     question_id: str | None = None
     answers: dict[str, str] | None = None
     feedback: str = Field(default="", max_length=10000)

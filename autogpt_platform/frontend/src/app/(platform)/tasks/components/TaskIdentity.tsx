@@ -9,21 +9,16 @@ import {
   AUTOPILOT_AVATAR,
   expertAvatarConfig,
 } from "@/components/molecules/BotAvatar/helpers";
-import { cn } from "@/lib/utils";
 import { User } from "@phosphor-icons/react";
 
 interface Props {
   assignee?: TaskAssignee | null;
-  suggested?: boolean;
 }
 
-export function TaskIdentity({ assignee, suggested = false }: Props) {
+export function TaskIdentity({ assignee }: Props) {
   return (
     <span
-      className={cn(
-        "inline-flex size-8 shrink-0 items-center justify-center rounded-full",
-        suggested && "border border-dashed border-violet-500 p-0.5",
-      )}
+      className="inline-flex size-8 shrink-0 items-center justify-center rounded-full"
       title={assignee?.name ?? "Unassigned"}
     >
       {assignee?.kind === "expert" ? (
@@ -42,7 +37,7 @@ export function TaskIdentity({ assignee, suggested = false }: Props) {
           config={AUTOPILOT_AVATAR}
           size={26}
           showBadge={false}
-          title="AutoPilot"
+          title={assignee.name}
         />
       ) : (
         <Avatar className="size-7 bg-zinc-100">

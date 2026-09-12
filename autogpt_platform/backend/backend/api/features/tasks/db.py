@@ -16,6 +16,7 @@ from backend.api.features.tasks.lifecycle import (
     workspace_task_run_event as workspace_task_run_event,
 )
 from backend.api.features.tasks.models import TaskCommand, TaskCreate, WorkspaceTask
+from backend.api.features.tasks.planning_db import _planning_inputs
 from backend.api.features.tasks.planning_db import (
     accept_workspace_task_breakdown as accept_workspace_task_breakdown,
 )
@@ -128,7 +129,10 @@ async def command_workspace_task(
                     member.suggestion, member.suggestion_alternatives = None, []
                     member.suggestion_state, member.suggestion_request_id = "idle", ""
 
-        if command.operation != "suggest":
+        if command.operation == "dismiss_suggestion":
+            inputs = await _planning_inputs(tx, task, tasks)
+            task.suggestion_context = inputs.fingerprint
+        if command.operation not in ("suggest", "dismiss_suggestion"):
             _prepare_dispatches(tasks)
         for changed in tasks:
             if (

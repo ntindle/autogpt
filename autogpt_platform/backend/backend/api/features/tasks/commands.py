@@ -11,6 +11,7 @@ from backend.api.features.tasks.domain import (
     record,
 )
 from backend.api.features.tasks.models import TaskCommand, WorkspaceTask
+from backend.api.features.tasks.suggestion_commands import dismiss_suggestion
 
 
 def apply_command(
@@ -29,6 +30,8 @@ def apply_command(
         _edit(task, command, tasks, actor)
     elif op in ("assign", "suggest"):
         _assign(task, command, tasks, actor)
+    elif op == "dismiss_suggestion":
+        dismiss_suggestion(task, command)
     elif op in ("complete", "submit_result"):
         if op == "submit_result" and (not command.evidence.strip() or task.review_of):
             raise TaskConflict("Provide the completed work or links to its deliverable")

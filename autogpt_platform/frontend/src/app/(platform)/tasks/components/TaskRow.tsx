@@ -20,7 +20,7 @@ import {
   taskProgress,
   type Task,
 } from "../helpers";
-import { TaskAssigneePicker } from "./TaskAssigneePicker";
+import { TaskAssigneePicker } from "./TaskAssigneePicker/TaskAssigneePicker";
 import { TaskIdentity } from "./TaskIdentity";
 
 interface Props {
@@ -227,6 +227,12 @@ export function TaskRow({
           held={held}
           disabled={pending || active}
           onAssign={(assignee) => onCommand({ operation: "assign", assignee })}
+          onDismiss={() =>
+            onCommand({
+              operation: "dismiss_suggestion",
+              suggestion_request_id: task.suggestion_request_id ?? "",
+            })
+          }
         />
         {!task.review_of && !task.schedule && task.status !== "canceled" ? (
           <button

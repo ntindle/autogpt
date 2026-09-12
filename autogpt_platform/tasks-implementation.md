@@ -397,3 +397,28 @@ Live checks matched nine Tasks backend files, the schema, dependency lock,
 entrypoint, and Tasks/chat page bundles to the tested build. The Tasks entry and
 assets returned HTTP 200. The standalone prototype URL was restored and its
 content hash verified. `autogpt-tasks:pre-d3-20260912` retains the prior image.
+
+
+## Suggested owner controls and mobile header
+
+Suggested owners use one dashed pill around the avatar and name, including
+owners in breakdown drafts. Desktop hover and keyboard focus reveal inline
+accept/dismiss actions without moving the pill. Touch users tap the pill to
+review the reason and use labeled Confirm/Dismiss buttons. Quick keyboard
+actions return focus to the owner after saving while respecting focus moved
+elsewhere. Confirmed ownership keeps its existing plain appearance.
+
+Dismissal is a separate versioned command bound to the displayed suggestion
+request. It keeps the task unassigned and preserves execution state, history,
+and work. The current planning context is recorded so the same suggestion does
+not immediately return; changed context or an explicit suggestion request can
+produce a new one. Late model responses cannot restore a dismissed suggestion.
+Legacy suggestions without a request ID use the same durable behavior.
+
+The Tasks subtitle is removed. Status filters have tighter spacing and stay in
+one horizontal row on mobile, scrolling within the filter strip when needed.
+
+Validation: 67 task backend tests and 22 Tasks frontend integration tests pass.
+Whole backend/frontend formatting, lint, and type checks pass. Coverage includes
+quick acceptance, touch-menu dismissal, error recovery, keyboard focus, stale
+suggestions, explicit regeneration, and reconsideration after context changes.

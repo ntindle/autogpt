@@ -16,7 +16,7 @@ import {
 import type { useTasksPage } from "../useTasksPage";
 import { TaskExecutionStatus } from "./TaskExecutionStatus";
 import { TaskActions } from "./TaskActions";
-import { TaskAssigneePicker } from "./TaskAssigneePicker";
+import { TaskAssigneePicker } from "./TaskAssigneePicker/TaskAssigneePicker";
 import { TaskEditor } from "./TaskEditor";
 import { TaskQuestion } from "./TaskQuestion";
 import { TaskScheduleEditor } from "./TaskScheduleEditor";
@@ -90,6 +90,12 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
           }
           onAssign={(assignee) =>
             page.act(task, { operation: "assign", assignee })
+          }
+          onDismiss={() =>
+            page.act(task, {
+              operation: "dismiss_suggestion",
+              suggestion_request_id: task.suggestion_request_id ?? "",
+            })
           }
         />
       </div>

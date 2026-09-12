@@ -58,8 +58,8 @@ export function BreakdownStepRow({
             {expanded ? "Hide details" : "Details"}
           </button>
         </div>
-        <div className="col-start-2 flex min-w-0 items-center gap-1.5 px-1 pt-1 sm:col-start-auto sm:max-w-48 sm:pt-1">
-          <TaskIdentity assignee={step.assignee} suggested />
+        <div className="col-start-2 mt-1 flex min-w-0 items-center gap-1 rounded-full border border-dashed border-violet-500 pl-0.5 pr-1 sm:col-start-auto sm:mt-0 sm:max-w-48">
+          <TaskIdentity assignee={step.assignee} />
           <select
             aria-label={`Owner for step ${index + 1}`}
             value={step.assignee?.id ?? ""}

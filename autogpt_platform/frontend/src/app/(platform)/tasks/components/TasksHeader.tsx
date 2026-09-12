@@ -19,7 +19,7 @@ export function TasksHeader({ page }: Props) {
   );
   return (
     <header className="shrink-0 border-b border-border px-4 pb-3 pt-7 sm:px-8">
-      <div className="mb-6 flex items-start justify-between gap-4">
+      <div className="mb-4 flex items-start justify-between gap-4">
         <div>
           <h1 className="flex items-baseline gap-2.5 text-3xl font-semibold tracking-tight">
             Tasks{" "}
@@ -31,9 +31,6 @@ export function TasksHeader({ page }: Props) {
               }
             </span>
           </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            One list. Shared responsibility.
-          </p>
         </div>
         <Button
           variant="secondary"
@@ -46,7 +43,7 @@ export function TasksHeader({ page }: Props) {
       </div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div
-          className="flex flex-wrap gap-1"
+          className="flex max-w-full flex-nowrap gap-0.5 overflow-x-auto pb-1 sm:gap-1"
           role="group"
           aria-label="Task views"
         >
@@ -57,7 +54,7 @@ export function TasksHeader({ page }: Props) {
               aria-pressed={page.view.filter === filter}
               onClick={() => page.view.update({ filter })}
               className={cn(
-                "rounded-full px-3 py-2 text-xs text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
+                "shrink-0 whitespace-nowrap rounded-full px-2 py-2 text-xs text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:px-3",
                 page.view.filter === filter &&
                   "bg-muted font-medium text-foreground",
               )}
