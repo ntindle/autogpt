@@ -303,14 +303,37 @@ the answer without a phantom dispatch; an ordinary injected chat turn cannot
 clear an unanswered task question. Canceling a questioned task clears its Home
 reminder while preserving history.
 
-`../tasks-breakdown-options.html` contains four separate, interactive design
-options: inline preview, side inspector, brief beside preview, and conversational
-refinement. Each immediately generates an editable preview of actionable steps,
-with optional additional context. Browser checks exercised all four and verified
-that each fits a 390px viewport. These are sample-data prototypes for selecting
-the eventual breakdown layout.
+`../tasks-breakdown-options.html` now compares A (the inline reference) with
+D1 (compact conversation), D2 (minimal inline), and D3 (details on demand).
+The inspector and brief-beside-preview designs were removed at the user's
+request. Each generates an editable preview of actionable steps, with optional
+additional context; existing edits stay visible during refinement. Browser
+checks exercised generation, editing, refinement, disclosure, and acceptance
+for all four, at desktop and 390px phone width. The preview is hosted at
+`http://192.168.1.193:3004/tasks-breakdown-options.html`; its sample data does not
+create or execute real tasks. The production breakdown layout remains unchanged
+while these compact variants are reviewed.
 
 Validation: 61 isolated Tasks database tests, 24 question-tool tests, and 79
 frontend integration tests covering Tasks, the real chat action chain, connector
 coexistence, and Home Needs You passed. Whole frontend/backend formatting, lint,
 and type checks were run. Runtime deployment verification follows separately.
+
+
+## Execution and question-sync rollout
+
+Source revision `f9c14503d9` was built locally, then deployed to the idle
+`AutoGPT-Tasks` instance using its existing Orgs-based template. Health,
+all 21 variables, data mount, port, Edit metadata, and other container IDs
+were verified. The prior image remains available for rollback.
+
+The local production-container browser started one synthetic task with Play,
+verified its sibling stayed held, opened its linked chat, selected Blue in a
+real model-generated question, and submitted once. The task recorded the answer,
+the Home question disappeared, and the chat showed `Chosen color: Blue` without
+a reload. The result remained ready for review; the sibling never dispatched.
+
+The reported live Juno BOM record was linked to the user's completed
+configuration through the existing version-checked Tasks command. Its ID,
+conversation, owner, attempt state, and parent hold were preserved. This repaired
+the missing prerequisite relationship without restarting the previous attempt.
