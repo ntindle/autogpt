@@ -422,3 +422,37 @@ Validation: 67 task backend tests and 22 Tasks frontend integration tests pass.
 Whole backend/frontend formatting, lint, and type checks pass. Coverage includes
 quick acceptance, touch-menu dismissal, error recovery, keyboard focus, stale
 suggestions, explicit regeneration, and reconsideration after context changes.
+
+Production-browser validation passed with three fictional, held tasks. The QA
+provider key reached its daily cap, so suggestions were seeded in that test
+account; fresh model generation was not verified in this pass. Acceptance and
+dismissal used the real application and database. Desktop hover preserved pill
+geometry, the outline enclosed the avatar and name, and keyboard acceptance
+returned focus. At 390px, the phone had no document overflow, the filters stayed
+on one row, and Canceled remained reachable by scrolling. Tap-to-review exposed
+44px Confirm/Dismiss controls. Dismissal survived reload and background polling;
+all three tasks retained their execution hold and created no dispatch.
+
+Source revision `465f567695` is deployed and healthy on `AutoGPT-Tasks`. All 21
+editable template variables, the data mount, LAN port, and Edit action remain
+intact. Other instance IDs and the source Orgs Stack template are unchanged.
+Live checks matched ten Tasks backend files, the schema, dependency lock,
+entrypoint, Tasks/chat bundles, and ten CSS assets. Full JavaScript and CSS
+responses matched the tested build byte-for-byte, and the Tasks entry returned
+HTTP 200. The prototype URL was restored and its content hash verified.
+
+The first image import exhausted Docker's Btrfs metadata allocation. An
+incremental archive reused 84 existing layers and transferred ten new layers
+(79 MB), retaining the tested image configuration digest. One unused management
+preview (`management-release` / `pre-execution-20260912`) was retired after
+verifying its local copy and absence of container references. Five unreferenced
+metadata records left by failed imports were moved to
+`/tmp/tasks-owner-failed-import-metadata-20260912` on Unraid. The current and
+immediately preceding releases were preserved; `autogpt-tasks:pre-owner-20260912`
+now retains the previous live image. No shared Docker or host restart was used.
+
+The prototype deployment helper now runs nginx configuration checks and reloads
+as `autogpt_proxy`. Running the check as root had changed temporary-directory
+ownership to `nobody`, truncating large proxied asset responses. The five nginx
+temporary directories were restored to their entrypoint-defined service owner;
+complete asset downloads and ownership were verified after the corrected reload.
