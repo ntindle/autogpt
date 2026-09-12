@@ -464,3 +464,34 @@ its template's port host address and `AUTOGPT_PUBLIC_URL`. The current endpoint
 is `http://192.168.1.192:3004/tasks`. Startup health, the Tasks page, a complete
 CSS download, the restored prototype, and Unraid Edit were verified. All 21
 variables and other container IDs were preserved; the host was already online.
+
+## Mobile scroll recovery
+
+The mobile recording showed task rows disappearing during movement while the
+header remained stable. Each scroll event updated the whole Tasks page's React
+state, then an effect wrote that saved position back to the scrolling element.
+That feedback interrupted WebKit's native scrolling. Position now lives in a
+ref, with storage saved after a 200ms pause and flushed on navigation, pagehide,
+or hiding the tab. Restoring the DOM position happens only when the list mounts
+or the user's saved view loads. Existing per-user saved views remain compatible.
+
+The regression failed on the original code with four programmatic position
+writes for four native scroll events. All 25 Tasks integration tests now pass,
+including position persistence before a pending save completes. Whole frontend
+formatting, lint, and types passed, followed by a local production build.
+
+An isolated browser fixture used the actual Tasks list, header, capture form,
+and view hook with 42 fictional tasks. WebKit and Chromium both measured zero
+page renders and zero programmatic scroll writes during gestures after the fix;
+the original code performed both repeatedly. Changing views and reloading still
+restored the position. The packaged production frontend's login and complete
+asset responses passed before deployment.
+
+Revision `45d746bbe5` is deployed and healthy at
+`http://192.168.1.192:3004/tasks`. The update reused the existing backend and
+frontend dependencies, adding one frontend layer transferred as a 20 MB archive.
+All 21 variables, the data mount, LAN binding, Unraid Edit, other container IDs,
+and the Orgs Stack template were preserved. Live Tasks/chat JavaScript and ten
+CSS assets matched the tested build byte-for-byte. The prototype route was
+restored using nginx's service account. The previous image is retained as
+`autogpt-tasks:pre-scroll-20260912`.
