@@ -379,3 +379,21 @@ without clearing other questions or dispatching a human-owned task.
 Merged-source validation passed: 118 Tasks, question-tool, and Home backend
 tests; 17 single-container entrypoint tests; and 558 frontend integration tests
 across 37 files. Whole backend/frontend formatting, lint, and types passed.
+
+Production-container browser validation used only the fictional color-card kit.
+One click generated three actionable steps and matched Mira, Forge, and Mill to
+their roles. Editing a title and deliverable, then refining through the chat
+composer, retained the edits without creating tasks. Explicit acceptance created
+exactly three children, retained AutoPilot on the parent, saved a further phone
+edit verbatim, translated prerequisite links, and dispatched nothing under the
+planning hold. Desktop and 390px phone layouts were inspected; phone document
+width stayed at 390px, with the composer and acceptance action reachable.
+
+Source revision `717675a42e` is deployed and healthy on `AutoGPT-Tasks`. The image
+was built on the local Linux host and transferred to Unraid without a remote
+build. All 21 template variables, the data mount, LAN port, and Edit action were
+preserved; the other instance IDs and source Orgs Stack template are unchanged.
+Live checks matched nine Tasks backend files, the schema, dependency lock,
+entrypoint, and Tasks/chat page bundles to the tested build. The Tasks entry and
+assets returned HTTP 200. The standalone prototype URL was restored and its
+content hash verified. `autogpt-tasks:pre-d3-20260912` retains the prior image.
