@@ -20,14 +20,11 @@ interface Props {
   submitting?: boolean;
 }
 
-/** One question per step. The footer pager (chevrons + ring dots) moves
- *  between questions; the round action button advances and, on the last
- *  step, drafts every answer into the chat input. */
 export function QuestionsSection({
   requests,
   isReady,
   onProceed,
-  submitLabel = "Add answers to message",
+  submitLabel = "Send answers",
   submitting = false,
 }: Props) {
   const [step, setStep] = useState(0);
@@ -58,6 +55,13 @@ export function QuestionsSection({
     }
   }
 
+  // A tap on an option is the whole answer, so the pager moves on by itself;
+  // the last question keeps the send button as its explicit final step.
+  function handlePick(value: string) {
+    request.onAnswer(question.keyword, value);
+    if (!isLast) setStep(current + 1);
+  }
+
   return (
     <>
       <div className="flex items-center justify-between gap-2.5 border-b border-zinc-100 px-4 py-3">
@@ -81,9 +85,12 @@ export function QuestionsSection({
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.25, ease: [0.23, 1, 0.32, 1] }}
-        className="flex flex-col gap-1.5 px-4 py-3"
+        className="flex flex-col gap-4 px-5 pb-4 pt-5"
       >
-        <span id={labelId} className="text-sm text-zinc-700">
+        <span
+          id={labelId}
+          className="text-lg font-medium leading-snug text-zinc-900"
+        >
           {question.question}
         </span>
         <QuestionAnswerField
@@ -96,11 +103,12 @@ export function QuestionsSection({
           labelId={labelId}
           autoFocus={current > 0}
           onChange={(value) => request.onAnswer(question.keyword, value)}
+          onPick={handlePick}
           onSubmit={handleAction}
         />
       </m.div>
 
-      <div className="flex items-center justify-between px-4 pb-3 pt-1">
+      <div className="flex items-center justify-between px-5 pb-4 pt-1">
         <span className="flex items-center gap-2">
           <button
             type="button"

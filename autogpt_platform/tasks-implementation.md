@@ -1,7 +1,8 @@
 # Tasks workspace implementation
 
 Interaction reference: `autogpt-tasks-prd-v0.4-platform.html` (September 10, 2026).
-Branch: `codex/tasks-workspace`, based on `origin/dev` at `7a354df889`.
+Branch: `codex/tasks-workspace`, initially based on `origin/dev` at `7a354df889`,
+updated by merging `origin/dev` at `1797a44f71` on September 12, 2026.
 
 The dedicated checklist ties persistent tasks to existing Experts, CoPilot
 sessions and worker admission, question cards, result review, and schedules.
@@ -72,7 +73,7 @@ integration tests cover capture, delegation, inspection, and manual completion.
 
 The normal single-container Docker Bake definition remains the build contract.
 This development deployment reuses the installed single-container runtime and
-updates the three changed locked Python packages, generated Prisma client,
+updates changed locked Python packages, the generated Prisma client,
 application source, and standalone frontend. Final source packaging runs on the
 local Linux machine. The new instance uses its own data and private LAN port.
 
@@ -294,7 +295,7 @@ submits through the existing Tasks answer command. It resolves a question moved
 into an original-work child, prevents duplicate continuation, retains draft
 answers on error, and refreshes Tasks, Home, and the linked chat. Ready connector
 and input context accompanies the structured answers. Ordinary chat questions
-retain the existing draft-and-send interaction.
+send their answers directly, following the updated `dev` interaction.
 
 Task question creation and resolution update Home's pending-question marker in
 the same database transaction, preserving unrelated session metadata. Stale
@@ -303,15 +304,13 @@ the answer without a phantom dispatch; an ordinary injected chat turn cannot
 clear an unanswered task question. Canceling a questioned task clears its Home
 reminder while preserving history.
 
-`../tasks-breakdown-options.html` now compares A (the inline reference) with
-D1 (compact conversation), D2 (minimal inline), and D3 (details on demand).
-The inspector and brief-beside-preview designs were removed at the user's
-request. Each generates an editable preview of actionable steps, with optional
-additional context; existing edits stay visible during refinement. Browser
-checks exercised generation, editing, refinement, disclosure, and acceptance
-for all four, at desktop and 390px phone width. The preview is hosted at
-`http://192.168.1.193:3004/tasks-breakdown-options.html`; its sample data does not
-create or execute real tasks. The user selected D3 with the original D chat composer for the production layout.
+`../tasks-breakdown-options.html` retains the D1 and D3 finalists after the
+user eliminated A, B, C, and D2. Both support editable titles and deliverables,
+expandable prerequisite/owner details, and the original D chat composer. The
+preview is hosted at `http://192.168.1.193:3004/tasks-breakdown-options.html`;
+its sample data does not create or execute real tasks. Desktop and 390px phone
+checks exercised generation, editing, refinement, disclosure, and acceptance.
+The selected production layout is D3.
 
 Validation: 61 isolated Tasks database tests, 24 question-tool tests, and 79
 frontend integration tests covering Tasks, the real chat action chain, connector
@@ -363,3 +362,20 @@ Validation: 62 isolated Tasks database tests and 81 frontend integration tests
 passed, including the D3 generate/edit/refine/accept flow and the mixed-card
 regression. Whole frontend/backend format, lint, and type checks passed; the
 production frontend was built on the local Linux host.
+
+
+## Latest dev integration
+
+The development branch was merged without rebasing. Chat conflicts retain both
+`dev`'s direct-send question flow and Tasks' atomic answer submission, error
+recovery, and duplicate-continuation guard. The container update also includes
+Expert schema migrations, the regenerated Prisma client, locked sandbox SDK
+dependencies, and the current single-container entrypoint.
+
+A reassigned task remains in Needs You while its question is unanswered. Saving
+the answer clears the matching Home reminder from the previous conversation,
+without clearing other questions or dispatching a human-owned task.
+
+Merged-source validation passed: 118 Tasks, question-tool, and Home backend
+tests; 17 single-container entrypoint tests; and 558 frontend integration tests
+across 37 files. Whole backend/frontend formatting, lint, and types passed.

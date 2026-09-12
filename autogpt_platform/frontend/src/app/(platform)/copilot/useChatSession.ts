@@ -249,7 +249,7 @@ export function useChatSession({
     if (chatTransports !== undefined && availableTransports.length === 0) {
       toast({
         variant: "destructive",
-        title: "AutoPilot needs an AI connection",
+        title: "Otto needs an AI connection",
         description:
           "Sign in with ChatGPT under OpenAI in Settings → Integrations, or configure a chat API or local model on this server.",
       });
@@ -264,7 +264,7 @@ export function useChatSession({
           : "Choose an AI connection",
         description: connectionsAreLoading
           ? "Wait a moment and try again."
-          : "Select the connection AutoPilot should use before starting a new task.",
+          : "Select the connection Otto should use before starting a new task.",
       });
       throw new Error(
         connectionsAreLoading
@@ -280,7 +280,7 @@ export function useChatSession({
       toast({
         title: "AI connections changed",
         description:
-          "The next AutoPilot task will resolve the currently available connection before it starts.",
+          "The next Otto task will resolve the currently available connection before it starts.",
       });
     }
 
