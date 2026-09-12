@@ -3,6 +3,7 @@ from typing import Any
 from pydantic import Field
 
 from backend.api.features.tasks.domain import TaskConflict, ancestors, branch
+from backend.api.features.tasks.management import MANAGEMENT_OPERATIONS
 from backend.api.features.tasks.models import (
     TaskAssignee,
     TaskCommand,
@@ -14,6 +15,7 @@ from backend.data.db_accessors import tasks_db
 
 from .base import BaseTool
 from .models import ErrorResponse, ResponseType, ToolResponseBase
+from .task_management import manage_existing_task
 
 
 class WorkspaceTasksResponse(ToolResponseBase):
@@ -38,9 +40,13 @@ class ManageTasksTool(BaseTool):
             "or submit_result with evidence for acceptance. New commitments should be proposed, not assumed. "
             "AutoPilot retains parent ownership and delegates specialist child tasks to existing Experts from list_team. "
             "AutoPilot can accept or request changes to a child's result; no executor can accept its own result. "
-            "Use assign_step with task_id for existing unassigned steps; preserve confirmed owners and never duplicate a planned step. "
+            "AutoPilot can edit, reparent, assign, cancel, reopen, pause, resume, or retry existing tasks across the user's workspace, including from regular chats. "
+            "Use reparent with task_id and new_parent_id (null for top level); it preserves IDs, conversations, answers, results, and history, and inherits the new parent's project unless project is supplied. "
+            "Use edit for title, description, project, and dependencies. Use cancel to retire duplicates without deleting history. "
+            "Use assign (or assign_step) to change an owner, including an existing confirmed owner. Use pause before reassigning or canceling active work, then list until dispatch is no longer claimed/sent and status is no longer working. Never copy a task to move or reroute it. "
+            "Expert sessions can only assign unassigned steps within their delegated branch; they cannot manage unrelated tasks. "
             "In any chat, add_step with task_id creates a real child under that owned parent. Outside a delegated task conversation its owner remains a suggestion. Never simulate nesting with title prefixes. "
-            "Use list with all_projects=true or project to find existing prerequisites across projects. Cross-project links do not grant permission to assign or approve that outside work. "
+            "Use list with all_projects=true or project to find existing prerequisites across projects. Expert cross-project links do not expand their delegation or review scope. "
             "Keep visible tasks at deliverable granularity. Use ask_question for human questions."
         )
 
@@ -56,6 +62,7 @@ class ManageTasksTool(BaseTool):
                         "capture",
                         "add_step",
                         "assign_step",
+                        *sorted(MANAGEMENT_OPERATIONS),
                         "activity",
                         "submit_result",
                         "accept_result",
@@ -64,7 +71,15 @@ class ManageTasksTool(BaseTool):
                 },
                 "task_id": {
                     "type": "string",
-                    "description": "For list, an owned branch to inspect, including another project. For add_step, the parent task ID (works from a regular chat). For review or assign_step, the child ID. Omitted uses this chat's linked task.",
+                    "description": "For list, an owned branch to inspect, including another project. For add_step, the parent task ID (works from a regular chat). For management, the existing task to change. For review, the child ID. Omitted uses this chat's linked task for progress and result submission.",
+                },
+                "version": {
+                    "type": "integer",
+                    "description": "Latest version from list; rejects changes if someone edited the task since you inspected it.",
+                },
+                "new_parent_id": {
+                    "type": ["string", "null"],
+                    "description": "For reparent, an existing open outcome ID in this workspace, or null to move the task to the top level. Never create a copy to move a task.",
                 },
                 "title": {"type": "string"},
                 "description": {"type": "string"},
@@ -74,7 +89,7 @@ class ManageTasksTool(BaseTool):
                 },
                 "project": {
                     "type": "string",
-                    "description": "Project label for capture; for list, find the user's tasks in this project even outside the linked outcome.",
+                    "description": "Project label for capture, edit, or reparent; omit on reparent to inherit the new parent project. For list, find the user's tasks in this project even outside the linked outcome.",
                 },
                 "all_projects": {
                     "type": "boolean",
@@ -82,7 +97,7 @@ class ManageTasksTool(BaseTool):
                 },
                 "assignee_kind": {
                     "type": "string",
-                    "enum": ["human", "auto", "expert"],
+                    "enum": ["human", "auto", "expert", "unassigned"],
                 },
                 "assignee_id": {
                     "type": "string",
@@ -108,14 +123,28 @@ class ManageTasksTool(BaseTool):
         *,
         operation: str,
         task_id: str = "",
-        title: str = "",
-        description: str = "",
+        title: str | None = None,
+        description: str | None = None,
         evidence: str = "",
-        project: str = "",
+        project: str | None = None,
         **kwargs
     ) -> ToolResponseBase:
         if not user_id:
             return ErrorResponse(message="Authentication required")
+        if operation in MANAGEMENT_OPERATIONS or (
+            operation == "assign_step" and not session.expert_id
+        ):
+            return await manage_existing_task(
+                user_id,
+                session,
+                operation,
+                task_id,
+                title,
+                description,
+                project,
+                kwargs,
+            )
+        title, description, project = title or "", description or "", project or ""
         root = await tasks_db().workspace_task_for_session(user_id, session.session_id)
         if operation in ("add_step", "assign_step") and (
             root or (operation == "add_step" and task_id)
@@ -128,7 +157,7 @@ class ManageTasksTool(BaseTool):
                     or (user_id if kind == "human" else "auto"),
                     name="You" if kind == "human" else "Auto",
                 )
-                if kind
+                if kind and kind != "unassigned"
                 else None
             )
             if operation == "assign_step":
@@ -166,6 +195,7 @@ class ManageTasksTool(BaseTool):
                 user_id,
                 TaskCreate(title=title, description=description, project=project),
                 session.organization_id,
+                source_session_id=session.session_id,
             )
             return WorkspaceTasksResponse(
                 message="Captured; ownership is suggested, not delegated.", tasks=[task]

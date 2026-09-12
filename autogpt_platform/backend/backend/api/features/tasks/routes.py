@@ -1,4 +1,3 @@
-from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import autogpt_libs.auth as auth
@@ -18,6 +17,9 @@ from backend.api.features.tasks.models import (
     TaskCreate,
     TaskListResponse,
     WorkspaceTask,
+)
+from backend.api.features.tasks.planning_refresh import (
+    reconsider_unassigned_workspace_tasks,
 )
 from backend.api.features.tasks.recommendations import (
     generate_task_suggestion,
@@ -48,22 +50,7 @@ async def list_tasks(
     user_id: UserID, background_tasks: BackgroundTasks
 ) -> TaskListResponse:
     tasks = await tasks_db().list_workspace_tasks(user_id)
-    stale = datetime.now(UTC) - timedelta(minutes=2)
-    for task in [
-        t
-        for t in tasks
-        if not t.assignee
-        and not t.review_of
-        and t.status not in ("done", "canceled")
-        and (
-            t.suggestion_state == "idle"
-            or (
-                t.suggestion_state == "pending"
-                and (not t.suggestion_started_at or t.suggestion_started_at < stale)
-            )
-        )
-    ][:10]:
-        background_tasks.add_task(suggest_task_assignee, user_id, task.id)
+    background_tasks.add_task(reconsider_unassigned_workspace_tasks, user_id)
     return TaskListResponse(
         tasks=tasks,
         assignees=await task_assignees(user_id),

@@ -3,7 +3,6 @@ from uuid import NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, Field
 
-from backend.api.features.tasks.context import planning_context
 from backend.api.features.tasks.models import (
     TaskBreakdownAccept,
     TaskBreakdownStep,
@@ -11,7 +10,6 @@ from backend.api.features.tasks.models import (
 )
 from backend.api.features.tasks.planning_model import (
     planning_completion,
-    planning_roster,
     resolve_candidate,
 )
 from backend.api.features.tasks.service import dispatch_user_tasks, task_assignees
@@ -55,18 +53,22 @@ Return a preview only. It will be edited and accepted before any new tasks are a
 
 
 async def generate_task_breakdown(user_id: str, task: WorkspaceTask) -> None:
-    preview = task.breakdown
+    preview = task.breakdown_refresh or task.breakdown
     if not preview:
         return
     steps, error = [], ""
     try:
-        tasks = await tasks_db().list_workspace_tasks(user_id)
-        candidates, roster = await planning_roster(user_id)
+        inputs = await tasks_db().workspace_task_planning_inputs(user_id, task.id)
+        if inputs.fingerprint != preview.context:
+            await tasks_db().finish_workspace_task_breakdown(
+                user_id, task.id, preview.id, []
+            )
+            return
+        candidates = inputs.candidates
         response = await planning_completion(
             _PROMPT,
             {
-                **planning_context(task, tasks),
-                "roster": roster,
+                **inputs.context,
                 "detail": preview.detail,
                 "guidance": preview.guidance,
             },

@@ -2,11 +2,9 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from backend.api.features.tasks.context import planning_context
 from backend.api.features.tasks.models import WorkspaceTask
 from backend.api.features.tasks.planning_model import (
     planning_completion,
-    planning_roster,
     resolve_candidate,
 )
 from backend.data.db_accessors import tasks_db
@@ -47,11 +45,16 @@ async def suggest_task_assignee(
 async def generate_task_suggestion(user_id: str, task: WorkspaceTask) -> None:
     suggestion, alternatives, error = None, [], ""
     try:
-        tasks = await tasks_db().list_workspace_tasks(user_id)
-        candidates, roster = await planning_roster(user_id)
+        inputs = await tasks_db().workspace_task_planning_inputs(user_id, task.id)
+        if task.suggestion_context and inputs.fingerprint != task.suggestion_context:
+            await tasks_db().finish_workspace_task_suggestion(
+                user_id, task.id, task.suggestion_request_id, None, []
+            )
+            return
+        candidates = inputs.candidates
         response = await planning_completion(
             _PROMPT,
-            {**planning_context(task, tasks), "roster": roster},
+            inputs.context,
             OwnerRecommendation,
         )
         suggestion = resolve_candidate(

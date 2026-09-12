@@ -118,6 +118,17 @@ function BreakdownBody({
           Breaking this down and matching steps to your Experts…
         </p>
       ) : null}
+      {task.breakdown_refresh?.state === "pending" ? (
+        <p role="status" className="text-xs text-muted-foreground">
+          Updating this suggestion with new context. Your current preview is
+          kept.
+        </p>
+      ) : null}
+      {task.breakdown_refresh?.error ? (
+        <p role="alert" className="text-xs text-destructive">
+          The suggestion could not be updated. Generate again to retry.
+        </p>
+      ) : null}
       {breakdown.error || task.breakdown?.error ? (
         <p role="alert" className="text-sm text-destructive">
           {breakdown.error || task.breakdown?.error}
@@ -131,10 +142,11 @@ function BreakdownBody({
       ) : null}
       {task.breakdown?.state === "ready" ? (
         <BreakdownEditor
-          key={task.breakdown.id}
+          key={task.id}
           preview={task.breakdown}
           assignees={assignees}
           disabled={breakdown.accepting || active}
+          refreshState={task.breakdown_refresh?.state}
           delegated={Boolean(
             task.assignee &&
               task.assignee.kind !== "human" &&

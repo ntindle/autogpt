@@ -10,15 +10,20 @@ interface Props {
   preview: TaskBreakdown;
   assignees: TaskAssignee[];
   disabled: boolean;
+  refreshState?: TaskBreakdown["state"];
   delegated: boolean;
   held: boolean;
-  onAccept: (steps: TaskBreakdownSelection[]) => Promise<void>;
+  onAccept: (
+    steps: TaskBreakdownSelection[],
+    previewID?: string,
+  ) => Promise<void>;
 }
 
 export function BreakdownEditor({
   preview,
   assignees,
   disabled,
+  refreshState,
   delegated,
   held,
   onAccept,
@@ -26,6 +31,24 @@ export function BreakdownEditor({
   const editor = useBreakdownEditor(preview);
   return (
     <>
+      {editor.hasUpdate ? (
+        <div
+          className="space-y-2 rounded-lg bg-muted p-3 text-sm"
+          role="status"
+        >
+          <p>
+            An updated suggestion is ready. Your current edits are kept until
+            you review it.
+          </p>
+          <Button
+            size="small"
+            variant="secondary"
+            onClick={editor.reviewUpdate}
+          >
+            Review updated suggestion
+          </Button>
+        </div>
+      ) : null}
       <ol className="space-y-3">
         {editor.steps.map((step, index) => (
           <li key={step.id} className="rounded-xl border border-border p-3">
@@ -112,6 +135,8 @@ export function BreakdownEditor({
         <Button
           disabled={
             disabled ||
+            Boolean(refreshState) ||
+            editor.hasUpdate ||
             !editor.selected.length ||
             editor.selected.some((step) => !step.title.trim())
           }
@@ -122,12 +147,19 @@ export function BreakdownEditor({
                 title: title.trim(),
                 assignee,
               })),
+              editor.previewID,
             )
           }
         >
-          {disabled
-            ? "Adding steps…"
-            : `Accept ${editor.selected.length} selected ${editor.selected.length === 1 ? "step" : "steps"}`}
+          {refreshState === "error"
+            ? "Generate again before accepting"
+            : refreshState
+              ? "Updating suggestion…"
+              : editor.hasUpdate
+                ? "Review update before accepting"
+                : disabled
+                  ? "Adding steps…"
+                  : `Accept ${editor.selected.length} selected ${editor.selected.length === 1 ? "step" : "steps"}`}
         </Button>
       </div>
     </>

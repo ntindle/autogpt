@@ -34,7 +34,29 @@ def planning_context(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> dict:
         "question",
         "review_of",
     }
+    dependencies = {
+        dependency
+        for item in ancestors(task, tasks)
+        for dependency in item.dependencies
+    }
     return {
+        "prerequisites": [
+            item.model_dump(
+                mode="json",
+                include={
+                    "id",
+                    "title",
+                    "description",
+                    "project",
+                    "status",
+                    "result",
+                    "result_version",
+                    "question",
+                },
+            )
+            for item in tasks
+            if item.id in dependencies
+        ],
         "task": context.task.model_dump(mode="json", include=fields),
         "ancestors": [
             t.model_dump(mode="json", include=fields) for t in context.ancestors
@@ -54,23 +76,6 @@ def planning_fingerprint(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> str
 def execution_context(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> str:
     brief = planning_context(task, tasks)
     chain = ancestors(task, tasks)
-    dependencies = {dependency for item in chain for dependency in item.dependencies}
-    brief["prerequisites"] = [
-        item.model_dump(
-            mode="json",
-            include={
-                "id",
-                "title",
-                "description",
-                "project",
-                "status",
-                "result",
-                "question",
-            },
-        )
-        for item in tasks
-        if item.id in dependencies
-    ]
     brief["recent_activity"] = [
         {"task_id": item.id, "activity": item.activity}
         for item in reversed(chain)
@@ -83,6 +88,9 @@ def execution_context(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> str:
         + "\nAutoPilot retains ownership of a delegated outcome and coordinates Experts who own "
         "its subtasks. Do not submit the parent result until required child results are accepted. Do not repeat questions already waiting on child tasks. Use manage_tasks assign_step for existing unassigned steps; never duplicate them. Read list_team to understand their actual capabilities and use manage_tasks "
         "add_step to give each necessary workstream to the right existing Expert. Never hand the "
-        "parent away or duplicate work already assigned. Respect dependencies and ask_question "
+        "parent away just to delegate a specialist step. AutoPilot can edit, reparent, assign, or cancel existing "
+        "tasks across the workspace while preserving their records; pause and wait for active work before "
+        "changing its owner. Never copy a task to move it. Expert sessions stay within their assigned scope. "
+        "Human results and previous answers in the context are handoff evidence; read them before asking again. Respect dependencies and ask_question "
         "for missing decisions. Use manage_tasks to review child results and submit evidence."
     )

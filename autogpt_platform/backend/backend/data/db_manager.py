@@ -536,6 +536,9 @@ class DatabaseManager(AppService):
         tasks_db.unfinished_workspace_task_dispatches
     )
     start_workspace_task_run = _(tasks_db.start_workspace_task_run)
+    workspace_task_planning_inputs = _(tasks_db.workspace_task_planning_inputs)
+    reconsider_workspace_task_plans = _(tasks_db.reconsider_workspace_task_plans)
+    workspace_task_planning_users = _(tasks_db.workspace_task_planning_users)
     begin_workspace_task_suggestion = _(tasks_db.begin_workspace_task_suggestion)
     finish_workspace_task_suggestion = _(tasks_db.finish_workspace_task_suggestion)
     begin_workspace_task_breakdown = _(tasks_db.begin_workspace_task_breakdown)
@@ -727,6 +730,9 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     d = DatabaseManager
 
     start_workspace_task_run = d.start_workspace_task_run
+    workspace_task_planning_inputs = d.workspace_task_planning_inputs
+    reconsider_workspace_task_plans = d.reconsider_workspace_task_plans
+    workspace_task_planning_users = d.workspace_task_planning_users
     begin_workspace_task_suggestion = d.begin_workspace_task_suggestion
     finish_workspace_task_suggestion = d.finish_workspace_task_suggestion
     begin_workspace_task_breakdown = d.begin_workspace_task_breakdown

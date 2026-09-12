@@ -1,3 +1,4 @@
+import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import type { WorkspaceTask } from "@/app/api/__generated__/models/workspaceTask";
 
 export type Task = WorkspaceTask & { id: string; version: number };
@@ -7,7 +8,8 @@ export type TaskView =
   | "Working"
   | "Scheduled"
   | "Suggested"
-  | "Done";
+  | "Done"
+  | "Canceled";
 export const TASK_VIEWS: TaskView[] = [
   "All",
   "Needs you",
@@ -15,12 +17,44 @@ export const TASK_VIEWS: TaskView[] = [
   "Scheduled",
   "Suggested",
   "Done",
+  "Canceled",
 ];
 
 export function normalizeTasks(tasks: WorkspaceTask[]): Task[] {
   return tasks.flatMap((task) =>
-    task.id ? [{ ...task, id: task.id, version: task.version ?? 1 }] : [],
+    task.id
+      ? [
+          {
+            ...task,
+            id: task.id,
+            version: task.version ?? 1,
+            assignee: selfIdentity(task.assignee, task.user_id),
+            suggestion: selfIdentity(task.suggestion, task.user_id),
+            suggestion_alternatives: task.suggestion_alternatives?.map(
+              (owner) => selfIdentity(owner, task.user_id) ?? owner,
+            ),
+            breakdown: task.breakdown
+              ? {
+                  ...task.breakdown,
+                  steps: task.breakdown.steps?.map((step) => ({
+                    ...step,
+                    suggestion: selfIdentity(step.suggestion, task.user_id),
+                  })),
+                }
+              : task.breakdown,
+          },
+        ]
+      : [],
   );
+}
+
+export function selfIdentity(
+  assignee: TaskAssignee | null | undefined,
+  userID: string,
+) {
+  return assignee?.kind === "human" && assignee.id === userID
+    ? { ...assignee, name: "You" }
+    : assignee;
 }
 
 export function taskMatches(
@@ -37,6 +71,8 @@ export function taskMatches(
       .includes(search.toLowerCase())
   )
     return false;
+  if (task.status === "canceled" || view === "Canceled")
+    return task.status === "canceled" && view === "Canceled";
   if (view === "Needs you")
     return (
       task.status === "needs_you" &&
@@ -49,7 +85,7 @@ export function taskMatches(
   if (view === "Suggested")
     return Boolean(task.suggestion) || task.accepted === false;
   if (view === "Done") return task.status === "done";
-  return task.status !== "canceled";
+  return true;
 }
 
 export function visibleTaskIDs(
@@ -58,9 +94,19 @@ export function visibleTaskIDs(
   search: string,
   project: string,
 ) {
+  const canceled = new Set(
+    tasks
+      .filter((task) => task.status === "canceled")
+      .flatMap((task) => taskBranch(task, tasks).map((member) => member.id)),
+  );
   const visible = new Set(
     tasks
-      .filter((task) => taskMatches(task, view, search, project))
+      .filter((task) => {
+        if (canceled.has(task.id) !== (view === "Canceled")) return false;
+        const filter =
+          view === "Canceled" && task.status !== "canceled" ? "All" : view;
+        return taskMatches(task, filter, search, project);
+      })
       .map((task) => task.id),
   );
   const byID = new Map(tasks.map((task) => [task.id, task]));

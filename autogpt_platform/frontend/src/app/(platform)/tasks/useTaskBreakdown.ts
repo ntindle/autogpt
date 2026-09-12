@@ -51,13 +51,16 @@ export function useTaskBreakdown({
       void generate(item);
   }
 
-  async function acceptSteps(steps: TaskBreakdownSelection[]) {
+  async function acceptSteps(
+    steps: TaskBreakdownSelection[],
+    previewID?: string,
+  ) {
     if (!task?.breakdown?.id) return;
     setError("");
     try {
       const response = await accept.mutateAsync({
         taskId: task.id,
-        data: { preview_id: task.breakdown.id, steps },
+        data: { preview_id: previewID ?? task.breakdown.id, steps },
       });
       if (!okData(response))
         throw new Error(

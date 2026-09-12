@@ -4,9 +4,9 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from prisma import Json
 
-from backend.api.features.tasks.context import planning_fingerprint
 from backend.api.features.tasks.domain import (
     TaskConflict,
+    ancestors,
     can_edit_execution,
     check_structure,
     record,
@@ -18,6 +18,10 @@ from backend.api.features.tasks.models import (
     TaskBreakdownRequest,
     TaskBreakdownStep,
     WorkspaceTask,
+)
+from backend.api.features.tasks.planning_inputs import (
+    load_planning_environment,
+    task_planning_inputs,
 )
 from backend.api.features.tasks.repository import (
     _get,
@@ -44,17 +48,16 @@ async def begin_workspace_task_suggestion(
         )
         if task.suggestion_state == "pending" and recent:
             return None
+        inputs = await _planning_inputs(tx, task, tasks)
+        if not force and inputs.busy:
+            return None
         if (
             not force
             and task.suggestion_state in ("ready", "error")
-            and task.suggestion_context == planning_fingerprint(task, tasks)
+            and task.suggestion_context == inputs.fingerprint
         ):
             return None
-        task.suggestion_request_id = str(uuid4())
-        task.suggestion_context = planning_fingerprint(task, tasks)
-        task.suggestion_state, task.suggestion_error = "pending", ""
-        task.suggestion_started_at = datetime.now(UTC)
-        task.suggestion, task.suggestion_alternatives = None, []
+        start_suggestion(task, inputs.fingerprint)
         await _save(tx, task)
         return task
 
@@ -73,7 +76,8 @@ async def finish_workspace_task_suggestion(
         task = _get(tasks, task_id)
         if task.assignee or task.suggestion_request_id != request_id:
             return
-        if task.suggestion_context != planning_fingerprint(task, tasks):
+        inputs = await _planning_inputs(tx, task, tasks)
+        if task.suggestion_context != inputs.fingerprint:
             task.suggestion_state = "idle"
         else:
             task.suggestion, task.suggestion_alternatives = suggestion, alternatives
@@ -91,9 +95,11 @@ async def begin_workspace_task_breakdown(
         task = _get(tasks, task_id)
         if task.status == "canceled" or task.review_of or task.schedule:
             raise TaskConflict("Break down an active task or a schedule occurrence")
+        inputs = await _planning_inputs(tx, task, tasks)
         task.breakdown = TaskBreakdown(
-            context=planning_fingerprint(task, tasks), **request.model_dump()
+            context=inputs.fingerprint, **request.model_dump()
         )
+        task.breakdown_refresh = None
         await _save(tx, task)
         return task
 
@@ -109,13 +115,32 @@ async def finish_workspace_task_breakdown(
         await _lock(tx, user_id)
         tasks = await _load(tx, user_id)
         task = _get(tasks, task_id)
-        preview = task.breakdown
+        automatic = bool(
+            task.breakdown_refresh and task.breakdown_refresh.id == preview_id
+        )
+        preview = task.breakdown_refresh if automatic else task.breakdown
         if not preview or preview.id != preview_id or preview.state != "pending":
             return
-        if preview.context != planning_fingerprint(task, tasks):
+        if automatic and (
+            task.assignee
+            or task.status in ("done", "canceled")
+            or not task.breakdown
+            or task.breakdown.state == "accepted"
+        ):
+            task.breakdown_refresh = None
+            await _save(tx, task)
+            return
+        inputs = await _planning_inputs(tx, task, tasks)
+        if preview.context != inputs.fingerprint:
+            if automatic:
+                task.breakdown_refresh = None
+                await _save(tx, task)
+                return
             error = "The task changed while planning. Generate a fresh breakdown."
         preview.state, preview.error = ("error" if error else "ready"), error
         preview.steps = steps if not error else []
+        if automatic and not error:
+            task.breakdown, task.breakdown_refresh = preview, None
         await _save(tx, task)
 
 
@@ -133,9 +158,8 @@ async def accept_workspace_task_breakdown(
             )
         if preview.state == "accepted":
             return task
-        if preview.state != "ready" or preview.context != planning_fingerprint(
-            task, tasks
-        ):
+        inputs = await _planning_inputs(tx, task, tasks)
+        if preview.state != "ready" or preview.context != inputs.fingerprint:
             raise TaskConflict(
                 "The task changed. Generate a fresh breakdown before accepting."
             )
@@ -187,6 +211,7 @@ async def accept_workspace_task_breakdown(
             tasks.append(child)
             check_structure(child, tasks)
         preview.state = "accepted"
+        task.breakdown_refresh = None
         record(
             task,
             user_id,
@@ -226,3 +251,18 @@ async def _preserve_leaf_work(
     task.question, task.result, task.result_version = None, None, 0
     task.dispatch_id, task.dispatch_state, task.dispatch_claimed_at = None, None, None
     task.dispatch_message, task.coordination_state = "", ""
+
+
+def start_suggestion(task: WorkspaceTask, fingerprint: str) -> None:
+    task.suggestion_request_id = str(uuid4())
+    task.suggestion_context = fingerprint
+    task.suggestion_state, task.suggestion_error = "pending", ""
+    task.suggestion_started_at = datetime.now(UTC)
+    task.suggestion, task.suggestion_alternatives = None, []
+
+
+async def _planning_inputs(tx, task: WorkspaceTask, tasks: list[WorkspaceTask]):
+    environment = await load_planning_environment(
+        tx, task.user_id, ancestors(task, tasks)
+    )
+    return task_planning_inputs(task, tasks, environment)

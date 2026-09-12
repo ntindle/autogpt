@@ -9,7 +9,7 @@ import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { normalizeTasks, type Task } from "./helpers";
+import { normalizeTasks, selfIdentity, type Task } from "./helpers";
 import { useTaskCapture } from "./useTaskCapture";
 import { useTaskBreakdown } from "./useTaskBreakdown";
 import { useTaskView } from "./useTaskView";
@@ -92,7 +92,9 @@ export function useTasksPage() {
     ...captureState,
     breakdown,
     tasks,
-    assignees: query.data?.assignees ?? [],
+    assignees: (query.data?.assignees ?? []).map(
+      (owner) => selfIdentity(owner, user?.id ?? "") ?? owner,
+    ),
     query,
     view,
     act,

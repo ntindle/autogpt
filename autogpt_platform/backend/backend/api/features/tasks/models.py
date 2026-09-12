@@ -85,6 +85,7 @@ class TaskBreakdownRequest(BaseModel):
 class TaskBreakdown(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     context: str
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     detail: Literal["milestones", "steps", "small_steps"] = "steps"
     guidance: str = ""
     state: Literal["pending", "ready", "error", "accepted"] = "pending"
@@ -135,10 +136,12 @@ class WorkspaceTask(BaseModel):
     suggestion_context: str = ""
     suggestion_alternatives: list[TaskAssignee] = Field(default_factory=list)
     breakdown: TaskBreakdown | None = None
+    breakdown_refresh: TaskBreakdown | None = None
     plan_only: bool = False
     paused: bool = False
     dependencies: list[str] = Field(default_factory=list)
     session_id: str | None = None
+    source_session_id: str | None = None
     previous_session_ids: list[str] = Field(default_factory=list)
     started_turn_ids: list[str] = Field(default_factory=list)
     last_turn_id: str | None = None
@@ -159,6 +162,28 @@ class WorkspaceTask(BaseModel):
     version: int = 1
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def display_self_as_you(self) -> "WorkspaceTask":
+        self.assignee = _self_identity(self.assignee, self.user_id)
+        self.suggestion = _self_identity(self.suggestion, self.user_id)
+        self.suggestion_alternatives = [
+            _self_identity(assignee, self.user_id) or assignee
+            for assignee in self.suggestion_alternatives
+        ]
+        for preview in (self.breakdown, self.breakdown_refresh):
+            if preview:
+                if "started_at" not in preview.model_fields_set:
+                    preview.started_at = self.updated_at
+                for step in preview.steps:
+                    step.suggestion = _self_identity(step.suggestion, self.user_id)
+        return self
+
+
+def _self_identity(assignee: TaskAssignee | None, user_id: str) -> TaskAssignee | None:
+    if assignee and assignee.kind == "human" and assignee.id == user_id:
+        return assignee.model_copy(update={"name": "You"})
+    return assignee
 
 
 class TaskCreate(BaseModel):
@@ -184,6 +209,8 @@ class TaskCommand(BaseModel):
 
     operation: Literal[
         "edit",
+        "reparent",
+        "submit_result",
         "assign",
         "suggest",
         "complete",
@@ -210,6 +237,7 @@ class TaskCommand(BaseModel):
     question_id: str | None = None
     answers: dict[str, str] | None = None
     feedback: str = Field(default="", max_length=10000)
+    evidence: str = Field(default="", max_length=20000)
 
 
 class TaskListResponse(BaseModel):

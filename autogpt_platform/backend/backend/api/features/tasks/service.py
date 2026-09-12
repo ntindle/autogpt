@@ -18,7 +18,7 @@ from backend.copilot.rate_limit import (
     get_global_rate_limits,
 )
 from backend.copilot.transports import resolve_default_chat_route
-from backend.data.db_accessors import experts_db, tasks_db, user_db
+from backend.data.db_accessors import experts_db, tasks_db
 from backend.integrations.codex.access import enforce_codex_access_http
 from backend.util.exceptions import NotFoundError
 
@@ -26,10 +26,9 @@ logger = logging.getLogger(__name__)
 
 
 async def task_assignees(user_id: str) -> list[TaskAssignee]:
-    user = await user_db().get_user_by_id(user_id)
     experts = await experts_db().list_experts(user_id, with_metrics=False)
     return [
-        TaskAssignee(kind="human", id=user_id, name=user.name or "You"),
+        TaskAssignee(kind="human", id=user_id, name="You"),
         TaskAssignee(kind="auto", id="auto", name="AutoPilot"),
         *[
             TaskAssignee(
@@ -48,7 +47,10 @@ async def task_assignees(user_id: str) -> list[TaskAssignee]:
 
 
 async def execute_task_command(
-    user_id: str, task_id: str, command: TaskCommand
+    user_id: str,
+    task_id: str,
+    command: TaskCommand,
+    manager_session_id: str | None = None,
 ) -> WorkspaceTask:
     if command.assignee:
         candidates = await task_assignees(user_id)
@@ -63,7 +65,9 @@ async def execute_task_command(
         if assignee is None:
             raise NotFoundError("Assignee not available in your workspace")
         command.assignee = assignee
-    task = await tasks_db().command_workspace_task(user_id, task_id, command)
+    task = await tasks_db().command_workspace_task(
+        user_id, task_id, command, manager_session_id=manager_session_id
+    )
     if command.operation == "pause" and task.session_id:
         await enqueue_cancel_task(task.session_id)
     if command.operation == "discuss":
@@ -175,7 +179,7 @@ def task_prompt(task: WorkspaceTask) -> str:
         f"You own this task: {task.title}\n\n{task.description}\n"
         f"Project context: {task.project or 'None'}\nTask ID: {task.id}\n\n"
         "Work toward the actual outcome using your existing permissions. Use manage_tasks to inspect the shared task and necessary steps. "
-        "Keep task granularity useful; tool calls are not subtasks. Respect explicit human assignments and planning holds. "
+        "Keep task granularity useful; tool calls are not subtasks. Keep human decisions and physical actions with the user, and respect planning holds. AutoPilot may reroute existing tasks with manage_tasks assign or reparent; preserve their records and stop active attempts before reassigning. "
         "AutoPilot coordinates the outcome: reject unnecessary scope, ask for evidence, and prefer the smallest sufficient approach. "
         "Use ask_question for a real question or authorization gap. Continue independent steps when possible. "
         "Use manage_tasks with operation submit_result and evidence when the deliverable is ready. Ending a chat does not complete the task. "

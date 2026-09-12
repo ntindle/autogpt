@@ -29301,6 +29301,11 @@
             "items": { "$ref": "#/components/schemas/TaskBreakdownStep" },
             "type": "array",
             "title": "Steps"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
           }
         },
         "type": "object",
@@ -29400,6 +29405,8 @@
             "type": "string",
             "enum": [
               "edit",
+              "reparent",
+              "submit_result",
               "assign",
               "suggest",
               "complete",
@@ -29475,6 +29482,12 @@
             "type": "string",
             "maxLength": 10000,
             "title": "Feedback",
+            "default": ""
+          },
+          "evidence": {
+            "type": "string",
+            "maxLength": 20000,
+            "title": "Evidence",
             "default": ""
           }
         },
@@ -32740,6 +32753,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Updated At"
+          },
+          "breakdown_refresh": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskBreakdown" },
+              { "type": "null" }
+            ]
+          },
+          "source_session_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Source Session Id"
           }
         },
         "type": "object",

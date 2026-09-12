@@ -3,14 +3,14 @@ import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import type { TaskBreakdown } from "@/app/api/__generated__/models/taskBreakdown";
 
 export function useBreakdownEditor(preview: TaskBreakdown) {
-  const [steps, setSteps] = useState(() =>
-    (preview.steps ?? []).map((step) => ({
-      ...step,
-      id: step.id!,
-      selected: true,
-      assignee: step.suggestion ?? null,
-    })),
-  );
+  const [shownPreview, setShownPreview] = useState(preview);
+  const [steps, setSteps] = useState(() => previewSteps(preview));
+  const hasUpdate = shownPreview.id !== preview.id;
+
+  function reviewUpdate() {
+    setShownPreview(preview);
+    setSteps(previewSteps(preview));
+  }
 
   function edit(
     id: string,
@@ -42,5 +42,22 @@ export function useBreakdownEditor(preview: TaskBreakdown) {
   }
 
   const selected = steps.filter((step) => step.selected);
-  return { steps, selected, edit, toggle };
+  return {
+    steps,
+    selected,
+    edit,
+    toggle,
+    hasUpdate,
+    reviewUpdate,
+    previewID: shownPreview.id,
+  };
+}
+
+function previewSteps(preview: TaskBreakdown) {
+  return (preview.steps ?? []).map((step) => ({
+    ...step,
+    id: step.id!,
+    selected: true,
+    assignee: step.suggestion ?? null,
+  }));
 }

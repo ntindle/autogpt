@@ -263,6 +263,14 @@ async def _execute_graph(**kwargs):
         )
 
 
+def reconsider_workspace_tasks():
+    from backend.api.features.tasks.planning_refresh import (
+        reconsider_unassigned_workspace_tasks,
+    )
+
+    run_async(reconsider_unassigned_workspace_tasks())
+
+
 def dispatch_workspace_tasks():
     from backend.api.features.tasks.dispatcher import dispatch_pending_workspace_tasks
 
@@ -1783,6 +1791,15 @@ class Scheduler(AppService):
                 id="dispatch_workspace_tasks",
                 trigger="interval",
                 seconds=10,
+                replace_existing=True,
+                max_instances=1,
+                jobstore=Jobstores.WEEKLY_NOTIFICATIONS.value,
+            )
+            self.scheduler.add_job(
+                reconsider_workspace_tasks,
+                id="reconsider_workspace_tasks",
+                trigger="interval",
+                seconds=30,
                 replace_existing=True,
                 max_instances=1,
                 jobstore=Jobstores.WEEKLY_NOTIFICATIONS.value,

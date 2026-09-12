@@ -41,7 +41,7 @@ existing model transport, with task/ancestor/project context and the eligible
 Expert roster's actual roles, skills, and identities. Responses can only select
 existing owners; model failures are visible and retryable. Recommendation-only
 updates do not invalidate a user's pending assignment command. Context edits
-invalidate unconfirmed suggestions; confirmed owners stay in place.
+invalidate unconfirmed suggestions; background planning keeps confirmed owners in place.
 
 Break down produces a durable, editable preview at milestone, actionable-step,
 or smaller-step detail. Acceptance adds selected steps and prerequisite links
@@ -54,7 +54,7 @@ changes to its scope; generating and editing a preview does not stop it.
 
 AutoPilot retains parent ownership and uses the existing task tool to assign
 unassigned planned children or add necessary new children to eligible Experts.
-Confirmed child owners cannot be silently replaced. A coordinator cannot submit
+AutoPilot can explicitly reroute confirmed owners with the management operations below; background suggestions cannot replace them. A coordinator cannot submit
 an outcome result while required child work is unfinished. Linked chats show the task
 brief immediately and receive the current outcome, ancestors, steps, questions,
 and results in their model context. Review tasks open the deliverable's chat.
@@ -163,8 +163,8 @@ The existing dependency engine gates nested work until every prerequisite is
 completed. The task tool now accepts owned prerequisite IDs outside the current
 outcome and can discover them using `list(all_projects=true)` or
 `list(project="Procurement")`. Linked chats default to their existing branch;
-reading or depending on another project does not grant permission to assign or
-approve its work. Shared prompt guidance explains these rules, and prerequisite
+Experts reading or depending on another project do not gain permission to assign or
+approve its work. AutoPilot has explicit workspace management operations. Shared prompt guidance explains these rules, and prerequisite
 handoffs include their source project. Database tests cover cross-project
 unblocking, cycles, chat discovery, and rejection of another user's task IDs.
 
@@ -192,3 +192,65 @@ phone document width remained 390px. Screenshots are saved locally at
 `/tmp/tasks-cross-project-desktop.png` and `/tmp/tasks-cross-project-mobile.png`.
 The disposable QA container and temporary source/build copies were removed after
 deployment; the worktree and release images were retained.
+
+
+## Automatic reconsideration and self identity
+
+Unassigned active tasks are reconsidered when relevant context changes: their
+brief or ancestors, prerequisite status/results, their linked or source chat,
+and eligible Expert roles, skills, identities, or availability. Tasks list loads
+and an independent 30-second scheduler job trigger checks. Recent or running
+chats settle first; stable fingerprints, request leases, and bounded concurrency
+prevent repeated model calls. Assigned tasks are excluded.
+
+An existing unaccepted breakdown preview can refresh with the same detail and
+guidance; the system does not automatically create a new breakdown or accept it.
+A refreshed preview keeps the user's editing draft visible until they choose
+**Review updated suggestion**. Stale acceptance and late model responses cannot
+overwrite changed ownership or context. Failed refreshes retain the older preview
+and show a retryable error.
+
+The current human is consistently **You**, including cached suggestions,
+alternatives, and breakdown steps. Profile display-name changes do not require
+another model recommendation.
+
+## Human results and AutoPilot management
+
+Human or unassigned work has a **Submit result** form in task details for written
+outcomes and deliverable links. A successful submission records the result and
+version, completes the work, and passes the evidence to the coordinator and
+cross-project dependents. Failed submissions retain the draft. Results can also
+be added after quick checkbox completion. Agent work still requires result review,
+and required unfinished children still block parent completion.
+
+AutoPilot's `manage_tasks` tool supports `edit`, `reparent`, `assign`, `cancel`,
+`reopen`, `pause`, `resume`, and `retry` across the user's workspace, including
+regular conversations. `reparent(task_id, new_parent_id, project?)` edits the
+existing record; null detaches it to the top level. It inherits the new parent's
+project unless overridden, carries matching child project labels and review
+items along, and preserves ID, ownership, conversations, answered questions,
+results, dispatch history, and activity. Versions advance normally. Dependency
+cycles, foreign task IDs, and adding execution barriers to active work are rejected.
+
+Metadata corrections and moves can preserve an active attempt. Reassignment and
+cancellation require stopping active attempts with `pause` and waiting for the
+existing worker cancellation to finish. Reassignment preserves the previous
+conversation and handoff evidence, retires stale review items, and keeps the pause
+until `resume`. AutoPilot should release only a pause it introduced for that
+handoff. Existing planning holds and Expert permissions continue to apply.
+
+`cancel` retires a task and its unfinished branch without hard deletion. Completed
+child evidence remains available in the **Canceled** view, and individual tasks
+can be reopened. Expert sessions retain delegated-branch assignment/review scope;
+only an authenticated AutoPilot session can use workspace management. The
+persisted current conversation binding remains authoritative after breakdowns
+preserve original work in a child.
+
+
+Validation for this follow-up: 53 Tasks database tests and 19 shared-prompt tests
+passed. Whole-backend and whole-frontend formatting, lint, and type checks passed,
+as did all 15 Tasks page integration tests and a local production frontend build.
+Coverage includes human-result persistence and prerequisite handoffs, moving an
+active Expert task without losing state, safe owner changes, cancellation and
+recovery, current session authority, and background reconsideration with draft
+preservation. Deployment verification is recorded separately after rollout.

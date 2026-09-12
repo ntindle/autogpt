@@ -20,6 +20,7 @@ import { TaskEditor } from "./TaskEditor";
 import { TaskQuestion } from "./TaskQuestion";
 import { TaskScheduleEditor } from "./TaskScheduleEditor";
 import { TaskResult } from "./TaskResult";
+import { TaskResultSubmission } from "./TaskResultSubmission/TaskResultSubmission";
 import { TaskIdentity } from "./TaskIdentity";
 
 interface Props {
@@ -98,6 +99,11 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
       ) : null}
       <TaskQuestion
         task={task}
+        onCommand={(command) => page.command(task, command)}
+      />
+      <TaskResultSubmission
+        task={task}
+        pending={page.pending}
         onCommand={(command) => page.command(task, command)}
       />
       <TaskResult

@@ -31,6 +31,15 @@ from backend.api.features.tasks.planning_db import (
 from backend.api.features.tasks.planning_db import (
     finish_workspace_task_suggestion as finish_workspace_task_suggestion,
 )
+from backend.api.features.tasks.planning_inputs import (
+    workspace_task_planning_inputs as workspace_task_planning_inputs,
+)
+from backend.api.features.tasks.planning_refresh_db import (
+    reconsider_workspace_task_plans as reconsider_workspace_task_plans,
+)
+from backend.api.features.tasks.planning_refresh_db import (
+    workspace_task_planning_users as workspace_task_planning_users,
+)
 from backend.api.features.tasks.repository import (
     _decode,
     _get,
@@ -56,7 +65,10 @@ async def list_workspace_tasks(user_id: str) -> list[WorkspaceTask]:
 
 
 async def create_workspace_task(
-    user_id: str, request: TaskCreate, organization_id: str | None = None
+    user_id: str,
+    request: TaskCreate,
+    organization_id: str | None = None,
+    source_session_id: str | None = None,
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
@@ -68,7 +80,10 @@ async def create_workspace_task(
             raise TaskConflict("This workspace has reached 1,000 tasks")
         parent = _get(tasks, request.parent_id) if request.parent_id else None
         task = WorkspaceTask(
-            **request.model_dump(), user_id=user_id, organization_id=organization_id
+            **request.model_dump(),
+            user_id=user_id,
+            organization_id=organization_id,
+            source_session_id=source_session_id
         )
         if parent:
             task.organization_id = parent.organization_id
@@ -81,14 +96,25 @@ async def create_workspace_task(
 
 
 async def command_workspace_task(
-    user_id: str, task_id: str, command: TaskCommand, actor: str | None = None
+    user_id: str,
+    task_id: str,
+    command: TaskCommand,
+    actor: str | None = None,
+    manager_session_id: str | None = None,
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
         tasks = await _load(tx, user_id)
         task = _get(tasks, task_id)
+        if manager_session_id:
+            from backend.api.features.tasks.management import authorize_task_manager
+
+            await authorize_task_manager(
+                tx, user_id, manager_session_id, tasks, command
+            )
+            actor = "AutoPilot"
         apply_command(task, command, tasks, actor)
-        if command.operation == "edit":
+        if command.operation in ("edit", "reparent"):
             from backend.api.features.tasks.domain import branch
 
             for member in branch(task.id, tasks):

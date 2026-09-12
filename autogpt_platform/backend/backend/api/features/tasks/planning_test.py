@@ -4,10 +4,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from backend.api.features.tasks.context import execution_context
+from backend.api.features.tasks.context import execution_context, planning_context
 from backend.api.features.tasks.decomposition import ProposedBreakdown, resolve_steps
 from backend.api.features.tasks.domain import TaskConflict, check_structure, is_runnable
 from backend.api.features.tasks.models import TaskAssignee, WorkspaceTask
+from backend.api.features.tasks.planning_inputs import TaskPlanningInputs
 from backend.api.features.tasks.planning_model import planning_completion
 from backend.api.features.tasks.recommendations import (
     OwnerRecommendation,
@@ -47,7 +48,11 @@ async def test_semantic_routing_uses_the_configured_model_and_actual_context():
         project="Needlepoint",
     )
     db = AsyncMock()
-    db.list_workspace_tasks.return_value = [parent, child]
+    db.workspace_task_planning_inputs.return_value = TaskPlanningInputs(
+        context=planning_context(child, [parent, child]),
+        candidates=[AUTO, DESIGNER, MARKETER],
+        fingerprint="test",
+    )
     output = OwnerRecommendation.model_validate(
         {
             "choice": {
@@ -64,9 +69,6 @@ async def test_semantic_routing_uses_the_configured_model_and_actual_context():
     )
     with patch(
         "backend.api.features.tasks.recommendations.tasks_db", return_value=db
-    ), patch(
-        "backend.api.features.tasks.recommendations.planning_roster",
-        AsyncMock(return_value=([AUTO, DESIGNER, MARKETER], [])),
     ), patch(
         "backend.api.features.tasks.recommendations.planning_completion",
         AsyncMock(return_value=output),
@@ -85,13 +87,8 @@ async def test_semantic_routing_uses_the_configured_model_and_actual_context():
 async def test_model_failure_is_visible_and_never_fakes_an_autopilot_recommendation():
     item = task()
     db = AsyncMock()
-    db.list_workspace_tasks.return_value = [item]
-    with patch(
-        "backend.api.features.tasks.recommendations.tasks_db", return_value=db
-    ), patch(
-        "backend.api.features.tasks.recommendations.planning_roster",
-        AsyncMock(side_effect=RuntimeError("offline")),
-    ):
+    db.workspace_task_planning_inputs.side_effect = RuntimeError("offline")
+    with patch("backend.api.features.tasks.recommendations.tasks_db", return_value=db):
         await generate_task_suggestion("owner", item)
     args = db.finish_workspace_task_suggestion.call_args.args
     assert args[3] is None and args[4] == [] and "configured model" in args[5]

@@ -46,3 +46,12 @@ The live synthetic coordinator test also found premature parent-result submissio
 with unfinished child steps. The result lifecycle now rejects that submission
 and directs the coordinator to finish delegation and child-result review first.
 Phone inspection led to placing row controls below task text on narrow screens.
+
+
+The result-submission and management follow-up addresses two further gaps. Human
+work now has a result form, with evidence passed into dependent task context.
+AutoPilot now edits and moves existing task records directly, explicitly reroutes
+owners, and cancels duplicate branches with recoverable history. It no longer
+needs to copy an existing task to change its parent or project. Automatic
+reconsideration remains limited to unassigned work, and current-user identities
+are displayed as **You**.
