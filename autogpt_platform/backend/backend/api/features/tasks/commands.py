@@ -249,6 +249,8 @@ def _assign(
     if task.session_id:
         task.previous_session_ids.append(task.session_id)
         task.session_id = None
+    if task.question and task.question.answers is None:
+        task.status, task.activity = "needs_you", "Waiting for your answer"
 
 
 def _complete(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> None:

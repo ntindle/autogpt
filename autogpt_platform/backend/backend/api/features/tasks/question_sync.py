@@ -6,10 +6,12 @@ from backend.util.json import dumps
 
 
 async def sync_task_question(tx: Prisma, task: WorkspaceTask) -> None:
-    if not task.session_id or not task.question:
+    if not task.question:
         return
     question = task.question
     if question.answers is None and task.status not in ("done", "canceled"):
+        if not task.session_id:
+            return
         await execute_raw_with_schema(
             'UPDATE {schema_prefix}"ChatSession" SET "metadata" = '
             "COALESCE(\"metadata\", '{{}}'::jsonb) || "
@@ -31,9 +33,10 @@ async def sync_task_question(tx: Prisma, task: WorkspaceTask) -> None:
         await execute_raw_with_schema(
             'UPDATE {schema_prefix}"ChatSession" SET "metadata" = '
             "\"metadata\" - 'pending_question' "
-            'WHERE "id" = $1 AND "userId" = $2 '
-            "AND (\"metadata\"->'pending_question'->>'question_id' IS NULL "
-            "OR \"metadata\"->'pending_question'->>'question_id' = $3)",
+            'WHERE "userId" = $2 AND ('
+            "\"metadata\"->'pending_question'->>'question_id' = $3 "
+            'OR ("id" = $1 AND '
+            "\"metadata\"->'pending_question'->>'question_id' IS NULL))",
             task.session_id,
             task.user_id,
             question.id,

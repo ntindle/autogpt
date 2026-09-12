@@ -114,7 +114,12 @@ async def command_workspace_task(
                 tx, user_id, manager_session_id, tasks, command
             )
             actor = "AutoPilot"
+        previous_session_id = task.session_id
         apply_command(task, command, tasks, actor)
+        if command.operation == "assign" and previous_session_id and task.question:
+            await sync_task_question(
+                tx, task.model_copy(update={"session_id": previous_session_id})
+            )
         if command.operation in ("edit", "reparent"):
             from backend.api.features.tasks.domain import branch
 

@@ -239,3 +239,44 @@ async def test_ordinary_turn_does_not_clear_an_unanswered_task_question(
     )
     await clear_pending_question(session)
     assert session.metadata.pending_question and not clear.called
+
+
+@pytest.mark.asyncio
+async def test_answer_after_reassignment_clears_the_original_chat_reminder(owner):
+    task = await questioning_task(owner)
+    session_id = task.session_id
+    unrelated = await db.prisma.chatsession.create(
+        data={
+            "userId": owner,
+            "metadata": Json(
+                {
+                    "pending_question": {
+                        "text": "Another question",
+                        "asked_at": task.question.asked_at.isoformat(),
+                        "question_id": str(uuid4()),
+                    }
+                }
+            ),
+        }
+    )
+    task = await command(
+        owner,
+        task.id,
+        "assign",
+        assignee=TaskAssignee(kind="human", id=owner, name="You"),
+    )
+    assert task.session_id is None and session_id in task.previous_session_ids
+    assert task.status == "needs_you"
+    assert len(await chat.get_sessions_with_pending_question(owner)) == 2
+    answered = await command(
+        owner,
+        task.id,
+        "answer",
+        question_id=task.question.id,
+        answers={"material": "Linen"},
+    )
+    assert answered.dispatch_state is None and answered.question.answers == {
+        "material": "Linen"
+    }
+    remaining = await chat.get_sessions_with_pending_question(owner)
+    assert [item.session_id for item in remaining] == [unrelated.id]
