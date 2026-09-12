@@ -29349,6 +29349,24 @@
             "maxLength": 2000,
             "title": "Guidance",
             "default": ""
+          },
+          "preview_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Preview Id"
+          },
+          "current_steps": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TaskBreakdownSelection"
+                },
+                "type": "array",
+                "maxItems": 12,
+                "minItems": 1
+              },
+              { "type": "null" }
+            ],
+            "title": "Current Steps"
           }
         },
         "additionalProperties": false,
@@ -29369,6 +29387,13 @@
               { "$ref": "#/components/schemas/TaskAssignee" },
               { "type": "null" }
             ]
+          },
+          "description": {
+            "anyOf": [
+              { "type": "string", "maxLength": 20000 },
+              { "type": "null" }
+            ],
+            "title": "Description"
           }
         },
         "additionalProperties": false,

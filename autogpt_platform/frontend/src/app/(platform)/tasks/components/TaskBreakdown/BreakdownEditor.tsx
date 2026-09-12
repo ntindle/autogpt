@@ -2,14 +2,14 @@ import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import type { TaskBreakdown } from "@/app/api/__generated__/models/taskBreakdown";
 import type { TaskBreakdownSelection } from "@/app/api/__generated__/models/taskBreakdownSelection";
 import { Button } from "@/components/atoms/Button/Button";
-import { Input } from "@/components/atoms/Input/Input";
-import { TaskIdentity } from "../TaskIdentity";
-import { useBreakdownEditor } from "./useBreakdownEditor";
+import { BreakdownStepRow } from "./BreakdownStepRow";
+import type { useBreakdownEditor } from "./useBreakdownEditor";
 
 interface Props {
-  preview: TaskBreakdown;
+  editor: ReturnType<typeof useBreakdownEditor>;
   assignees: TaskAssignee[];
   disabled: boolean;
+  busy?: boolean;
   refreshState?: TaskBreakdown["state"];
   delegated: boolean;
   held: boolean;
@@ -20,15 +20,15 @@ interface Props {
 }
 
 export function BreakdownEditor({
-  preview,
+  editor,
   assignees,
   disabled,
+  busy = false,
   refreshState,
   delegated,
   held,
   onAccept,
 }: Props) {
-  const editor = useBreakdownEditor(preview);
   return (
     <>
       {editor.hasUpdate ? (
@@ -49,82 +49,20 @@ export function BreakdownEditor({
           </Button>
         </div>
       ) : null}
-      <ol className="space-y-3">
+      <ol className="overflow-hidden rounded-xl border border-border bg-background">
         {editor.steps.map((step, index) => (
-          <li key={step.id} className="rounded-xl border border-border p-3">
-            <div className="flex items-center gap-3">
-              <input
-                type="checkbox"
-                aria-label={`Include step ${index + 1}`}
-                checked={step.selected}
-                onChange={(event) =>
-                  editor.toggle(step.id, event.target.checked)
-                }
-                className="size-4 shrink-0 accent-violet-600"
-              />
-              <Input
-                id={`breakdown-${step.id}`}
-                label={`Step ${index + 1}`}
-                hideLabel
-                size="small"
-                value={step.title}
-                maxLength={500}
-                onChange={(event) =>
-                  editor.edit(step.id, { title: event.target.value })
-                }
-                wrapperClassName="flex-1"
-              />
-            </div>
-            <p className="mt-2 pl-7 text-xs leading-relaxed text-muted-foreground">
-              {step.description}
-            </p>
-            <div className="mt-3 flex items-center gap-2 pl-7">
-              <TaskIdentity assignee={step.assignee} suggested />
-              <label className="min-w-0 flex-1 text-xs text-muted-foreground">
-                Suggested owner
-                <select
-                  aria-label={`Owner for step ${index + 1}`}
-                  value={step.assignee?.id ?? ""}
-                  onChange={(event) =>
-                    editor.edit(step.id, {
-                      assignee:
-                        assignees.find(
-                          (owner) => owner.id === event.target.value,
-                        ) ?? null,
-                    })
-                  }
-                  className="mt-1 block w-full rounded-md border border-border bg-background p-2 text-sm text-foreground"
-                >
-                  <option value="">Leave unassigned</option>
-                  {assignees.map((owner) => (
-                    <option key={owner.id} value={owner.id}>
-                      {owner.name}
-                      {owner.role ? ` · ${owner.role}` : ""}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            {step.assignee?.reason ? (
-              <p className="mt-2 pl-7 text-xs text-muted-foreground">
-                {step.assignee.reason}
-              </p>
-            ) : null}
-            {step.dependencies?.length ? (
-              <p className="mt-2 pl-7 text-xs text-muted-foreground">
-                After:{" "}
-                {step.dependencies
-                  .map(
-                    (id) => editor.steps.find((item) => item.id === id)?.title,
-                  )
-                  .join("; ")}
-              </p>
-            ) : null}
-          </li>
+          <BreakdownStepRow
+            key={step.id}
+            step={step}
+            index={index}
+            editor={editor}
+            assignees={assignees}
+            disabled={busy}
+          />
         ))}
       </ol>
-      <div className="sticky bottom-0 space-y-3 border-t border-border bg-background py-4">
-        <p className="text-xs leading-relaxed text-muted-foreground">
+      <div className="flex flex-wrap items-center justify-between gap-3 py-3">
+        <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
           {delegated
             ? held
               ? "Confirmed owners inherit the planning hold. Execution stays on hold."
@@ -133,6 +71,7 @@ export function BreakdownEditor({
           Every step can be broken down again.
         </p>
         <Button
+          size="small"
           disabled={
             disabled ||
             Boolean(refreshState) ||
@@ -142,9 +81,10 @@ export function BreakdownEditor({
           }
           onClick={() =>
             onAccept(
-              editor.selected.map(({ id, title, assignee }) => ({
+              editor.selected.map(({ id, title, description, assignee }) => ({
                 id,
                 title: title.trim(),
+                description: description ?? "",
                 assignee,
               })),
               editor.previewID,
@@ -158,7 +98,7 @@ export function BreakdownEditor({
               : editor.hasUpdate
                 ? "Review update before accepting"
                 : disabled
-                  ? "Adding steps…"
+                  ? "Accept steps when ready"
                   : `Accept ${editor.selected.length} selected ${editor.selected.length === 1 ? "step" : "steps"}`}
         </Button>
       </div>

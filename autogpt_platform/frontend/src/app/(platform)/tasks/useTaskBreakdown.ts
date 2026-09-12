@@ -34,6 +34,7 @@ export function useTaskBreakdown({
       if (!okData(response))
         throw new Error("Could not request a breakdown. Please try again.");
       await refresh();
+      return okData(response);
     } catch (error) {
       setError(
         error instanceof Error

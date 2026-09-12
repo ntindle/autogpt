@@ -236,6 +236,9 @@ export function ToolChain({ parts, isStreaming, readOnly = false }: Props) {
     const readyActions = pendingActions.filter((entry) => entry.ready);
     const taskAnswer = readyActions.find((entry) => entry.submit);
     if (taskAnswer?.submit) {
+      const alreadySent = autoSentRef.current;
+      autoSentRef.current = true;
+      setAutoSent(true);
       submissionRef.current = true;
       setSubmitting(true);
       setSubmitError("");
@@ -248,6 +251,8 @@ export function ToolChain({ parts, isStreaming, readOnly = false }: Props) {
         await taskAnswer.submit(context);
         readyActions.forEach((entry) => entry.onSent?.());
       } catch (error) {
+        autoSentRef.current = alreadySent;
+        setAutoSent(alreadySent);
         setSubmitError(
           error instanceof Error
             ? error.message

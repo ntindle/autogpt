@@ -66,11 +66,45 @@ function Surfaces() {
     </>
   );
 }
-function Chain() {
+const connector: UIMessage["parts"][number] = {
+  type: "tool-run_block",
+  toolCallId: "connected-tool",
+  state: "output-available",
+  input: {},
+  output: {
+    type: "setup_requirements",
+    setup_info: { agent_id: "fictional", agent_name: "Connected integration" },
+  },
+};
+
+vi.mock("../../SetupRequirementsCard/SetupRequirementsCard", async () => {
+  const { useContext, useEffect } = await import("react");
+  const { ChainActionsContext } = await import("../../ToolChain/chainActions");
+  function SetupRequirementsCard() {
+    const chain = useContext(ChainActionsContext);
+    useEffect(() => {
+      if (!chain) return;
+      chain.register({
+        id: "connector",
+        ready: true,
+        justConnected: true,
+        buildMessage: () => "The integration is connected.",
+      });
+      return () => chain.unregister("connector");
+    }, [chain]);
+    return null;
+  }
+  return { SetupRequirementsCard };
+});
+
+function Chain({ connected = false }: { connected?: boolean }) {
   return (
     <CopilotChatActionsProvider onSend={onSend}>
       <PendingQuestionsContext.Provider value={getPendingQuestions([message])}>
-        <ToolChain parts={message.parts} isStreaming={false} />
+        <ToolChain
+          parts={connected ? [connector, ...message.parts] : message.parts}
+          isStreaming={false}
+        />
       </PendingQuestionsContext.Provider>
       <Surfaces />
     </CopilotChatActionsProvider>
@@ -181,6 +215,28 @@ test("a failed answer keeps its draft and reminder until a successful retry", as
   await userEvent.click(screen.getByRole("button", { name: "Submit answers" }));
   await waitFor(() =>
     expect(screen.getByLabelText("Task answer").textContent).toBe("Cotton"),
+  );
+  expect(onSend).not.toHaveBeenCalled();
+});
+
+test("a task answer and ready connector share exactly one continuation", async () => {
+  render(<Chain connected />);
+  await userEvent.type(
+    await screen.findByRole("textbox", { name: "Which material?" }),
+    "Linen",
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Submit answers" }));
+  await waitFor(() =>
+    expect(screen.getByLabelText("Task answer").textContent).toBe("Linen"),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("textbox", { name: "Which material?" }),
+    ).toBeNull(),
+  );
+  expect(command).toHaveBeenCalledOnce();
+  expect(command.mock.calls[0][0].body.feedback).toBe(
+    "The integration is connected.",
   );
   expect(onSend).not.toHaveBeenCalled();
 });

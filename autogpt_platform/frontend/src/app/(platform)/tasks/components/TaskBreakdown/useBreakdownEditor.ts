@@ -2,10 +2,27 @@ import { useState } from "react";
 import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import type { TaskBreakdown } from "@/app/api/__generated__/models/taskBreakdown";
 
-export function useBreakdownEditor(preview: TaskBreakdown) {
+export function useBreakdownEditor(
+  preview: TaskBreakdown | undefined,
+  requestedPreviewID?: string,
+) {
   const [shownPreview, setShownPreview] = useState(preview);
   const [steps, setSteps] = useState(() => previewSteps(preview));
-  const hasUpdate = shownPreview.id !== preview.id;
+  if (
+    preview &&
+    ((shownPreview?.id !== preview.id &&
+      (!shownPreview || preview.id === requestedPreviewID)) ||
+      (shownPreview &&
+        shownPreview.id === preview.id &&
+        shownPreview.state !== "ready" &&
+        preview.state === "ready"))
+  ) {
+    setShownPreview(preview);
+    setSteps(previewSteps(preview));
+  }
+  const hasUpdate = Boolean(
+    preview && shownPreview && shownPreview.id !== preview.id,
+  );
 
   function reviewUpdate() {
     setShownPreview(preview);
@@ -14,7 +31,11 @@ export function useBreakdownEditor(preview: TaskBreakdown) {
 
   function edit(
     id: string,
-    values: { title?: string; assignee?: TaskAssignee | null },
+    values: {
+      title?: string;
+      description?: string;
+      assignee?: TaskAssignee | null;
+    },
   ) {
     setSteps((current) =>
       current.map((step) => (step.id === id ? { ...step, ...values } : step)),
@@ -49,12 +70,12 @@ export function useBreakdownEditor(preview: TaskBreakdown) {
     toggle,
     hasUpdate,
     reviewUpdate,
-    previewID: shownPreview.id,
+    previewID: shownPreview?.id,
   };
 }
 
-function previewSteps(preview: TaskBreakdown) {
-  return (preview.steps ?? []).map((step) => ({
+function previewSteps(preview: TaskBreakdown | undefined) {
+  return (preview?.steps ?? []).map((step) => ({
     ...step,
     id: step.id!,
     selected: true,

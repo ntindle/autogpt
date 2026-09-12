@@ -96,8 +96,49 @@ async def begin_workspace_task_breakdown(
         if task.status == "canceled" or task.review_of or task.schedule:
             raise TaskConflict("Break down an active task or a schedule occurrence")
         inputs = await _planning_inputs(tx, task, tasks)
+        draft = []
+        if request.current_steps is not None:
+            previous = task.breakdown
+            if (
+                not previous
+                or previous.id != request.preview_id
+                or previous.state == "accepted"
+            ):
+                raise TaskConflict(
+                    "This preview changed. Review the current steps before refining."
+                )
+            proposed = {step.id: step for step in previous.steps}
+            selected = {step.id for step in request.current_steps}
+            if (
+                len(selected) != len(request.current_steps)
+                or not selected <= proposed.keys()
+            ):
+                raise TaskConflict("Refine unique steps from the current preview")
+            for selection in request.current_steps:
+                original = proposed[selection.id]
+                if any(
+                    dependency not in selected for dependency in original.dependencies
+                ):
+                    raise TaskConflict(
+                        "Include each prerequisite when refining the draft"
+                    )
+                draft.append(
+                    original.model_copy(
+                        update={
+                            "title": selection.title,
+                            "description": (
+                                original.description
+                                if selection.description is None
+                                else selection.description
+                            ),
+                            "suggestion": selection.assignee,
+                        }
+                    )
+                )
         task.breakdown = TaskBreakdown(
-            context=inputs.fingerprint, **request.model_dump()
+            context=inputs.fingerprint,
+            steps=draft,
+            **request.model_dump(exclude={"preview_id", "current_steps"}),
         )
         task.breakdown_refresh = None
         await _save(tx, task)
@@ -138,7 +179,8 @@ async def finish_workspace_task_breakdown(
                 return
             error = "The task changed while planning. Generate a fresh breakdown."
         preview.state, preview.error = ("error" if error else "ready"), error
-        preview.steps = steps if not error else []
+        if not error:
+            preview.steps = steps
         if automatic and not error:
             task.breakdown, task.breakdown_refresh = preview, None
         await _save(tx, task)
@@ -189,7 +231,11 @@ async def accept_workspace_task_breakdown(
                 user_id=user_id,
                 organization_id=task.organization_id,
                 title=selection.title,
-                description=step.description,
+                description=(
+                    step.description
+                    if selection.description is None
+                    else selection.description
+                ),
                 parent_id=task.id,
                 project=task.project,
                 assignee=selection.assignee if delegated else None,

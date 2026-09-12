@@ -311,8 +311,7 @@ additional context; existing edits stay visible during refinement. Browser
 checks exercised generation, editing, refinement, disclosure, and acceptance
 for all four, at desktop and 390px phone width. The preview is hosted at
 `http://192.168.1.193:3004/tasks-breakdown-options.html`; its sample data does not
-create or execute real tasks. The production breakdown layout remains unchanged
-while these compact variants are reviewed.
+create or execute real tasks. The user selected D3 with the original D chat composer for the production layout.
 
 Validation: 61 isolated Tasks database tests, 24 question-tool tests, and 79
 frontend integration tests covering Tasks, the real chat action chain, connector
@@ -337,3 +336,30 @@ The reported live Juno BOM record was linked to the user's completed
 configuration through the existing version-checked Tasks command. Its ID,
 conversation, owner, attempt state, and parent hold were preserved. This repaired
 the missing prerequisite relationship without restarting the previous attempt.
+
+
+## Compact conversational breakdown (D3)
+
+Break down opens an inline preview beneath the selected task and immediately
+requests actionable steps. The chosen D3 layout keeps rows compact, with click-
+to-edit titles and owners; expanding a row reveals an editable deliverable,
+prerequisites, and the reason for its suggested owner. The traditional chat
+composer accepts follow-up guidance and shows the user's messages alongside the
+preview. No new tasks are created until the selected steps are accepted.
+
+Refinement sends the current edited draft to the planner and validates that it
+belongs to the current preview. It preserves dependency links, retains the draft
+when model generation fails, and records edited descriptions on accepted tasks.
+Explicitly requested refinements update the displayed preview when ready;
+background reconsideration retains the existing review-before-replacement rule.
+An epic's default breakdown now explicitly calls for actionable deliverables.
+
+A mixed question/connector regression reproduced a second continuation after the
+question card disappeared. The task answer now claims the chain's send before
+awaiting its state refresh, and releases that claim on failure. Ready connector
+context travels with the task answer in one continuation.
+
+Validation: 62 isolated Tasks database tests and 81 frontend integration tests
+passed, including the D3 generate/edit/refine/accept flow and the mixed-card
+regression. Whole frontend/backend format, lint, and type checks passed; the
+production frontend was built on the local Linux host.

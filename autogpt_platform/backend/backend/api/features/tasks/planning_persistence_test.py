@@ -360,3 +360,80 @@ async def test_regular_chat_can_nest_by_parent_id_without_inheriting_execution_a
         owner, session, operation="list", task_id=parent.id
     )
     assert {item.id for item in listed.tasks} == {parent.id, child.id, grandchild.id}
+
+
+@pytest.mark.asyncio
+async def test_refinement_keeps_edited_deliverables_and_validates_its_source_preview(
+    owner,
+):
+    task = await db.create_workspace_task(
+        owner, TaskCreate(title="Prepare sample kits")
+    )
+    first, second, acceptance = await ready_preview(owner, task)
+    edited = [
+        step.model_copy(update={"description": "Edited deliverable from the preview"})
+        for step in acceptance.steps
+    ]
+    with pytest.raises(TaskConflict, match="preview changed"):
+        await db.begin_workspace_task_breakdown(
+            owner,
+            task.id,
+            TaskBreakdownRequest(preview_id="stale", current_steps=edited),
+        )
+    with pytest.raises(TaskConflict, match="prerequisite"):
+        await db.begin_workspace_task_breakdown(
+            owner,
+            task.id,
+            TaskBreakdownRequest(
+                preview_id=acceptance.preview_id, current_steps=edited[1:]
+            ),
+        )
+    pending = await db.begin_workspace_task_breakdown(
+        owner,
+        task.id,
+        TaskBreakdownRequest(
+            preview_id=acceptance.preview_id,
+            current_steps=edited,
+            guidance="Make a first batch of 50 kits",
+        ),
+    )
+    assert pending.breakdown.state == "pending"
+    assert all(
+        step.description == "Edited deliverable from the preview"
+        for step in pending.breakdown.steps
+    )
+    assert pending.breakdown.steps[1].dependencies == [first.id]
+    assert len(await db.list_workspace_tasks(owner)) == 1
+    await db.finish_workspace_task_breakdown(
+        owner, task.id, pending.breakdown.id, [], "Temporary model failure"
+    )
+    failed = (await db.list_workspace_tasks(owner))[0]
+    assert (
+        failed.breakdown.state == "error"
+        and failed.breakdown.steps == pending.breakdown.steps
+    )
+    pending = await db.begin_workspace_task_breakdown(
+        owner,
+        task.id,
+        TaskBreakdownRequest(
+            preview_id=failed.breakdown.id,
+            current_steps=edited,
+            guidance=failed.breakdown.guidance,
+        ),
+    )
+    await db.finish_workspace_task_breakdown(
+        owner, task.id, pending.breakdown.id, pending.breakdown.steps
+    )
+    acceptance.preview_id = pending.breakdown.id
+    acceptance.steps = edited
+    acceptance.steps[0].description = (
+        "Final deliverable: reviewed list of 50 kit contents"
+    )
+    await db.accept_workspace_task_breakdown(owner, task.id, acceptance)
+    saved = {item.id: item for item in await db.list_workspace_tasks(owner)}
+    assert (
+        saved[first.id].description
+        == "Final deliverable: reviewed list of 50 kit contents"
+    )
+    assert saved[second.id].description == "Edited deliverable from the preview"
+    assert saved[second.id].dependencies == [first.id]

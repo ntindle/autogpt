@@ -33,11 +33,12 @@ class ProposedBreakdown(BaseModel):
 
 
 _PROMPT = """Break this task into a useful next level of work, preserving its meaning and
-parent/project context. An epic should first become a small set of coherent workstreams
-or milestones, each independently assignable; avoid dumping dozens of tiny actions.
-Any of those workstreams can be broken down again later. For a narrow task produce
-concrete actionable steps. Respect the requested detail level: milestones = major
-outcomes, steps = actionable deliverables, small_steps = smaller manageable actions.
+parent/project context. Respect the requested detail level: milestones = major
+outcomes, steps = concrete actionable deliverables, small_steps = smaller manageable
+actions. Even for an epic, the default steps must name work someone can start and a
+result they can deliver, rather than vague topic labels. Keep a small, coherent set
+of independently assignable steps; avoid dumping dozens of tiny actions. Any step
+can be broken down again later.
 Use the actual roster's skills and identities to suggest the right owner for EACH
 step. AutoPilot coordinates cross-specialty outcomes and keeps the parent; Experts
 own specialist subtasks. Physical actions and approvals belong to the user. An
@@ -49,6 +50,9 @@ Include enough context and a concrete expected result in each description for it
 Expert to understand the handoff. Represent necessary sequencing in depends_on using
 the keys of EARLIER proposed steps (no cycles); independent work can happen together.
 Use unique short keys and exact assignee_id values from the supplied eligible roster.
+When current_preview is supplied, refine that unaccepted draft using the guidance.
+Preserve its edited deliverables and owner choices unless the requested changes require
+adjusting them. It is draft context, not existing completed work or permission to execute.
 Return a preview only. It will be edited and accepted before any new tasks are added."""
 
 
@@ -71,6 +75,9 @@ async def generate_task_breakdown(user_id: str, task: WorkspaceTask) -> None:
                 **inputs.context,
                 "detail": preview.detail,
                 "guidance": preview.guidance,
+                "current_preview": [
+                    step.model_dump(mode="json") for step in preview.steps
+                ],
             },
             ProposedBreakdown,
         )

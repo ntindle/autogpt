@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { useTasksPage } from "../useTasksPage";
 import { visibleTaskIDs } from "../helpers";
+import { TaskBreakdownPanel } from "./TaskBreakdown/TaskBreakdownPanel";
 import { TaskRow } from "./TaskRow";
 
 interface Props {
@@ -41,6 +42,15 @@ export function TaskList({ page }: Props) {
                 onBreakdown={() => page.breakdown.open(task)}
                 onCommand={(command) => page.act(task, command)}
               />
+              {page.breakdown.task?.id === task.id ? (
+                <TaskBreakdownPanel
+                  key={task.id}
+                  task={task}
+                  breakdown={page.breakdown}
+                  tasks={tasks}
+                  assignees={page.assignees}
+                />
+              ) : null}
               {!view.collapsed.includes(task.id)
                 ? renderBranch(task.id, depth + 1)
                 : null}

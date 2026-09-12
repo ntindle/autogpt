@@ -252,6 +252,7 @@ test("breakdown stays a selectable editable preview and accepts only the chosen 
         {
           id: "grid",
           title: "Design and test the needlepoint grid",
+          description: expect.any(String),
           assignee: AUTO,
         },
       ],
