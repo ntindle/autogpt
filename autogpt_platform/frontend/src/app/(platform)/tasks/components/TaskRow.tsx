@@ -9,10 +9,12 @@ import {
   Clock,
   DotsThree,
   Pause,
+  Play,
   WarningCircle,
 } from "@phosphor-icons/react";
 import {
   planningHold,
+  canStartTask,
   statusLabel,
   taskBranch,
   taskProgress,
@@ -52,6 +54,8 @@ export function TaskRow({
   const active =
     task.dispatch_state === "claimed" || task.dispatch_state === "sent";
   const held = planningHold(task, tasks);
+  const closed = task.status === "done" || task.status === "canceled";
+  const label = statusLabel(task, tasks);
   const participants = Array.from(
     new Map(
       taskBranch(task, tasks).flatMap((item) =>
@@ -67,7 +71,13 @@ export function TaskRow({
     ).values(),
   );
   return (
-    <div className="group grid min-h-16 grid-cols-[1rem_1.25rem_minmax(0,1fr)] items-center gap-2 rounded-lg px-1 py-2 hover:bg-muted/40 sm:grid-cols-[1rem_1.25rem_minmax(0,1fr)_auto] sm:gap-3 sm:px-2">
+    <div
+      className={cn(
+        "group grid min-h-16 grid-cols-[1rem_1.25rem_minmax(0,1fr)] items-center gap-2 rounded-lg px-1 py-2 hover:bg-muted/40 sm:grid-cols-[1rem_1.25rem_minmax(0,1fr)_auto] sm:gap-3 sm:px-2",
+        task.accepted === false &&
+          "border border-dashed border-violet-300 bg-violet-50/30",
+      )}
+    >
       {parent ? (
         <button
           type="button"
@@ -100,7 +110,7 @@ export function TaskRow({
         <button
           type="button"
           onClick={onDetails}
-          aria-label={`Inspect ${task.title}: ${statusLabel(task)}`}
+          aria-label={`Inspect ${task.title}: ${label}`}
           className={cn(
             "flex size-4 items-center justify-center rounded border border-muted-foreground/50 text-xs focus-visible:ring-2 focus-visible:ring-ring",
             task.status === "done" &&
@@ -141,8 +151,17 @@ export function TaskRow({
           )}
         >
           {parent ? `${count.done}/${count.total} accepted · ` : null}
-          {held ? "Plan only" : statusLabel(task)}
-          {task.activity && task.activity !== statusLabel(task) ? (
+          {label}
+          {held &&
+          !closed &&
+          task.accepted !== false &&
+          label !== "Execution on hold" ? (
+            <span className="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5">
+              <Pause size={11} />
+              Execution on hold
+            </span>
+          ) : null}
+          {task.activity && task.activity !== label ? (
             <span className="max-w-full truncate">· {task.activity}</span>
           ) : null}
           {task.project ? (
@@ -162,8 +181,28 @@ export function TaskRow({
             {task.question && !task.question.answers ? "Answer" : "Review"}
           </button>
         ) : null}
+        {canStartTask(task, tasks) ? (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => onCommand({ operation: "start" })}
+            aria-label={`Start ${task.title}`}
+            className="flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Play size={15} weight="fill" />
+            Start
+          </button>
+        ) : null}
         {task.status === "blocked" ? (
-          <WarningCircle size={16} className="text-amber-700" />
+          <button
+            type="button"
+            onClick={onChat}
+            aria-label={`Open stopped attempt for ${task.title}`}
+            title="The attempt stopped before producing an accepted result. Open the chat for details."
+            className="rounded p-1 text-amber-700 focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <WarningCircle size={16} />
+          </button>
         ) : task.paused ? (
           <Pause size={16} />
         ) : null}

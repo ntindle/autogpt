@@ -25732,6 +25732,14 @@
             "type": "string",
             "format": "date-time",
             "title": "Asked At"
+          },
+          "task_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Task Id"
+          },
+          "question_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Question Id"
           }
         },
         "type": "object",
@@ -29414,6 +29422,7 @@
               "cancel",
               "hold",
               "activate",
+              "start",
               "pause",
               "resume",
               "retry",
@@ -32763,6 +32772,11 @@
           "source_session_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
             "title": "Source Session Id"
+          },
+          "execution_enabled": {
+            "type": "boolean",
+            "title": "Execution Enabled",
+            "default": false
           }
         },
         "type": "object",

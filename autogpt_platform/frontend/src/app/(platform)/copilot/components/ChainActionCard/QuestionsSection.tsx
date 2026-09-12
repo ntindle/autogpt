@@ -16,12 +16,20 @@ interface Props {
   requests: QuestionRequest[];
   isReady: boolean;
   onProceed: () => void;
+  submitLabel?: string;
+  submitting?: boolean;
 }
 
 /** One question per step. The footer pager (chevrons + ring dots) moves
  *  between questions; the round action button advances and, on the last
  *  step, drafts every answer into the chat input. */
-export function QuestionsSection({ requests, isReady, onProceed }: Props) {
+export function QuestionsSection({
+  requests,
+  isReady,
+  onProceed,
+  submitLabel = "Add answers to message",
+  submitting = false,
+}: Props) {
   const [step, setStep] = useState(0);
   const sectionId = useId();
   // Keyed by position, not keyword: keywords are unique only within a request,
@@ -39,9 +47,10 @@ export function QuestionsSection({ requests, isReady, onProceed }: Props) {
   const labelId = `${sectionId}-${id}`;
   const answered = (request.answers[question.keyword] ?? "").trim().length > 0;
   const isLast = current === questions.length - 1;
-  const actionEnabled = isLast ? isReady : answered;
+  const actionEnabled = !submitting && (isLast ? isReady : answered);
 
   function handleAction() {
+    if (submitting) return;
     if (isLast) {
       if (isReady) onProceed();
     } else if (answered) {
@@ -134,7 +143,13 @@ export function QuestionsSection({ requests, isReady, onProceed }: Props) {
 
         <button
           type="button"
-          aria-label={isLast ? "Add answers to message" : "Next question"}
+          aria-label={
+            isLast
+              ? submitting
+                ? "Submitting answers"
+                : submitLabel
+              : "Next question"
+          }
           disabled={!actionEnabled}
           onClick={handleAction}
           className={

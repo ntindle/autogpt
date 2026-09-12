@@ -138,6 +138,7 @@ class WorkspaceTask(BaseModel):
     breakdown: TaskBreakdown | None = None
     breakdown_refresh: TaskBreakdown | None = None
     plan_only: bool = False
+    execution_enabled: bool = False
     paused: bool = False
     dependencies: list[str] = Field(default_factory=list)
     session_id: str | None = None
@@ -218,6 +219,7 @@ class TaskCommand(BaseModel):
         "cancel",
         "hold",
         "activate",
+        "start",
         "pause",
         "resume",
         "retry",

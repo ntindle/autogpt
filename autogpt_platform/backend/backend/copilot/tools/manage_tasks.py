@@ -2,7 +2,12 @@ from typing import Any
 
 from pydantic import Field
 
-from backend.api.features.tasks.domain import TaskConflict, ancestors, branch
+from backend.api.features.tasks.domain import (
+    TaskConflict,
+    ancestors,
+    branch,
+    planning_hold,
+)
 from backend.api.features.tasks.management import MANAGEMENT_OPERATIONS
 from backend.api.features.tasks.models import (
     TaskAssignee,
@@ -40,10 +45,11 @@ class ManageTasksTool(BaseTool):
             "or submit_result with evidence for acceptance. New commitments should be proposed, not assumed. "
             "AutoPilot retains parent ownership and delegates specialist child tasks to existing Experts from list_team. "
             "AutoPilot can accept or request changes to a child's result; no executor can accept its own result. "
-            "AutoPilot can edit, reparent, assign, cancel, reopen, pause, resume, or retry existing tasks across the user's workspace, including from regular chats. "
+            "AutoPilot can edit, reparent, assign, cancel, reopen, pause, resume, start, or retry existing tasks across the user's workspace, including from regular chats. "
             "Use reparent with task_id and new_parent_id (null for top level); it preserves IDs, conversations, answers, results, and history, and inherits the new parent's project unless project is supplied. "
             "Use edit for title, description, project, and dependencies. Use cancel to retire duplicates without deleting history. "
             "Use assign (or assign_step) to change an owner, including an existing confirmed owner. Use pause before reassigning or canceling active work, then list until dispatch is no longer claimed/sent and status is no longer working. Never copy a task to move or reroute it. "
+            "Use start when the user requests execution of a held task: it enables that branch, preserves sibling holds, and waits for prerequisites. Assignment alone does not release a planning hold. "
             "Expert sessions can only assign unassigned steps within their delegated branch; they cannot manage unrelated tasks. "
             "In any chat, add_step with task_id creates a real child under that owned parent. Outside a delegated task conversation its owner remains a suggestion. Never simulate nesting with title prefixes. "
             "Use list with all_projects=true or project to find existing prerequisites across projects. Expert cross-project links do not expand their delegation or review scope. "
@@ -217,12 +223,12 @@ class ManageTasksTool(BaseTool):
             )
         tasks = await tasks_db().list_workspace_tasks(user_id)
         scope = branch(root.id, tasks)
-        if operation in ("accept_result", "request_changes") and any(
-            task.plan_only
-            or task.paused
-            or not task.accepted
-            or task.status == "canceled"
-            for task in ancestors(root, tasks)
+        if operation in ("accept_result", "request_changes") and (
+            planning_hold(root, tasks)
+            or any(
+                task.paused or not task.accepted or task.status == "canceled"
+                for task in ancestors(root, tasks)
+            )
         ):
             return ErrorResponse(
                 message="Activate the delegated outcome before reviewing child work"

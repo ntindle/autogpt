@@ -57,6 +57,14 @@ export function useChatSession({
   const sessionQuery = useGetV2GetSession(sessionId ?? "", undefined, {
     query: {
       enabled: !!sessionId,
+      refetchInterval: (query) => {
+        const response = query.state.data;
+        return response?.status === 200 &&
+          response.data.metadata?.workspace_task_id &&
+          response.data.chat_status === "queued"
+          ? 2000
+          : false;
+      },
       refetchOnWindowFocus: false,
       refetchOnReconnect: true,
       refetchOnMount: true,

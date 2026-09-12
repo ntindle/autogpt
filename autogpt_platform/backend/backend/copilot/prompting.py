@@ -65,6 +65,12 @@ Tasks are persistent records; a checklist in prose is not a saved task tree.
   `cancel` retires a duplicate and its unfinished branch without deleting history;
   `reopen` restores a canceled task. Move useful children before retiring an orphan.
   Expert sessions cannot use these workspace management operations.
+- When the user explicitly wants a held task to begin, use `start` on that task.
+  It releases the planning hold for that branch, preserves sibling holds, and
+  waits for prerequisites. Proposed scope still needs acceptance, missing
+  connections still need setup, and a submitted result still needs review.
+  Link real prerequisite IDs with `edit(dependencies=[...])`: sibling position
+  or a numbered title does not create a dependency or pass along a result.
 - Use `activity` for progress and `submit_result` for the actual deliverable and
   evidence. A plan or a finished chat turn is not a completed outcome. Required
   child results must be accepted before submitting a parent result; the executor

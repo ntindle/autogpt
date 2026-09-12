@@ -1,9 +1,9 @@
 import {
   useCommandWorkspaceTask,
   useListWorkspaceTasks,
-  getListWorkspaceTasksQueryKey,
 } from "@/app/api/__generated__/endpoints/tasks/tasks";
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
+import { invalidateTaskSurfaces } from "@/lib/taskSync";
 import { okData } from "@/app/api/helpers";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
@@ -27,9 +27,7 @@ export function useTasksPage() {
   const view = useTaskView(user?.id ?? "signed-out");
 
   async function refresh() {
-    await cache.invalidateQueries({
-      queryKey: getListWorkspaceTasksQueryKey(),
-    });
+    await invalidateTaskSurfaces(cache);
   }
 
   async function command(task: Task, action: Omit<TaskCommand, "version">) {

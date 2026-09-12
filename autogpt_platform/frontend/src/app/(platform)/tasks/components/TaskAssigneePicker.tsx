@@ -90,7 +90,7 @@ export function TaskAssigneePicker({
               {task.suggestion?.kind === "human"
                 ? "Confirm responsibility"
                 : held
-                  ? "Confirm · plan only"
+                  ? "Confirm · execution held"
                   : "Confirm & delegate"}
             </Button>
           </>
@@ -134,7 +134,7 @@ export function TaskAssigneePicker({
                     (assignee.kind === "human"
                       ? "Assign responsibility"
                       : held
-                        ? "Assign · plan only"
+                        ? "Assign · execution held"
                         : "Assign & delegate")}
                 </span>
               </span>

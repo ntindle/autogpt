@@ -14,6 +14,7 @@ import {
   taskProgress,
 } from "../helpers";
 import type { useTasksPage } from "../useTasksPage";
+import { TaskExecutionStatus } from "./TaskExecutionStatus";
 import { TaskActions } from "./TaskActions";
 import { TaskAssigneePicker } from "./TaskAssigneePicker";
 import { TaskEditor } from "./TaskEditor";
@@ -44,7 +45,7 @@ export function TaskDetails({ task, page }: Props) {
           <SheetTitle>Task details</SheetTitle>
           <SheetDescription>
             {task
-              ? `${statusLabel(task)}${task.activity ? ` · ${task.activity}` : ""}`
+              ? `${statusLabel(task, page.tasks)}${task.activity ? ` · ${task.activity}` : ""}`
               : "Inspect your task"}
           </SheetDescription>
         </SheetHeader>
@@ -92,11 +93,11 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
           }
         />
       </div>
-      {planningHold(task, page.tasks) ? (
-        <p className="rounded-lg bg-violet-100 p-3 text-sm text-violet-800">
-          Plan only. Ownership can be decided while execution stays on hold.
-        </p>
-      ) : null}
+      <TaskExecutionStatus
+        task={task}
+        tasks={page.tasks}
+        onChat={() => page.openChat(task)}
+      />
       <TaskQuestion
         task={task}
         onCommand={(command) => page.command(task, command)}
@@ -121,6 +122,7 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
       <TaskScheduleEditor task={task} />
       <TaskActions
         task={task}
+        tasks={page.tasks}
         pending={page.pending}
         onCommand={(command) => page.act(task, command)}
         onChat={() => page.openChat(task)}

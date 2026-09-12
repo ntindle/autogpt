@@ -414,6 +414,7 @@ export function ToolResult({ row }: Props) {
         key={pendingQuestions.dockId}
         dockId={pendingQuestions.dockId}
         questions={pendingQuestions.questions}
+        taskBinding={pendingQuestions.taskBinding}
       />
     );
   }

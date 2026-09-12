@@ -24,7 +24,7 @@ from prisma.models import ChatMessage as PrismaChatMessage
 from prisma.models import ChatSession as PrismaChatSession
 from pydantic import BaseModel, Field, PrivateAttr
 
-from backend.data.db_accessors import chat_db, experts_db, library_db
+from backend.data.db_accessors import chat_db, experts_db, library_db, tasks_db
 from backend.data.graph import GraphSettings
 from backend.data.redis_client import get_redis_async
 from backend.util import json
@@ -93,6 +93,8 @@ class PendingQuestion(BaseModel):
 
     text: str
     asked_at: datetime
+    task_id: str | None = None
+    question_id: str | None = None
 
 
 class ChatSessionMetadata(BaseModel):
@@ -299,24 +301,26 @@ def is_message_duplicate(
 
 
 async def clear_pending_question(session: "ChatSession") -> None:
-    """Resolve the session's Home "Needs You" question — the user replied.
-
-    Answering in chat is the only resolution path, so this runs on every
-    user-role turn. Best-effort: a stale row on Home is not worth failing a
-    turn the user is waiting on.
-
-    Caveat: callers gate this on ``is_user_message`` only, which marks a
-    turn's *role* (user vs assistant), not its *origin*. A programmatically
-    injected user-role turn — a re-delegation via ``delegate_to_expert``, a
-    ``run_sub_session`` follow-up, or an ``AutoPilotBlock`` run — also
-    clears the pending question even though the human never actually saw
-    or answered it. There is currently no discriminator available at this
-    call site (or its callers) to tell a human reply apart from an
-    injected one; fixing that would require plumbing a new signal through
-    the queue/executor layer.
-    """
+    """Resolve chat reminders; task questions resolve through their answer command."""
     if session.metadata.pending_question is None:
         return
+    if session.metadata.workspace_task_id:
+        try:
+            task = await tasks_db().workspace_task_for_session(
+                session.user_id, session.session_id
+            )
+            if (
+                task
+                and task.question
+                and task.question.answers is None
+                and task.status not in ("done", "canceled")
+            ):
+                return
+        except Exception as e:
+            logger.warning(
+                "Could not check task question for %s: %s", session.session_id, e
+            )
+            return
     session.metadata.pending_question = None
     try:
         await chat_db().clear_session_pending_question(

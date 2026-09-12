@@ -17,6 +17,7 @@ export interface ChainActionEntry {
   ready: boolean;
   buildMessage: () => string | null;
   onSent?: () => void;
+  submit?: (context: string) => Promise<void>;
   /** This card's reply must be reviewed before it is sent, so the chain owes
    *  it a Proceed even when it asks for nothing but credentials. */
   manualProceed?: boolean;

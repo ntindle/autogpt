@@ -39,7 +39,14 @@ def _prepare_dispatches(tasks: list[WorkspaceTask]) -> None:
             task.coordination_state = state
             task.status, task.dispatch_state = "todo", None
             task.dispatch_message = "Child work has changed. Inspect your branch with manage_tasks, review any submitted child results, and continue coordinating the delegated outcome."
-        if not is_runnable(task, tasks) or task.dispatch_state == "pending":
+        if not is_runnable(task, tasks):
+            if task.dispatch_state == "pending":
+                task.dispatch_state = None
+                task.activity = (
+                    "Waiting for execution to be enabled or prerequisites to finish"
+                )
+            continue
+        if task.dispatch_state == "pending":
             continue
         task.status = "todo"
         task.dispatch_id = str(uuid4())

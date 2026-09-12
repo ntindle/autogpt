@@ -6,6 +6,7 @@ from backend.api.features.tasks.domain import (
     branch,
     can_edit_execution,
     check_structure,
+    planning_hold,
     progress,
     record,
 )
@@ -63,6 +64,10 @@ def apply_command(
             if task.id in {t.id for t in ancestors(member, tasks)}:
                 can_edit_execution(member)
         task.plan_only = True
+        for member in branch(task.id, tasks):
+            member.execution_enabled = False
+    elif op == "start":
+        _start(task, tasks)
     elif op == "activate":
         task.plan_only = False
     elif op == "pause":
@@ -156,14 +161,10 @@ def _edit(
 
 def _constraints(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> set[str]:
     by_id = {item.id: item for item in tasks}
-    constraints = set()
+    held = planning_hold(task, tasks)
+    constraints = {held.id} if held else set()
     for item in ancestors(task, tasks):
-        if (
-            item.paused
-            or item.plan_only
-            or not item.accepted
-            or item.status == "canceled"
-        ):
+        if item.paused or not item.accepted or item.status == "canceled":
             constraints.add(item.id)
         constraints.update(
             dependency
@@ -171,6 +172,39 @@ def _constraints(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> set[str]:
             if dependency not in by_id or by_id[dependency].status != "done"
         )
     return constraints
+
+
+def _start(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> None:
+    can_edit_execution(task)
+    if task.status in ("done", "canceled") or task.schedule or task.review_of:
+        raise TaskConflict("Choose an open task to start")
+    if any(
+        not item.accepted or item.status == "canceled"
+        for item in ancestors(task, tasks)
+    ):
+        raise TaskConflict("Accept the proposed scope before starting work")
+    if any(item.paused for item in ancestors(task, tasks)[1:]):
+        raise TaskConflict("Resume the paused parent outcome before starting this task")
+    if task.question and task.question.answers is None:
+        raise TaskConflict("Answer the outstanding question before starting work")
+    if task.status == "needs_you" and task.result:
+        raise TaskConflict("Review the submitted result before starting more work")
+    members = branch(task.id, tasks)
+    if not any(
+        member.assignee and member.assignee.kind != "human" and member.accepted
+        for member in members
+    ):
+        raise TaskConflict("Choose an Expert or AutoPilot before starting execution")
+    task.plan_only, task.paused, task.execution_enabled = False, False, True
+    for member in members:
+        if (
+            member.status == "blocked"
+            and member.dispatch_state not in ("claimed", "sent")
+            and not planning_hold(member, tasks)
+            and not any(parent.paused for parent in ancestors(member, tasks))
+        ):
+            member.status, member.dispatch_state = "todo", None
+    task.activity = "Execution enabled for this branch"
 
 
 def _assign(
@@ -237,6 +271,7 @@ def _complete(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> None:
         )
     else:
         task.status, task.activity = "done", "Completed"
+        task.dispatch_state, task.dispatch_message = None, ""
 
 
 def _review(
@@ -286,6 +321,8 @@ def _review(
 
 
 def _answer(task: WorkspaceTask, command: TaskCommand) -> None:
+    if task.status in ("done", "canceled"):
+        raise TaskConflict("Reopen this task before answering its question")
     question = task.question
     if (
         not question
@@ -299,9 +336,17 @@ def _answer(task: WorkspaceTask, command: TaskCommand) -> None:
     if task.dispatch_state == "claimed":
         raise TaskConflict("Wait for the current attempt to finish starting")
     question.answers, question.answered_by = answers, task.user_id
+    if not task.assignee or task.assignee.kind == "human":
+        task.dispatch_state, task.dispatch_message = None, ""
+        task.status, task.activity = "todo", "Answer recorded"
+        return
     task.dispatch_message = "Answers to your questions:\n" + "\n\n".join(
         f"{q.question}\n{answers[q.keyword]}" for q in question.questions
     )
+    if command.feedback.strip():
+        task.dispatch_message += (
+            "\n\nAdditional context from your reply:\n" + command.feedback.strip()
+        )
     task.dispatch_id = str(uuid4())
     task.dispatch_state = "pending"
     task.status, task.activity = "todo", "Answer recorded; waiting to continue"

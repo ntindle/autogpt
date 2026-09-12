@@ -66,7 +66,7 @@ async function openWebsiteTask() {
     "Website",
   );
   await userEvent.click(
-    screen.getByRole("button", { name: "Inspect Publish sample kits: To do" }),
+    screen.getByRole("button", { name: "Details for Publish sample kits" }),
   );
 }
 

@@ -1,7 +1,13 @@
 from uuid import NAMESPACE_URL, uuid5
 
-from backend.api.features.tasks.domain import TaskConflict, ancestors, record
+from backend.api.features.tasks.domain import (
+    TaskConflict,
+    ancestors,
+    planning_hold,
+    record,
+)
 from backend.api.features.tasks.models import TaskAssignee, TaskQuestion, WorkspaceTask
+from backend.api.features.tasks.question_sync import sync_task_question
 from backend.api.features.tasks.repository import (
     _load,
     _lock,
@@ -53,7 +59,9 @@ async def workspace_task_run_event(
         elif event == "question" and question:
             task.question = question
             task.status, task.activity = "needs_you", "Waiting for your answer"
+            await sync_task_question(tx, task)
         elif event == "result" and text:
+            await sync_task_question(tx, task.model_copy(update={"status": "done"}))
             _submit_result(task, tasks, text)
         elif event == "finished":
             task.dispatch_state = "finished"
@@ -88,10 +96,8 @@ def _submit_result(task: WorkspaceTask, tasks: list[WorkspaceTask], text: str) -
         not task.assignee
         or task.assignee.kind == "human"
         or task.schedule
-        or any(
-            item.plan_only or item.paused or not item.accepted
-            for item in ancestors(task, tasks)
-        )
+        or planning_hold(task, tasks)
+        or any(item.paused or not item.accepted for item in ancestors(task, tasks))
     ):
         raise TaskConflict("This task is not delegated for execution")
     if any(

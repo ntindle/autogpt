@@ -143,7 +143,15 @@ class AskQuestionTool(BaseTool):
                     )
                     for i, q in enumerate(questions)
                 ]
-            await _mark_pending(session, text)
+            if task_question:
+                session.metadata.pending_question = PendingQuestion(
+                    text=text,
+                    asked_at=task_question.asked_at,
+                    task_id=task_id,
+                    question_id=task_question.id,
+                )
+            else:
+                await _mark_pending(session, text)
         return ClarificationNeededResponse(
             message=text,
             session_id=session.session_id if session else None,

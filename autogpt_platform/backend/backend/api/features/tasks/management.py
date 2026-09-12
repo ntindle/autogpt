@@ -14,6 +14,7 @@ MANAGEMENT_OPERATIONS = {
     "pause",
     "resume",
     "retry",
+    "start",
 }
 
 

@@ -1,7 +1,7 @@
 import hashlib
 import json
 
-from backend.api.features.tasks.domain import ancestors
+from backend.api.features.tasks.domain import ancestors, planning_hold
 from backend.api.features.tasks.models import TaskContextResponse, WorkspaceTask
 
 
@@ -28,6 +28,7 @@ def planning_context(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> dict:
         "dependencies",
         "accepted",
         "plan_only",
+        "execution_enabled",
         "paused",
         "result",
         "result_version",
@@ -40,6 +41,7 @@ def planning_context(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> dict:
         for dependency in item.dependencies
     }
     return {
+        "execution_on_hold": planning_hold(task, tasks) is not None,
         "prerequisites": [
             item.model_dump(
                 mode="json",

@@ -27,6 +27,9 @@ interface Props {
   manualProceed: boolean;
   isReady: boolean;
   onProceed: () => void;
+  submitLabel?: string;
+  submitting?: boolean;
+  error?: string;
 }
 
 /** Everything the chain still needs from the user, stacked below it as one
@@ -42,6 +45,9 @@ export function ChainActionCard({
   manualProceed,
   isReady,
   onProceed,
+  submitLabel,
+  submitting,
+  error,
 }: Props) {
   const { openModal } = useCopilotModal();
   const providersQuery = useGetV1ListProviders({
@@ -127,8 +133,16 @@ export function ChainActionCard({
             requests={questions}
             isReady={questionsReady}
             onProceed={onProceed}
+            submitLabel={submitLabel}
+            submitting={submitting}
           />
         </div>
+      )}
+
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
       )}
 
       {(hasInputs || manualProceed) && !hasQuestions && (

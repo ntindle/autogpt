@@ -476,3 +476,61 @@ async def test_management_follows_current_binding_after_existing_work_moves_to_c
         result.tasks[0].id == child.id
         and result.tasks[0].session_id == session.session_id
     )
+
+
+@pytest.mark.asyncio
+async def test_human_answers_inherited_question_without_queueing_an_agent_turn(owner):
+    task = await task_db.create_workspace_task(
+        owner, TaskCreate(title="Physical sample handoff")
+    )
+    task = await command(owner, task.id, "assign", assignee=AUTO)
+    question = TaskQuestion(
+        questions=[TaskQuestionItem(question="Which fabric?", keyword="fabric")]
+    )
+    await task_db.workspace_task_run_event(
+        owner, task.session_id, "question", question=question
+    )
+    await task_db.workspace_task_run_event(owner, task.session_id, "finished")
+    await command(
+        owner,
+        task.id,
+        "assign",
+        assignee=TaskAssignee(kind="human", id=owner, name="You"),
+    )
+    answered = await command(
+        owner, task.id, "answer", question_id=question.id, answers={"fabric": "Linen"}
+    )
+    assert answered.question.answers == {"fabric": "Linen"}
+    assert answered.dispatch_state is None
+    assert answered.activity == "Answer recorded"
+    completed = await command(
+        owner, task.id, "submit_result", evidence="Prepared the linen samples"
+    )
+    assert completed.status == "done" and completed.dispatch_state is None
+
+
+@pytest.mark.asyncio
+async def test_answer_cannot_reactivate_a_canceled_task(owner):
+    task = await task_db.create_workspace_task(
+        owner, TaskCreate(title="Canceled question")
+    )
+    task = await command(owner, task.id, "assign", assignee=AUTO)
+    question = TaskQuestion(
+        questions=[TaskQuestionItem(question="Which fabric?", keyword="fabric")]
+    )
+    await task_db.workspace_task_run_event(
+        owner, task.session_id, "question", question=question
+    )
+    await task_db.workspace_task_run_event(owner, task.session_id, "finished")
+    await command(owner, task.id, "cancel")
+    with pytest.raises(TaskConflict, match="Reopen"):
+        await command(
+            owner,
+            task.id,
+            "answer",
+            question_id=question.id,
+            answers={"fabric": "Linen"},
+        )
+    canceled = await current(owner, task.id)
+    assert canceled.status == "canceled" and canceled.dispatch_state is None
+    assert canceled.question.answers is None

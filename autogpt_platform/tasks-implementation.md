@@ -254,3 +254,63 @@ Coverage includes human-result persistence and prerequisite handoffs, moving an
 active Expert task without losing state, safe owner changes, cancellation and
 recovery, current session authority, and background reconsideration with draft
 preservation. Deployment verification is recorded separately after rollout.
+
+
+## September 12 runtime verification
+
+The result and management release was deployed as source revision `052a170984`
+on the existing `AutoGPT-Tasks` instance. All 21 template variables, the data
+mount, port, Edit action, and other AutoGPT instance IDs were verified unchanged.
+Seven backend source hashes and the Tasks page bundle matched the tested local
+build; the Tasks entry point and sampled frontend assets returned HTTP 200.
+
+Local production-container browser checks submitted a human result, retained it
+through reload and reopening its editor, and showed the recoverable Canceled
+view. Phone screenshots measured a 390px document at a 390px viewport. The app's
+authenticated API moved that result into another project without changing its
+identity or evidence, replaced a confirmed owner under a planning hold, and
+canceled/reopened the same record without execution. The management tool's
+permission and state-preservation paths were tested against the isolated task
+database; a separate standalone container tool script was not completed, and
+runtime management verification used the authenticated API instead.
+
+A final handoff regression found that answering an inherited question after
+reassigning an Expert task to a human queued an agent dispatch. Human answers now
+remain recorded without dispatch, completion clears any stale dispatch marker,
+and answers cannot implicitly reactivate canceled/completed tasks.
+
+## Execution controls and question synchronization
+
+The task row distinguishes proposed scope, held execution, stopped attempts,
+prerequisite waits, and completed work. A stopped-attempt indicator opens its
+conversation. Start releases only the selected branch's inherited planning hold;
+siblings stay held, parent pauses and unaccepted scope remain barriers, and real
+prerequisites still gate dispatch. Applying Hold again revokes descendant Start
+overrides and removes ineligible queued dispatches. Human result submission
+unblocks linked prerequisites without manufacturing a dependency from numbering.
+
+The current chat question chain now retains the task/question identifiers and
+submits through the existing Tasks answer command. It resolves a question moved
+into an original-work child, prevents duplicate continuation, retains draft
+answers on error, and refreshes Tasks, Home, and the linked chat. Ready connector
+and input context accompanies the structured answers. Ordinary chat questions
+retain the existing draft-and-send interaction.
+
+Task question creation and resolution update Home's pending-question marker in
+the same database transaction, preserving unrelated session metadata. Stale
+answers cannot clear a newer question. Answering held or human-owned work records
+the answer without a phantom dispatch; an ordinary injected chat turn cannot
+clear an unanswered task question. Canceling a questioned task clears its Home
+reminder while preserving history.
+
+`../tasks-breakdown-options.html` contains four separate, interactive design
+options: inline preview, side inspector, brief beside preview, and conversational
+refinement. Each immediately generates an editable preview of actionable steps,
+with optional additional context. Browser checks exercised all four and verified
+that each fits a 390px viewport. These are sample-data prototypes for selecting
+the eventual breakdown layout.
+
+Validation: 61 isolated Tasks database tests, 24 question-tool tests, and 79
+frontend integration tests covering Tasks, the real chat action chain, connector
+coexistence, and Home Needs You passed. Whole frontend/backend formatting, lint,
+and type checks were run. Runtime deployment verification follows separately.

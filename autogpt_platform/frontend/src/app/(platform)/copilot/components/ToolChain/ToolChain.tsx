@@ -70,6 +70,9 @@ export function ToolChain({ parts, isStreaming, readOnly = false }: Props) {
   // The ref latches against a double effect run; the state re-renders Proceed.
   const autoSentRef = useRef(false);
   const [autoSent, setAutoSent] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const submissionRef = useRef(false);
 
   // Action cards (credential setup, clarifying questions) register here
   // instead of rendering their own Proceed/Answer buttons — the chain
@@ -108,6 +111,7 @@ export function ToolChain({ parts, isStreaming, readOnly = false }: Props) {
   );
 
   const pendingActions = [...actionEntries.values()];
+  const hasTaskAnswer = pendingActions.some((entry) => entry.submit);
   const connectorRequests = pendingActions
     .map((entry) => entry.connectors)
     .filter((request) => request !== undefined);
@@ -227,13 +231,34 @@ export function ToolChain({ parts, isStreaming, readOnly = false }: Props) {
   // still-running chain has no such ending.
   const showDone = !isStreaming && !hasError && !windowMode && panelOpen;
 
-  // Proceed never sends: it drafts the combined reply of every READY card
-  // into the chat input so the user reviews/edits and presses send
-  // themselves. Unready cards (e.g. an unconnected MCP server) are left
-  // out instead of blocking the ready ones. Cards stay registered until
-  // the message actually goes out, at which point their onSent fires.
-  function handleProceed() {
+  async function handleProceed() {
+    if (submissionRef.current) return;
     const readyActions = pendingActions.filter((entry) => entry.ready);
+    const taskAnswer = readyActions.find((entry) => entry.submit);
+    if (taskAnswer?.submit) {
+      submissionRef.current = true;
+      setSubmitting(true);
+      setSubmitError("");
+      try {
+        const context = readyActions
+          .filter((entry) => entry.id !== taskAnswer.id)
+          .map((entry) => entry.buildMessage())
+          .filter(Boolean)
+          .join("\n\n");
+        await taskAnswer.submit(context);
+        readyActions.forEach((entry) => entry.onSent?.());
+      } catch (error) {
+        setSubmitError(
+          error instanceof Error
+            ? error.message
+            : "Could not submit your answers. Try again.",
+        );
+      } finally {
+        submissionRef.current = false;
+        setSubmitting(false);
+      }
+      return;
+    }
     const message = readyActions
       .map((entry) => entry.buildMessage())
       .filter(Boolean)
@@ -400,6 +425,9 @@ export function ToolChain({ parts, isStreaming, readOnly = false }: Props) {
             manualProceed={needsManualProceed || offerProceed}
             isReady={allActionsReady}
             onProceed={handleProceed}
+            submitLabel={hasTaskAnswer ? "Submit answers" : undefined}
+            submitting={submitting}
+            error={submitError}
           />
         )}
 

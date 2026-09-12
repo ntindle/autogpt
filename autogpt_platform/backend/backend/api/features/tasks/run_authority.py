@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from backend.api.features.tasks.domain import ancestors, record
+from backend.api.features.tasks.domain import ancestors, planning_hold, record
 from backend.api.features.tasks.models import WorkspaceTask
 from backend.api.features.tasks.repository import _load, _lock, _save
 from backend.data.db import prisma
@@ -23,12 +23,13 @@ async def start_workspace_task_run(
             return TaskRunAuthority()
         if turn_id in task.started_turn_ids:
             return TaskRunAuthority(task=task, duplicate_turn=True)
-        held = task.schedule is not None or any(
-            item.plan_only
-            or item.paused
-            or not item.accepted
-            or item.status == "canceled"
-            for item in ancestors(task, tasks)
+        held = (
+            task.schedule is not None
+            or planning_hold(task, tasks) is not None
+            or any(
+                item.paused or not item.accepted or item.status == "canceled"
+                for item in ancestors(task, tasks)
+            )
         )
         dependencies_done = all(
             any(item.id == dependency and item.status == "done" for item in tasks)
@@ -38,6 +39,7 @@ async def start_workspace_task_run(
         if (
             held
             or not dependencies_done
+            or (task.question and task.question.answers is None)
             or not task.assignee
             or task.assignee.kind == "human"
             or task.status in ("done", "canceled", "needs_you")

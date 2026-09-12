@@ -40,6 +40,7 @@ import {
   providerFailureFingerprint,
   type ProviderFailure,
 } from "./providerFailure";
+import { invalidateTaskSurfaces } from "@/lib/taskSync";
 import { useCopilotUIStore } from "./store";
 import type { CopilotLlmModel } from "./store";
 import { useCopilotReconnect } from "./useCopilotReconnect";
@@ -697,6 +698,7 @@ export function useCopilotStream({
     const isIdle = status === "ready" || status === "error";
 
     if (wasActive && isIdle && sessionId && !isReconnectScheduled) {
+      void invalidateTaskSurfaces(queryClient);
       queryClient.invalidateQueries({
         queryKey: getGetV2GetSessionQueryKey(sessionId),
       });

@@ -9,16 +9,38 @@ import {
   getPendingQuestions,
   type PendingQuestions,
 } from "./helpers";
+import { TaskQuestionsForm } from "./TaskQuestionsForm";
+import type { TaskQuestionBinding } from "./helpers";
 import { isKey } from "@/lib/keyboard";
 
 interface FormProps {
   dockId: string;
   questions: PendingQuestions["questions"];
+  taskBinding?: TaskQuestionBinding;
 }
 
 /** The clarifying-question answer form — rendered inline in the tool chain
  *  on the ask_question row (and reused by the legacy QuestionDock). */
-export function QuestionsForm({ dockId, questions }: FormProps) {
+export function QuestionsForm({ taskBinding, ...props }: FormProps) {
+  return taskBinding ? (
+    <TaskQuestionsForm {...props} taskBinding={taskBinding} />
+  ) : (
+    <QuestionAnswerForm {...props} />
+  );
+}
+
+interface AnswerProps extends FormProps {
+  onAnswer?: (
+    answers: Record<string, string>,
+    context: string,
+  ) => Promise<void>;
+}
+
+export function QuestionAnswerForm({
+  dockId,
+  questions,
+  onAnswer,
+}: AnswerProps) {
   const actions = useContext(CopilotChatActionsContext);
   const chainActions = useContext(ChainActionsContext);
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -26,6 +48,12 @@ export function QuestionsForm({ dockId, questions }: FormProps) {
   const [renderedDockId, setRenderedDockId] = useState<string | null>(null);
   const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const submissionRef = useRef(false);
+  const onAnswerRef = useRef(onAnswer);
+  onAnswerRef.current = onAnswer;
+  const taskLinked = Boolean(onAnswer);
   const dismissed = dockId === dismissedId;
   const allAnswered = questions.every((q) => answers[q.keyword]?.trim());
 
@@ -42,6 +70,9 @@ export function QuestionsForm({ dockId, questions }: FormProps) {
       buildMessage: () =>
         allAnswered ? buildAnswersMessage(questions, answers) : null,
       onSent: () => setDismissedId(dockId),
+      submit: taskLinked
+        ? (context) => onAnswerRef.current!(answers, context)
+        : undefined,
       questions: {
         id: dockId,
         questions,
@@ -52,7 +83,15 @@ export function QuestionsForm({ dockId, questions }: FormProps) {
       },
     });
     return () => chainActions.unregister(dockId);
-  }, [chainActions, dismissed, dockId, allAnswered, answers, questions]);
+  }, [
+    chainActions,
+    dismissed,
+    dockId,
+    allAnswered,
+    answers,
+    questions,
+    taskLinked,
+  ]);
 
   if (renderedDockId !== dockId) {
     setRenderedDockId(dockId);
@@ -64,7 +103,8 @@ export function QuestionsForm({ dockId, questions }: FormProps) {
   // row that asked.
   if (chainActions) return null;
 
-  function handleSubmit() {
+  async function handleSubmit() {
+    if (submissionRef.current) return;
     if (chainActions) return;
     if (!actions) return;
     if (!allAnswered) {
@@ -72,8 +112,23 @@ export function QuestionsForm({ dockId, questions }: FormProps) {
       if (unanswered) inputRefs.current[unanswered.keyword]?.focus();
       return;
     }
-    actions.onSend(buildAnswersMessage(questions, answers));
-    setDismissedId(dockId);
+    submissionRef.current = true;
+    setSubmitting(true);
+    setError("");
+    try {
+      if (onAnswer) await onAnswer(answers, "");
+      else await actions.onSend(buildAnswersMessage(questions, answers));
+      setDismissedId(dockId);
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Could not submit your answers. Try again.",
+      );
+    } finally {
+      submissionRef.current = false;
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -116,15 +171,25 @@ export function QuestionsForm({ dockId, questions }: FormProps) {
           </label>
         ))}
       </div>
+      {error && (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {error}
+        </p>
+      )}
       {!chainActions && (
         <div className="flex justify-end pt-2.5">
           <button
             type="button"
             onClick={handleSubmit}
-            aria-disabled={!allAnswered}
+            disabled={submitting}
+            aria-disabled={!allAnswered || submitting}
             className="rounded-full bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-white transition-opacity aria-disabled:opacity-40 hover:bg-zinc-700"
           >
-            Answer
+            {submitting
+              ? "Submitting…"
+              : onAnswer
+                ? "Submit answers"
+                : "Answer"}
           </button>
         </div>
       )}
@@ -145,6 +210,7 @@ export function QuestionDock({ messages }: Props) {
         key={pending.dockId}
         dockId={pending.dockId}
         questions={pending.questions}
+        taskBinding={pending.taskBinding}
       />
     </div>
   );

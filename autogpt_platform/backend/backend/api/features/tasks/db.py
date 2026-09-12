@@ -40,6 +40,7 @@ from backend.api.features.tasks.planning_refresh_db import (
 from backend.api.features.tasks.planning_refresh_db import (
     workspace_task_planning_users as workspace_task_planning_users,
 )
+from backend.api.features.tasks.question_sync import sync_task_question
 from backend.api.features.tasks.repository import (
     _decode,
     _get,
@@ -125,6 +126,12 @@ async def command_workspace_task(
         if command.operation != "suggest":
             _prepare_dispatches(tasks)
         for changed in tasks:
+            if (
+                command.operation in ("answer", "complete", "submit_result", "cancel")
+                and changed.question
+            ):
+                if changed.id == task.id or changed.status in ("done", "canceled"):
+                    await sync_task_question(tx, changed)
             await _save(tx, changed)
         return task
 

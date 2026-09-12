@@ -1,10 +1,17 @@
 import { Button } from "@/components/atoms/Button/Button";
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
-import { ChatCircle, Plus, TreeStructure } from "@phosphor-icons/react";
-import type { Task } from "../helpers";
+import {
+  ChatCircle,
+  Plus,
+  TreeStructure,
+  Play,
+  Pause,
+} from "@phosphor-icons/react";
+import { canStartTask, planningHold, type Task } from "../helpers";
 
 interface Props {
   task: Task;
+  tasks: Task[];
   pending: boolean;
   onCommand: (command: Omit<TaskCommand, "version">) => Promise<unknown>;
   onAdd: () => void;
@@ -14,6 +21,7 @@ interface Props {
 
 export function TaskActions({
   task,
+  tasks,
   pending,
   onCommand,
   onAdd,
@@ -61,35 +69,37 @@ export function TaskActions({
         </Button>
       ) : (
         <>
-          <Button
-            size="small"
-            variant="secondary"
-            disabled={pending || active}
-            onClick={() =>
-              onCommand({ operation: task.plan_only ? "activate" : "hold" })
-            }
-          >
-            {task.plan_only ? "Activate work" : "Plan only"}
-          </Button>
-          {task.assignee && task.assignee.kind !== "human" ? (
+          {canStartTask(task, tasks) ? (
+            <Button
+              size="small"
+              disabled={pending}
+              leftIcon={<Play size={14} weight="fill" />}
+              onClick={() => onCommand({ operation: "start" })}
+            >
+              Start work
+            </Button>
+          ) : null}
+          {!planningHold(task, tasks) &&
+          !task.schedule &&
+          task.accepted !== false ? (
             <Button
               size="small"
               variant="secondary"
-              disabled={pending || (task.paused && active)}
-              onClick={() =>
-                onCommand({ operation: task.paused ? "resume" : "pause" })
-              }
+              disabled={pending || active}
+              leftIcon={<Pause size={14} />}
+              onClick={() => onCommand({ operation: "hold" })}
             >
-              {task.paused ? "Resume" : active ? "Stop attempt" : "Pause"}
+              Hold execution
             </Button>
           ) : null}
-          {task.status === "blocked" ? (
+          {active && !task.paused ? (
             <Button
               size="small"
-              disabled={pending || active}
-              onClick={() => onCommand({ operation: "retry" })}
+              variant="secondary"
+              disabled={pending}
+              onClick={() => onCommand({ operation: "pause" })}
             >
-              Retry
+              Stop attempt
             </Button>
           ) : null}
           {task.accepted === false ? (

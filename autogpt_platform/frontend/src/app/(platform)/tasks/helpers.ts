@@ -159,24 +159,94 @@ export function taskProgress(task: Task, tasks: Task[]) {
   };
 }
 
-export function planningHold(task: Task, tasks: Task[]) {
+export function taskLineage(task: Task, tasks: Task[]) {
+  const lineage: Task[] = [];
   let current: Task | undefined = task;
   const visited = new Set<string>();
   while (current && !visited.has(current.id)) {
     visited.add(current.id);
-    if (current.plan_only) return true;
+    lineage.push(current);
     current = tasks.find((item) => item.id === current?.parent_id);
   }
-  return false;
+  return lineage;
 }
 
-export function statusLabel(task: Task) {
+export function planningHoldSource(task: Task, tasks: Task[]) {
+  for (const current of taskLineage(task, tasks)) {
+    if (current.plan_only) return current;
+    if (current.execution_enabled) return undefined;
+  }
+}
+
+export function planningHold(task: Task, tasks: Task[]) {
+  return Boolean(planningHoldSource(task, tasks));
+}
+
+export function unmetPrerequisites(task: Task, tasks: Task[]) {
+  const dependencies = new Set(
+    taskLineage(task, tasks).flatMap((item) => item.dependencies ?? []),
+  );
+  return tasks.filter(
+    (item) => dependencies.has(item.id) && item.status !== "done",
+  );
+}
+
+export function canStartTask(task: Task, tasks: Task[]) {
+  const lineage = taskLineage(task, tasks);
+  if (
+    task.status === "done" ||
+    task.status === "canceled" ||
+    task.schedule ||
+    task.review_of
+  )
+    return false;
+  if (
+    task.dispatch_state === "claimed" ||
+    task.dispatch_state === "sent" ||
+    task.status === "working"
+  )
+    return false;
+  if (
+    lineage.some(
+      (item) => item.accepted === false || item.status === "canceled",
+    )
+  )
+    return false;
+  if (lineage.slice(1).some((item) => item.paused)) return false;
+  if (
+    (task.question && !task.question.answers) ||
+    (task.result && task.status === "needs_you")
+  )
+    return false;
+  return (
+    (planningHold(task, tasks) ||
+      Boolean(task.paused) ||
+      task.status === "blocked") &&
+    taskBranch(task, tasks).some(
+      (item) =>
+        item.accepted !== false &&
+        item.assignee &&
+        item.assignee.kind !== "human" &&
+        item.status !== "done" &&
+        item.status !== "canceled",
+    )
+  );
+}
+
+export function statusLabel(task: Task, tasks: Task[] = [task]) {
+  if (task.status === "done") return "Completed";
+  if (task.status === "canceled") return "Canceled";
+  if (task.accepted === false) return "Proposed new work";
+  if (task.question && !task.question.answers) return "Waiting for your answer";
   if (task.result && task.status === "needs_you") return "Awaiting acceptance";
   if (task.schedule)
     return task.schedule.paused ? "Schedule paused" : "Scheduled";
-  if (task.accepted === false) return "Proposed new work";
-  if (task.plan_only) return "Plan only";
   if (task.paused) return task.status === "working" ? "Stopping" : "Paused";
+  if (task.status === "blocked" && task.dispatch_state === "finished")
+    return "Attempt stopped";
+  if (planningHold(task, tasks)) return "Execution on hold";
+  if (unmetPrerequisites(task, tasks).length)
+    return "Waiting for prerequisites";
   if (
     task.dispatch_state === "pending" ||
     (task.dispatch_state === "sent" && task.status === "todo")
@@ -187,7 +257,5 @@ export function statusLabel(task: Task) {
     working: "Working",
     needs_you: "Needs you",
     blocked: "Blocked",
-    done: "Accepted",
-    canceled: "Canceled",
   }[task.status ?? "todo"];
 }

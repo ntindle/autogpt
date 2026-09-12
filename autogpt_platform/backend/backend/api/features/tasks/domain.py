@@ -30,16 +30,32 @@ def ancestors(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> list[Workspace
     return result
 
 
+def planning_hold(
+    task: WorkspaceTask, tasks: list[WorkspaceTask]
+) -> WorkspaceTask | None:
+    for item in ancestors(task, tasks):
+        if item.plan_only:
+            return item
+        if item.execution_enabled:
+            return None
+    return None
+
+
 def is_runnable(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> bool:
-    if not task.assignee or task.assignee.kind == "human" or task.schedule:
+    if (
+        not task.assignee
+        or task.assignee.kind == "human"
+        or task.schedule
+        or (task.question and task.question.answers is None)
+    ):
         return False
     if (
         task.status != "todo"
         and not (task.status == "blocked" and task.dispatch_state is None)
     ) or task.dispatch_state in ("claimed", "sent"):
         return False
-    if any(
-        t.plan_only or t.paused or not t.accepted or t.status == "canceled"
+    if planning_hold(task, tasks) or any(
+        t.paused or not t.accepted or t.status == "canceled"
         for t in ancestors(task, tasks)
     ):
         return False
