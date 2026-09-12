@@ -10,10 +10,11 @@ interface Props {
 
 export function TaskList({ page }: Props) {
   const { tasks, view } = page;
-  const { scroll, scrollRef } = view;
+  const { scrollRef, scrollPosition, loadedKey } = view;
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scroll;
-  }, [scroll, scrollRef]);
+    if (scrollRef.current && loadedKey)
+      scrollRef.current.scrollTop = scrollPosition.current;
+  }, [loadedKey, scrollPosition, scrollRef]);
   const visible = visibleTaskIDs(tasks, view.filter, view.search, view.project);
   function renderBranch(parentID: string | null, depth: number) {
     if (depth > 20) return null;
@@ -62,9 +63,7 @@ export function TaskList({ page }: Props) {
   return (
     <div
       ref={view.scrollRef}
-      onScroll={(event) =>
-        view.update({ scroll: event.currentTarget.scrollTop })
-      }
+      onScroll={(event) => view.rememberScroll(event.currentTarget.scrollTop)}
       className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-6"
       aria-label="Task checklist"
     >
