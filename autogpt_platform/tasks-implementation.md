@@ -540,3 +540,22 @@ sizes: help, recipient changes, preserved drafts, preview/download, and return
 to review passed without horizontal overflow. Screenshots and proof are in
 `/tmp/tasks-collaboration-harness/`. These browser checks used fictional data,
 not the user's authenticated browser session.
+
+The release is deployed at `http://192.168.1.192:3004/tasks`, code revision
+`c0650ddaadb62c3be0f47632da68801b26154083`, image config
+`sha256:66c7182805a847a852086df25d18853c32f262cf3f03f246810e4a310d631764`.
+The container is healthy, all 45 live page assets match the tested build, the
+installed backend exposes the recipient schema, and the prototype route and
+Unraid Edit action work. The Orgs template, 21 variables, appdata mount, and
+other container identities are preserved. The active software-factory run was
+allowed to finish before deployment.
+
+The first packaging attempt rolled back after startup timed out: the local
+shell's restrictive umask left copied backend directories at 0700. Incremental
+packaging must set every backend overlay directory to 0755 and files to 0644;
+BuildKit's cached copy layer must be invalidated after directory-mode changes.
+The corrected image was checked as the production `autogpt` user with a writable
+temporary data directory and cached tokenizer data before deployment. Nginx
+configuration tests/reloads continue to run as `autogpt_proxy` to preserve its
+cache-directory ownership. The previous working image remains available as
+`autogpt-tasks:pre-collaboration-20260913` for rollback.
