@@ -175,6 +175,7 @@ from ..tools.e2b_sandbox import get_or_create_sandbox, pause_sandbox_direct
 from ..tools.sandbox import WORKSPACE_PREFIX, make_session_path
 from ..tools.session_context import build_session_context
 from ..tools.skills import build_skills_context
+from ..task_context import task_context_block
 from ..tracking import track_user_message
 from ..transcript import (
     _run_compression,
@@ -4467,6 +4468,7 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
     user_id: str | None = None,
     session: ChatSession | None = None,
     file_ids: list[str] | None = None,
+    context: dict[str, str] | None = None,
     permissions: "CopilotPermissions | None" = None,
     envelope: "TurnEnvelope | None" = None,
     model: CopilotLLMModel | None = None,
@@ -5341,6 +5343,7 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
         query_message = await _maybe_prepend_builder_context(
             session, user_id, is_user_message, query_message
         )
+        query_message = await task_context_block(session, context) + query_message
 
         # When running without --resume and no prior transcript in storage,
         # seed the transcript builder from compressed DB messages so that
@@ -5533,6 +5536,9 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
                 # same live graph snapshot + guide as the initial attempt.
                 state.query_message = await _maybe_prepend_builder_context(
                     session, user_id, is_user_message, state.query_message
+                )
+                state.query_message = (
+                    await task_context_block(session) + state.query_message
                 )
                 prior_adapter = state.adapter
                 state.adapter = SDKResponseAdapter(
@@ -6351,6 +6357,11 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
                     user_id=user_id,
                     session=session,
                     file_ids=None,
+                    context={
+                        k: v
+                        for k, v in (context or {}).items()
+                        if k != "workspace_task"
+                    },
                     permissions=permissions,
                     # Same turn continuing, so it keeps its envelope. Omitting
                     # it would default to None and clear the contextvar for the

@@ -20,6 +20,7 @@ from backend.data.db_accessors import tasks_db
 
 from .base import BaseTool
 from .models import ErrorResponse, ResponseType, ToolResponseBase
+from .task_answers import record_chat_answer
 from .task_management import manage_existing_task
 
 
@@ -53,6 +54,11 @@ class ManageTasksTool(BaseTool):
             "Expert sessions can only assign unassigned steps within their delegated branch; they cannot manage unrelated tasks. "
             "In any chat, add_step with task_id creates a real child under that owned parent. Outside a delegated task conversation its owner remains a suggestion. Never simulate nesting with title prefixes. "
             "Use list with all_projects=true or project to find existing prerequisites across projects. Expert cross-project links do not expand their delegation or review scope. "
+            "Use answer_question in the linked chat to reconcile a clear user reply or correction with the current question_id. "
+            "Supply answers as keyword-to-verbatim-user-quote pairs for only the questions actually resolved; unrelated or ambiguous messages are not answers. "
+            "Use source_quote to identify an earlier user reply after the question was asked when recovering a stuck conversation; honor later corrections. "
+            "An empty answers object saves relevant clarification context without resolving questions. Never invent approval or treat authentication instructions as completed account setup. "
+            "This continues the current conversation without scheduling a duplicate and never releases execution holds or accepts results. "
             "Keep visible tasks at deliverable granularity. Use ask_question for human questions."
         )
 
@@ -70,10 +76,24 @@ class ManageTasksTool(BaseTool):
                         "assign_step",
                         *sorted(MANAGEMENT_OPERATIONS),
                         "activity",
+                        "answer_question",
                         "submit_result",
                         "accept_result",
                         "request_changes",
                     ],
+                },
+                "question_id": {
+                    "type": "string",
+                    "description": "For answer_question, the current question batch ID from this task's context or list. Rejects stale questions.",
+                },
+                "source_quote": {
+                    "type": "string",
+                    "description": "For answer_question, optional exact quote identifying an earlier user reply in this conversation. Omit to use the latest reply. Use earlier replies only for unresolved items, and honor subsequent corrections. Never use assistant/tool messages as human answers.",
+                },
+                "answers": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "For answer_question, map only clearly resolved question keywords to exact quotes from the selected user reply (latest by default). Partial answers and explicit corrections are supported. Use {} to preserve relevant context without answering. Do not infer consent or account setup completion.",
                 },
                 "task_id": {
                     "type": "string",
@@ -133,6 +153,9 @@ class ManageTasksTool(BaseTool):
         description: str | None = None,
         evidence: str = "",
         project: str | None = None,
+        question_id: str = "",
+        answers: dict[str, str] | None = None,
+        source_quote: str = "",
         **kwargs
     ) -> ToolResponseBase:
         if not user_id:
@@ -141,10 +164,35 @@ class ManageTasksTool(BaseTool):
         if (
             root
             and root.question_for
-            and operation not in ("list", "activity", "submit_result")
+            and operation
+            not in ("list", "activity", "submit_result", "answer_question")
         ):
             return ErrorResponse(
                 message="This consultation can inspect context and submit an answer, but cannot manage task execution or approve work."
+            )
+        if operation == "answer_question":
+            if (
+                not root
+                or (task_id and task_id != root.id)
+                or not question_id
+                or answers is None
+            ):
+                return ErrorResponse(
+                    message="Provide this chat's current question_id and an answers object"
+                )
+            try:
+                updated = await record_chat_answer(
+                    user_id, session, question_id, answers, source_quote
+                )
+            except (TaskConflict, ValueError) as exc:
+                return ErrorResponse(message=str(exc), session_id=session.session_id)
+            return WorkspaceTasksResponse(
+                message=(
+                    "Answers recorded from your reply. Continue in this conversation within existing execution constraints."
+                    if updated.question and updated.question.answers is not None
+                    else "Relevant answers and context recorded. Unanswered questions remain open; no automatic continuation was queued."
+                ),
+                tasks=[updated],
             )
         if operation in MANAGEMENT_OPERATIONS or (
             operation == "assign_step" and not session.expert_id

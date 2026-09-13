@@ -559,3 +559,39 @@ temporary data directory and cached tokenizer data before deployment. Nginx
 configuration tests/reloads continue to run as `autogpt_proxy` to preserve its
 cache-directory ownership. The previous working image remains available as
 `autogpt-tasks:pre-collaboration-20260913` for rollback.
+
+
+## Clarification conversations retain tools (September 13, 2026)
+
+Tasks no longer construct or narrow tool permissions, including while waiting for
+an answer, on a planning hold, or in a teammate consultation. Platform, user,
+Expert, and inherited execution permissions remain intact. Task context explains
+waiting for input separately from explicit execution constraints; dispatch,
+planning holds, dependency checks, and result-approval rules remain in place.
+
+The SDK now consumes the executor's workspace-task context on every turn,
+including resumed sessions. Reduced-context retries and queued user follow-ups
+fetch a fresh snapshot. The baseline engine receives the same task context.
+
+`manage_tasks answer_question` records selected question answers from saved user
+messages, including partial answers and corrections. `source_quote` can identify
+an earlier answer when recovering an already-stuck conversation. The database
+checks user/session ownership, the current question ID, message timing and role,
+and verbatim evidence. Earlier messages cannot overwrite a later recorded answer.
+Unrelated replies leave questions open. An empty answer map saves relevant context
+without resolving anything. Tasks and Home update atomically, and the active chat
+continues without queuing a duplicate dispatch. Recording an answer does not
+release a planning hold, accept a result, or complete account authentication.
+
+Validation: 80 isolated Tasks tests; 194 permission/baseline tests; SDK generator
+checks for new, resumed, retried, and queued-follow-up turns; whole-backend
+formatting, lint, and type checks. Five synthetic Claude Sonnet 5 checks through
+the deployed provider selected the expected answer/authentication actions,
+preserved a separate publishing approval, left a status request unanswered, and
+recovered an answer already in conversation history. Those model checks inspected
+proposed calls only; no repository or integration actions were executed.
+
+The broader SDK retry suite has an order-dependent stall around tests that mock
+`asyncio.sleep`; the reduced-context transient-retry case passes independently.
+The new task-context generator cases pass together. Provider routing and the
+independent Unraid bubblewrap failure are outside this change.

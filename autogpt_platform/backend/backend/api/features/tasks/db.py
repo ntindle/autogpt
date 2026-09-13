@@ -7,6 +7,9 @@ from backend.api.features.tasks.agent_steps import (
 from backend.api.features.tasks.agent_steps import (
     assign_workspace_task_step as assign_workspace_task_step,
 )
+from backend.api.features.tasks.chat_answers import (
+    answer_workspace_task_from_chat as answer_workspace_task_from_chat,
+)
 from backend.api.features.tasks.commands import apply_command
 from backend.api.features.tasks.domain import TaskConflict, is_runnable, record
 from backend.api.features.tasks.lifecycle import (

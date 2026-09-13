@@ -535,6 +535,7 @@ class DatabaseManager(AppService):
     unfinished_workspace_task_dispatches = _(
         tasks_db.unfinished_workspace_task_dispatches
     )
+    answer_workspace_task_from_chat = _(tasks_db.answer_workspace_task_from_chat)
     start_workspace_task_run = _(tasks_db.start_workspace_task_run)
     workspace_task_planning_inputs = _(tasks_db.workspace_task_planning_inputs)
     reconsider_workspace_task_plans = _(tasks_db.reconsider_workspace_task_plans)
@@ -729,6 +730,7 @@ class DatabaseManagerClient(AppServiceClient):
 class DatabaseManagerAsyncClient(AppServiceClient):
     d = DatabaseManager
 
+    answer_workspace_task_from_chat = d.answer_workspace_task_from_chat
     start_workspace_task_run = d.start_workspace_task_run
     workspace_task_planning_inputs = d.workspace_task_planning_inputs
     reconsider_workspace_task_plans = d.reconsider_workspace_task_plans

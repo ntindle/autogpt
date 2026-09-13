@@ -1,25 +1,7 @@
-from typing import get_args
-
 from backend.api.features.tasks.context import execution_context
 from backend.copilot.model import ChatSession
-from backend.copilot.permissions import CopilotPermissions, ToolName
+from backend.copilot.permissions import CopilotPermissions
 from backend.data.db_accessors import tasks_db
-
-PLANNING_TOOLS: list[str] = [
-    "ask_question",
-    "manage_tasks",
-    "find_agent",
-    "find_block",
-    "find_library_agent",
-    "search_docs",
-    "get_doc_page",
-    "list_team",
-    "memory_search",
-    "list_workspace_files",
-    "read_workspace_file",
-    "web_search",
-    "web_fetch",
-]
 
 
 async def task_execution_policy(
@@ -34,43 +16,11 @@ async def task_execution_policy(
         raise RuntimeError(
             "This task turn was already claimed; retry with a new attempt if needed"
         )
-    task = authority.task
-    if not task:
-        return (
-            CopilotPermissions(tools=[], tools_exclude=False),
-            "The linked task is unavailable. No execution is authorized.",
+    if not authority.task:
+        return permissions, (
+            "The linked task is unavailable. Discuss the user's request with your normally "
+            "authorized tools, but do not assume delegation from the missing task."
         )
-    context = execution_context(
-        task, await tasks_db().list_workspace_tasks(session.user_id)
-    )
-    if authority.can_execute and task.question_for:
-        consultation = CopilotPermissions(tools=PLANNING_TOOLS, tools_exclude=False)
-        return (
-            (
-                consultation.merged_with_parent(
-                    permissions, all_tools=frozenset(get_args(ToolName))
-                )
-                if permissions
-                else consultation
-            ),
-            context
-            + "Answer this teammate's question using read-only information. Do not execute the underlying task or manage other tasks. Use manage_tasks submit_result to return your answer automatically. Human approvals and account setup must be asked of the user.",
-        )
-    if authority.can_execute:
-        return (
-            permissions,
-            context
-            + "Work is delegated. Respect child assignments; submit evidence through manage_tasks before completion.",
-        )
-    planning = CopilotPermissions(tools=PLANNING_TOOLS, tools_exclude=False)
-    return (
-        (
-            planning.merged_with_parent(
-                permissions, all_tools=frozenset(get_args(ToolName))
-            )
-            if permissions
-            else planning
-        ),
-        context
-        + "Planning and discussion only. Do not execute deliverables; the user can confirm ownership or activate work in Tasks.",
+    return permissions, execution_context(
+        authority.task, await tasks_db().list_workspace_tasks(session.user_id)
     )

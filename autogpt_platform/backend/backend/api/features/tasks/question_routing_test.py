@@ -198,9 +198,8 @@ async def test_question_consultation_is_read_only_and_cannot_execute_under_hold(
     permissions, context = await task_execution_policy(
         session, None, "consult-read-only"
     )
-    assert "read_workspace_file" in permissions.tools
-    assert "write_workspace_file" not in permissions.tools
-    assert "delegate_to_expert" not in permissions.tools
+    assert permissions is None
+    assert "not execution of the underlying task" in context
     assert "automatically" in context
     await tasks.workspace_task_run_event(owner, consultation.session_id, "finished")
     await tasks.workspace_task_run_event(owner, task.session_id, "finished")

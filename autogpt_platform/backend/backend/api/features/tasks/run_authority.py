@@ -36,7 +36,7 @@ async def start_workspace_task_run(
             for parent in ancestors(task, tasks)
             for dependency in parent.dependencies
         )
-        if (
+        can_execute = not (
             held
             or not dependencies_done
             or (task.question and task.question.answers is None)
@@ -44,15 +44,19 @@ async def start_workspace_task_run(
             or task.assignee.kind == "human"
             or task.status in ("done", "canceled", "needs_you")
             or task.last_turn_id == turn_id
-        ):
-            return TaskRunAuthority(task=task)
+        )
         task.started_turn_ids.append(turn_id)
         task.last_turn_id = turn_id
-        task.status, task.activity, task.dispatch_state = (
-            "working",
-            "Working on your task",
-            "sent",
+        if can_execute:
+            task.status, task.activity, task.dispatch_state = (
+                "working",
+                "Working on your task",
+                "sent",
+            )
+        record(
+            task,
+            task.assignee.name if task.assignee else "AutoPilot",
+            "Started working" if can_execute else "Continuing task conversation",
         )
-        record(task, task.assignee.name, "Started working")
         await _save(tx, task)
-        return TaskRunAuthority(task=task, can_execute=True)
+        return TaskRunAuthority(task=task, can_execute=can_execute)

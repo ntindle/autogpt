@@ -1009,6 +1009,18 @@ def _make_sdk_patches(
             f"{_SVC}.build_skills_context",
             dict(new_callable=AsyncMock, return_value=""),
         ),
+        (
+            f"{_SVC}.build_session_context",
+            dict(new_callable=AsyncMock, return_value=""),
+        ),
+        (f"{_SVC}._update_title_async", dict(new_callable=AsyncMock)),
+        (
+            f"{_SVC}.inject_user_context",
+            dict(
+                new_callable=AsyncMock,
+                side_effect=lambda understanding, message, *args, **kwargs: message,
+            ),
+        ),
         (f"{_SVC}.get_redis_async", dict(new_callable=AsyncMock)),
         (
             f"{_SVC}.AsyncClusterLock",
@@ -1158,6 +1170,186 @@ class TestStreamChatCompletionRetryIntegration:
         cm.__aenter__.return_value = client
         cm.__aexit__.return_value = None
         return cm
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("resumed", [False, True])
+    async def test_task_context_and_normal_permissions_reach_sdk_on_every_turn(
+        self, resumed
+    ):
+        from backend.copilot.model import ChatMessage
+        from backend.copilot.permissions import CopilotPermissions
+        from backend.copilot.response_model import StreamError
+
+        session = self._make_session()
+        session.title = "Define wholesale sample package offer"
+        session.metadata.workspace_task_id = "private-repo-task"
+        reply = "it's private, auth with GitHub"
+        session.messages = []
+        if resumed:
+            session.messages = [
+                ChatMessage(role="user", content="Inspect the wholesale repository"),
+                ChatMessage(
+                    role="assistant", content="Is that repository public or private?"
+                ),
+            ]
+        session.messages.append(ChatMessage(role="user", content=reply, sequence=2))
+        client_cm = self._make_client_mock(result_message=self._make_result_message())
+        patches = _make_sdk_patches(session, "", None, lambda *a, **kw: client_cm)
+        permissions = CopilotPermissions(tools=["delete_workspace_file"])
+        forwarded = "Waiting for input. Normally authorized tools remain available. question_id=repo-question"
+        captured = {}
+        with contextlib.ExitStack() as stack:
+            for target, kwargs in patches:
+                captured[target] = stack.enter_context(patch(target, **kwargs))
+            restore = _RestoreResult(
+                use_resume=resumed,
+                resume_file="/tmp/resumed-session.jsonl" if resumed else None,
+                transcript_msg_count=2 if resumed else 0,
+            )
+            stack.enter_context(
+                patch(f"{_SVC}.inject_user_context", new=AsyncMock(return_value=reply))
+            )
+            stack.enter_context(
+                patch(f"{_SVC}.build_session_context", new=AsyncMock(return_value=""))
+            )
+            stack.enter_context(
+                patch(
+                    f"{_SVC}._fetch_graphiti_context",
+                    new=AsyncMock(return_value=(False, "")),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    f"{_SVC}._restore_cli_session_for_turn",
+                    new=AsyncMock(return_value=restore),
+                )
+            )
+            events = [
+                event
+                async for event in stream_chat_completion_sdk(
+                    session_id=session.session_id,
+                    session=session,
+                    message=reply,
+                    user_id=session.user_id,
+                    permissions=permissions,
+                    context={"workspace_task": forwarded},
+                )
+            ]
+        assert not [event for event in events if isinstance(event, StreamError)], events
+        query = client_cm.__aenter__.return_value.query.call_args.args[0]
+        assert "<workspace_task_context>" in query
+        assert forwarded in query and reply in query
+        assert (
+            captured[f"{_SVC}.set_execution_context"].call_args.kwargs["permissions"]
+            is permissions
+        )
+        hidden = captured[f"{_SVC}.create_copilot_mcp_server"].call_args.kwargs[
+            "hidden_tool_names"
+        ]
+        assert "delete_workspace_file" in hidden
+        assert (
+            not {"connect_integration", "run_block", "run_mcp_tool", "read_skill"}
+            & hidden
+        )
+        options = captured[f"{_SVC}.ClaudeSDKClient"].call_args.kwargs["options"]
+        for name in ("connect_integration", "run_block", "run_mcp_tool", "read_skill"):
+            assert f"mcp__copilot__{name}" in options.allowed_tools
+        assert bool(options.resume) == resumed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("followup", [False, True])
+    async def test_task_context_refreshes_on_retry_or_queued_followup(self, followup):
+        from backend.api.features.tasks.models import WorkspaceTask
+        from backend.copilot.pending_messages import PendingMessage
+
+        session = self._make_session()
+        session.title = "Wholesale offer"
+        session.metadata.workspace_task_id = "repo-task"
+        session.messages[0].sequence = 0
+        first = self._make_client_mock(
+            raises_on_enter=not followup,
+            result_message=self._make_result_message() if followup else None,
+        )
+        second = self._make_client_mock(result_message=self._make_result_message())
+        patches = _make_sdk_patches(session, "", None, [first, second])
+        current = WorkspaceTask(
+            id="repo-task",
+            user_id="test-user",
+            session_id=session.session_id,
+            title="Updated repository context",
+            plan_only=True,
+        )
+        task_db = MagicMock()
+        task_db.list_workspace_tasks = AsyncMock(return_value=[current])
+
+        async def persist(s, *args):
+            for index, message in enumerate(s.messages):
+                message.sequence = index
+            return s
+
+        with contextlib.ExitStack() as stack:
+            for target, kwargs in patches:
+                stack.enter_context(patch(target, **kwargs))
+            stack.enter_context(
+                patch("backend.copilot.task_context.tasks_db", return_value=task_db)
+            )
+            stack.enter_context(
+                patch(
+                    f"{_SVC}.inject_user_context", new=AsyncMock(return_value="hello")
+                )
+            )
+            stack.enter_context(
+                patch(f"{_SVC}.build_session_context", new=AsyncMock(return_value=""))
+            )
+            stack.enter_context(
+                patch(
+                    f"{_SVC}._fetch_graphiti_context",
+                    new=AsyncMock(return_value=(False, "")),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    f"{_SVC}.persist_session_safe", new=AsyncMock(side_effect=persist)
+                )
+            )
+            if followup:
+                stack.enter_context(
+                    patch(
+                        f"{_SVC}.drain_pending_safe",
+                        new=AsyncMock(
+                            side_effect=[
+                                [],
+                                [
+                                    PendingMessage(
+                                        content="it's private, auth with GitHub"
+                                    )
+                                ],
+                                [],
+                                [],
+                            ]
+                        ),
+                    )
+                )
+            events = [
+                event
+                async for event in stream_chat_completion_sdk(
+                    session_id=session.session_id,
+                    session=session,
+                    message="hello",
+                    user_id="test-user",
+                    context={"workspace_task": "OUTDATED_INITIAL_SNAPSHOT"},
+                )
+            ]
+        assert not [event for event in events if isinstance(event, StreamError)], events
+        first_query = first.__aenter__.return_value.query.call_args.args[0]
+        second_query = second.__aenter__.return_value.query.call_args.args[0]
+        assert "OUTDATED_INITIAL_SNAPSHOT" in first_query
+        assert "Updated repository context" in second_query
+        assert "explicitly on a planning hold" in second_query
+        assert "OUTDATED_INITIAL_SNAPSHOT" not in second_query
+        if followup:
+            assert "it's private, auth with GitHub" in second_query
+        task_db.list_workspace_tasks.assert_awaited_once_with("test-user")
 
     @pytest.mark.asyncio
     async def test_prompt_too_long_retries_with_compaction(self):

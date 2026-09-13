@@ -115,6 +115,7 @@ from backend.copilot.service import (
     strip_user_context_tags,
 )
 from backend.copilot.session_cleanup import prune_orphan_tool_calls
+from backend.copilot.task_context import task_context_block
 from backend.copilot.thinking_stripper import ThinkingStripper as _ThinkingStripper
 from backend.copilot.token_tracking import (
     _extract_cache_creation_tokens,
@@ -2133,7 +2134,9 @@ async def stream_chat_completion_baseline(
 
     # Append attachment + context hints and image blocks to the last user
     # message in a single reverse scan.
-    extra_hint = attachment_hint + context_hint
+    extra_hint = (
+        attachment_hint + context_hint + await task_context_block(session, context)
+    )
     if extra_hint or image_blocks:
         for i in range(len(openai_messages) - 1, -1, -1):
             if openai_messages[i].get("role") == "user":
