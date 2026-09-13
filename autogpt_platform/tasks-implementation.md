@@ -583,15 +583,34 @@ without resolving anything. Tasks and Home update atomically, and the active cha
 continues without queuing a duplicate dispatch. Recording an answer does not
 release a planning hold, accept a result, or complete account authentication.
 
-Validation: 80 isolated Tasks tests; 194 permission/baseline tests; SDK generator
-checks for new, resumed, retried, and queued-follow-up turns; whole-backend
-formatting, lint, and type checks. Five synthetic Claude Sonnet 5 checks through
+Validation: 80 isolated Tasks tests, 194 permission/baseline tests, and 62 SDK
+tests (336 total), including new, resumed, retried, and queued-follow-up turns;
+whole-backend formatting, lint, and type checks. Five synthetic Claude Sonnet 5 checks through
 the deployed provider selected the expected answer/authentication actions,
 preserved a separate publishing approval, left a status request unanswered, and
 recovered an answer already in conversation history. Those model checks inspected
 proposed calls only; no repository or integration actions were executed.
 
-The broader SDK retry suite has an order-dependent stall around tests that mock
-`asyncio.sleep`; the reduced-context transient-retry case passes independently.
-The new task-context generator cases pass together. Provider routing and the
-independent Unraid bubblewrap failure are outside this change.
+The SDK tests passed in two runs: 61 together and the reduced-context transient
+retry case separately. A combined run stalled around that test, which mocks
+`asyncio.sleep`; it passed independently. Provider routing and the independent
+Unraid bubblewrap failure are outside this change.
+
+
+### Deployment verification
+
+Source `2b4574df36d658423c378294c6934d0d946b5965` is deployed and healthy at
+`http://192.168.1.192:3004/tasks`. Image config:
+`sha256:3c72aa0a0bfada590fa486cdeb038790bb210276dd403caabe27272ce71d28f9`.
+The image was built locally on Linux; only the 240 KB backend layer was transferred,
+reusing all 96 existing layers. Python 3.13 imports, permission behavior, and tool
+schema passed under the image's unprivileged `autogpt` user before deployment.
+
+The idle Tasks instance was replaced using its existing Orgs-derived Unraid
+DockerMan template. All 21 variables, the data mount, port binding, and native Edit
+control were verified; other container IDs and the Orgs template were unchanged.
+The Tasks page, complete CSS response, and breakdown prototype are available.
+Live read-only checks verified task-context delivery for the original wholesale
+conversation and registration of the answer RPC. No live task answers or
+conversation messages were changed by verification. Rollback image:
+`autogpt-tasks:pre-clarification-20260913`.
