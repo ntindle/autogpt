@@ -91,7 +91,7 @@ class ManageTasksTool(BaseTool):
                 "description": {"type": "string"},
                 "evidence": {
                     "type": "string",
-                    "description": "Actual result, evidence, output links, or requested changes. Never claim completion just because a run ended.",
+                    "description": "Actual result, evidence, output links, or requested changes. Link workspace files as [filename](workspace://file_id) using real returned IDs, not local paths. Never claim completion just because a run ended.",
                 },
                 "project": {
                     "type": "string",
@@ -137,6 +137,15 @@ class ManageTasksTool(BaseTool):
     ) -> ToolResponseBase:
         if not user_id:
             return ErrorResponse(message="Authentication required")
+        root = await tasks_db().workspace_task_for_session(user_id, session.session_id)
+        if (
+            root
+            and root.question_for
+            and operation not in ("list", "activity", "submit_result")
+        ):
+            return ErrorResponse(
+                message="This consultation can inspect context and submit an answer, but cannot manage task execution or approve work."
+            )
         if operation in MANAGEMENT_OPERATIONS or (
             operation == "assign_step" and not session.expert_id
         ):
@@ -151,7 +160,6 @@ class ManageTasksTool(BaseTool):
                 kwargs,
             )
         title, description, project = title or "", description or "", project or ""
-        root = await tasks_db().workspace_task_for_session(user_id, session.session_id)
         if operation in ("add_step", "assign_step") and (
             root or (operation == "add_step" and task_id)
         ):
@@ -278,9 +286,13 @@ class ManageTasksTool(BaseTool):
             )
             return WorkspaceTasksResponse(
                 message=(
-                    "Result submitted for acceptance"
-                    if operation == "submit_result"
-                    else "Activity updated"
+                    "Answer returned to the requesting task"
+                    if operation == "submit_result" and root.question_for
+                    else (
+                        "Result submitted for acceptance"
+                        if operation == "submit_result"
+                        else "Activity updated"
+                    )
                 ),
                 tasks=[updated] if updated else [],
             )

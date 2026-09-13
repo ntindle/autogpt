@@ -1,19 +1,33 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getGetV2GetSessionQueryKey } from "@/app/api/__generated__/endpoints/chat/chat";
-import { useListWorkspaceTasks } from "@/app/api/__generated__/endpoints/tasks/tasks";
+import {
+  commandWorkspaceTask,
+  useListWorkspaceTasks,
+} from "@/app/api/__generated__/endpoints/tasks/tasks";
 import { okData } from "@/app/api/helpers";
 import { useTaskQuestionAnswer } from "../../tools/AskQuestion/useTaskQuestionAnswer";
 import { QuestionAnswerForm } from "./QuestionDock";
 import type { PendingQuestions, TaskQuestionBinding } from "./helpers";
+import { TaskQuestionRecipient } from "../../../tasks/components/TaskQuestionRecipient";
+import { ClarificationQuestionsCard } from "../ClarificationQuestionsCard/ClarificationQuestionsCard";
+import type { ClarifyingQuestion } from "../../tools/clarifying-questions";
+import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
+import { invalidateTaskSurfaces } from "@/lib/taskSync";
 
 interface Props {
   dockId: string;
+  variant?: "card" | "chain";
   questions: PendingQuestions["questions"];
   taskBinding: TaskQuestionBinding;
 }
 
-export function TaskQuestionsForm({ dockId, questions, taskBinding }: Props) {
+export function TaskQuestionsForm({
+  dockId,
+  questions,
+  taskBinding,
+  variant = "chain",
+}: Props) {
   const query = useListWorkspaceTasks({
     query: { select: okData, refetchInterval: 5000 },
   });
@@ -52,10 +66,48 @@ export function TaskQuestionsForm({ dockId, questions, taskBinding }: Props) {
       context,
     );
   }
+  async function route(keyword: string, target: TaskAssignee) {
+    if (!task?.id || !task.question)
+      throw new Error("Refresh the question before redirecting it.");
+    const response = await commandWorkspaceTask(task.id, {
+      operation: "route_question",
+      version: task.version ?? 1,
+      question_id: task.question.id,
+      question_keyword: keyword,
+      question_target: target,
+    });
+    if (!okData(response))
+      throw new Error("Could not redirect the question. Please try again.");
+    await invalidateTaskSurfaces(cache);
+  }
+  function recipient(question: ClarifyingQuestion) {
+    return (
+      <TaskQuestionRecipient
+        question={question}
+        owner={task?.assignee}
+        tasks={query.data?.tasks ?? []}
+        assignees={query.data?.assignees ?? []}
+        onRoute={route}
+      />
+    );
+  }
+  const currentQuestions = task?.question?.questions ?? questions;
+  if (variant === "card")
+    return (
+      <ClarificationQuestionsCard
+        questions={currentQuestions}
+        sessionId={dockId}
+        message="Replies return to the task automatically."
+        renderRecipient={recipient}
+        onSubmitAnswers={(answers) => submit(answers, "")}
+      />
+    );
   return (
     <QuestionAnswerForm
       dockId={dockId}
-      questions={questions}
+      questions={currentQuestions}
+      renderRecipient={recipient}
+      isPending={!query.data || query.isError}
       onAnswer={submit}
     />
   );

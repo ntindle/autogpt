@@ -5,8 +5,11 @@ import { Card } from "@/components/atoms/Card/Card";
 import { Input } from "@/components/atoms/Input/Input";
 import { Text } from "@/components/atoms/Text/Text";
 import { cn } from "@/lib/utils";
-import { useEffect, useRef, useState } from "react";
-import type { ClarifyingQuestion } from "../../tools/clarifying-questions";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  questionNeedsHumanAnswer,
+  type ClarifyingQuestion,
+} from "../../tools/clarifying-questions";
 import {
   Chatting01Icon,
   CheckmarkCircle02Icon,
@@ -15,6 +18,7 @@ import { Icon } from "@/components/atoms/Icon/Icon";
 
 interface Props {
   questions: ClarifyingQuestion[];
+  renderRecipient?: (question: ClarifyingQuestion) => ReactNode;
   message: string;
   sessionId?: string;
   onSubmitAnswers: (answers: Record<string, string>) => void | Promise<void>;
@@ -25,6 +29,7 @@ interface Props {
 
 export function ClarificationQuestionsCard({
   questions,
+  renderRecipient,
   message,
   sessionId,
   onSubmitAnswers,
@@ -84,8 +89,17 @@ export function ClarificationQuestionsCard({
     setAnswers((prev) => ({ ...prev, [keyword]: value }));
   }
 
+  const humanQuestions = questions.filter(questionNeedsHumanAnswer);
+  const waitingForTeammate = questions.some(
+    (q) => !q.answer && q.target && q.target.kind !== "human",
+  );
+
   async function handleSubmit() {
-    if (isSubmitting || !questions.every((q) => answers[q.keyword]?.trim()))
+    if (
+      isSubmitting ||
+      !humanQuestions.length ||
+      !humanQuestions.every((q) => answers[q.keyword]?.trim())
+    )
       return;
     setIsSubmitting(true);
     setSubmitError("");
@@ -107,9 +121,11 @@ export function ClarificationQuestionsCard({
     }
   }
 
-  const allAnswered = questions.every((q) => answers[q.keyword]?.trim());
+  const allAnswered =
+    humanQuestions.length > 0 &&
+    humanQuestions.every((q) => answers[q.keyword]?.trim());
 
-  if (isAnswered || isSubmitted) {
+  if (isAnswered || (isSubmitted && !waitingForTeammate)) {
     return (
       <div
         className={cn(
@@ -165,7 +181,9 @@ export function ClarificationQuestionsCard({
 
             <div className="space-y-6">
               {questions.map((q, index) => {
-                const hasAnswer = !!answers[q.keyword]?.trim();
+                const hasAnswer =
+                  !!q.answer ||
+                  (questionNeedsHumanAnswer(q) && !!answers[q.keyword]?.trim());
 
                 return (
                   <div
@@ -204,18 +222,21 @@ export function ClarificationQuestionsCard({
                             Example: {q.example}
                           </Text>
                         )}
-                        <Input
-                          type="textarea"
-                          id={`clarification-${q.keyword}-${index}`}
-                          label={q.question}
-                          hideLabel
-                          placeholder="Your answer..."
-                          rows={2}
-                          value={answers[q.keyword] || ""}
-                          onChange={(e) =>
-                            handleAnswerChange(q.keyword, e.target.value)
-                          }
-                        />
+                        {renderRecipient?.(q)}
+                        {questionNeedsHumanAnswer(q) ? (
+                          <Input
+                            type="textarea"
+                            id={`clarification-${q.keyword}-${index}`}
+                            label={q.question}
+                            hideLabel
+                            placeholder="Your answer..."
+                            rows={2}
+                            value={answers[q.keyword] || ""}
+                            onChange={(e) =>
+                              handleAnswerChange(q.keyword, e.target.value)
+                            }
+                          />
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -228,21 +249,23 @@ export function ClarificationQuestionsCard({
                 {submitError}
               </p>
             ) : null}
-            <div className="flex max-w-[25rem] gap-2">
-              <Button
-                onClick={handleSubmit}
-                disabled={!allAnswered || isSubmitting}
-                className="w-auto flex-1"
-                variant="primary"
-              >
-                Submit Answers
-              </Button>
-              {onCancel && (
-                <Button onClick={onCancel} variant="outline">
-                  Cancel
+            {humanQuestions.length ? (
+              <div className="flex max-w-[25rem] gap-2">
+                <Button
+                  onClick={handleSubmit}
+                  disabled={!allAnswered || isSubmitting}
+                  className="w-auto flex-1"
+                  variant="primary"
+                >
+                  Submit Answers
                 </Button>
-              )}
-            </div>
+                {onCancel && (
+                  <Button onClick={onCancel} variant="outline">
+                    Cancel
+                  </Button>
+                )}
+              </div>
+            ) : null}
           </Card>
         </div>
       </div>

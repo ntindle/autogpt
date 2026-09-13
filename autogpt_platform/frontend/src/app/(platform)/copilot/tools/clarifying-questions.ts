@@ -1,4 +1,10 @@
-export interface ClarifyingQuestion {
+import type { TaskQuestionItem } from "@/app/api/__generated__/models/taskQuestionItem";
+
+export interface ClarifyingQuestion
+  extends Pick<
+    TaskQuestionItem,
+    "target" | "purpose" | "answer" | "answered_by" | "consultation_task_id"
+  > {
   question: string;
   keyword: string;
   example?: string;
@@ -143,4 +149,10 @@ export function buildClarificationAnswersMessage(
 
   const action = mode === "create" ? "creating" : "editing";
   return `**Here are my answers:**\n\n${contextMessage}\n\nPlease proceed with ${action} the agent.`;
+}
+
+export function questionNeedsHumanAnswer(question: ClarifyingQuestion) {
+  return (
+    !question.answer && (!question.target || question.target.kind === "human")
+  );
 }

@@ -495,3 +495,48 @@ and the Orgs Stack template were preserved. Live Tasks/chat JavaScript and ten
 CSS assets matched the tested build byte-for-byte. The prototype route was
 restored using nginx's service account. The previous image is retained as
 `autogpt-tasks:pre-scroll-20260912`.
+
+## Question recipients and deliverable review (September 13)
+
+Each task question can target You, AutoPilot/Otto, or an eligible Expert without
+changing the task's owner. `ask_question` accepts a recipient per question and
+uses the existing team roster. Approvals and account setup stay human; specialist
+advice returns automatically. Regular chats retain `delegate_to_expert` for ad
+hoc teammate communication.
+
+A directed question uses an optional child task and the existing durable worker
+queue. Its conversation receives the question and parent context with read-only
+tools. Submitting the answer fills its source question, with attribution, and
+resumes the original task once all required answers are present. Redirected or
+stale replies cannot overwrite a newer question. Human drafts and additional
+context survive while other recipients answer. Chat and Home use only the
+unanswered human questions for their reminders.
+
+Tasks and both chat question forms expose an Answer from control for each
+question. Human-only purposes explain why their recipient is fixed. Teammate
+questions show who is answering and link to the consultation conversation.
+
+A submitted draft with outstanding questions occupies one visible task row;
+its former approval row is folded into it, including in task/filter counts.
+The same details panel shows the draft, deliverable files, and questions.
+Acceptance waits for the questions to be resolved and an updated result to be
+submitted. The combined row persists while that update is in progress.
+
+Workspace links in results use the same authenticated URL conversion as chat,
+fixing the Markdown renderer's `[blocked]` label. Referenced file cards provide
+preview and download, reusing the existing artifact renderer. Files mentioned
+by name can be matched against the linked conversation's file list. Preview
+returns to the review's Accept result and Request changes controls.
+
+The stopped-attempt circle now has a portaled hover/focus explanation and a
+click/tap popover with an explicit Open chat action. Inspecting it does not start
+a conversation. Waiting for a teammate does not show a stopped-attempt warning.
+
+Validation: 73 Tasks database tests passed in a separate local database; 24
+question-tool tests passed with metadata RPC calls isolated. The final frontend
+lint/types checks and 125 relevant integration tests passed. Chromium and WebKit
+fixtures exercised the actual changed components at desktop and 390px touch
+sizes: help, recipient changes, preserved drafts, preview/download, and return
+to review passed without horizontal overflow. Screenshots and proof are in
+`/tmp/tasks-collaboration-harness/`. These browser checks used fictional data,
+not the user's authenticated browser session.

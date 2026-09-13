@@ -1,5 +1,3 @@
-from uuid import uuid4
-
 from backend.api.features.tasks.domain import (
     TaskConflict,
     ancestors,
@@ -11,6 +9,10 @@ from backend.api.features.tasks.domain import (
     record,
 )
 from backend.api.features.tasks.models import TaskCommand, WorkspaceTask
+from backend.api.features.tasks.question_routing import (
+    refresh_question_state,
+    route_question,
+)
 from backend.api.features.tasks.suggestion_commands import dismiss_suggestion
 
 
@@ -21,7 +23,10 @@ def apply_command(
     actor: str | None = None,
 ) -> None:
     actor = actor or task.user_id
-    if command.operation != "answer" and task.version != command.version:
+    if (
+        command.operation not in ("answer", "route_question")
+        and task.version != command.version
+    ):
         raise TaskConflict("This task changed. Refresh before applying your change.")
     op = command.operation
     if op in ("assign", "hold", "cancel", "submit_result", "complete"):
@@ -44,6 +49,8 @@ def apply_command(
         _review(task, command, tasks, actor)
     elif op == "answer":
         _answer(task, command)
+    elif op == "route_question":
+        route_question(task, command, tasks)
     elif op == "reopen":
         if task.status not in ("done", "canceled"):
             raise TaskConflict("Only completed or canceled tasks can be reopened")
@@ -336,22 +343,16 @@ def _answer(task: WorkspaceTask, command: TaskCommand) -> None:
     ):
         raise TaskConflict("This question is no longer waiting for an answer")
     answers = command.answers or {}
-    if any(not answers.get(q.keyword, "").strip() for q in question.questions):
-        raise TaskConflict("Answer every question before submitting")
+    pending = [
+        q
+        for q in question.questions
+        if not q.answer and (not q.target or q.target.kind == "human")
+    ]
+    if not pending or any(not answers.get(q.keyword, "").strip() for q in pending):
+        raise TaskConflict("Answer every question addressed to you before submitting")
     if task.dispatch_state == "claimed":
         raise TaskConflict("Wait for the current attempt to finish starting")
-    question.answers, question.answered_by = answers, task.user_id
-    if not task.assignee or task.assignee.kind == "human":
-        task.dispatch_state, task.dispatch_message = None, ""
-        task.status, task.activity = "todo", "Answer recorded"
-        return
-    task.dispatch_message = "Answers to your questions:\n" + "\n\n".join(
-        f"{q.question}\n{answers[q.keyword]}" for q in question.questions
-    )
-    if command.feedback.strip():
-        task.dispatch_message += (
-            "\n\nAdditional context from your reply:\n" + command.feedback.strip()
-        )
-    task.dispatch_id = str(uuid4())
-    task.dispatch_state = "pending"
-    task.status, task.activity = "todo", "Answer recorded; waiting to continue"
+    for item in pending:
+        item.answer = answers[item.keyword].strip()
+        item.answered_by = task.user_id
+    refresh_question_state(task, command.feedback)

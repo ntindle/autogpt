@@ -4,7 +4,12 @@ import {
 } from "@/app/api/__generated__/endpoints/tasks/tasks.msw";
 import type { WorkspaceTask } from "@/app/api/__generated__/models/workspaceTask";
 import { server } from "@/mocks/mock-server";
-import { render, screen, waitFor } from "@/tests/integrations/test-utils";
+import {
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@/tests/integrations/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, test, vi } from "vitest";
 import TasksPage from "../page";
@@ -66,7 +71,9 @@ test("completed, proposed, stopped, and held work have distinct states; Play sta
   expect(await screen.findByText("Completed")).toBeTruthy();
   expect(screen.getByText("Proposed new work")).toBeTruthy();
   expect(
-    screen.getByRole("button", { name: "Open stopped attempt for Source BOM" }),
+    screen.getByRole("button", {
+      name: "Explain stopped attempt for Source BOM",
+    }),
   ).toBeTruthy();
   expect(
     screen.queryByRole("button", { name: "Start Proposed fixture" }),
@@ -108,4 +115,42 @@ test("a started branch shows its unmet prerequisite while its parent remains hel
   );
   expect(screen.getByText(/Waiting for: Configuration/)).toBeTruthy();
   expect(screen.queryByText(/Execution on hold by Build robot/)).toBeNull();
+});
+
+test("stopped-attempt help opens on hover or tap without starting a conversation", async () => {
+  const item = task("Stopped work", {
+    status: "blocked",
+    dispatch_state: "finished",
+    assignee: AUTO,
+  });
+  server.use(
+    getListWorkspaceTasksMockHandler({ tasks: [item], assignees: [AUTO] }),
+    getCommandWorkspaceTaskMockHandler200(async ({ request }) => {
+      command(await request.json());
+      return item;
+    }),
+  );
+  render(<TasksPage />);
+  const icon = await screen.findByRole("button", {
+    name: "Explain stopped attempt for Stopped work",
+  });
+  await userEvent.hover(icon);
+  expect((await screen.findByRole("tooltip")).textContent).toContain(
+    "The last attempt ended without completing this task",
+  );
+  expect(command).not.toHaveBeenCalled();
+  await userEvent.click(icon);
+  const popover = await screen.findByRole("dialog", {
+    name: "Attempt stopped",
+  });
+  expect(popover.textContent).toContain("what is needed to continue");
+  expect(command).not.toHaveBeenCalled();
+  await userEvent.click(
+    within(popover).getByRole("button", { name: "Open chat" }),
+  );
+  await waitFor(() =>
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "discuss" }),
+    ),
+  );
 });

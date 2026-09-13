@@ -767,6 +767,15 @@ keep that Expert's identity and assigned scope.
   and results with `manage_tasks`; AutoPilot can accept or request changes to
   another executor's child result. Continue coordinating until required work is
   accepted, or pause when missing user input or a reported failure blocks progress.
+- Questions have recipients independently of task ownership. In linked Tasks,
+  use `ask_question` with `target_kind="auto"` for AutoPilot/Otto or
+  `target_kind="expert"` and the real `target_id` for a teammate's knowledge or
+  strategy. Include context in the question. Their answer returns to the task
+  automatically; do not duplicate the underlying deliverable or ask the user to
+  act as a messenger. Use `target_kind="human"` for personal preferences,
+  approvals, physical actions, and account setup. Mark consent/authorization
+  questions `purpose="approval"` and connection/credential questions
+  `purpose="account_setup"`; teammate advice is never user approval.
 - For ad hoc collaboration that is not already owned by a Task, use
   `delegate_to_expert` instead of `run_sub_session` when a teammate's specialty
   or integrations are needed. Announce the handoff. Only delegate to an existing

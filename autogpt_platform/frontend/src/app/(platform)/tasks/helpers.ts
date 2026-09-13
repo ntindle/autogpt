@@ -57,12 +57,25 @@ export function selfIdentity(
     : assignee;
 }
 
+export function foldedReview(task: Task, tasks: Task[]) {
+  if (!task.review_of || task.status === "done" || task.status === "canceled")
+    return false;
+  const source = tasks.find((item) => item.id === task.review_of);
+  return Boolean(
+    source?.result &&
+      ((source.question && !source.question.answers) ||
+        source.status !== "needs_you"),
+  );
+}
+
 export function taskMatches(
   task: Task,
   view: TaskView,
   search: string,
   project: string,
+  tasks: Task[] = [],
 ) {
+  if (foldedReview(task, tasks)) return false;
   if (project && task.project !== project) return false;
   if (
     search &&
@@ -80,7 +93,17 @@ export function taskMatches(
         Boolean(task.question && !task.question.answers) ||
         Boolean(task.review_of))
     );
-  if (view === "Working") return task.status === "working";
+  if (view === "Working")
+    return (
+      task.status === "working" ||
+      Boolean(
+        task.question &&
+          !task.question.answers &&
+          task.question.questions.some(
+            (q) => !q.answer && q.target && q.target.kind !== "human",
+          ),
+      )
+    );
   if (view === "Scheduled") return Boolean(task.schedule);
   if (view === "Suggested")
     return Boolean(task.suggestion) || task.accepted === false;
@@ -105,7 +128,7 @@ export function visibleTaskIDs(
         if (canceled.has(task.id) !== (view === "Canceled")) return false;
         const filter =
           view === "Canceled" && task.status !== "canceled" ? "All" : view;
-        return taskMatches(task, filter, search, project);
+        return taskMatches(task, filter, search, project, tasks);
       })
       .map((task) => task.id),
   );
@@ -233,11 +256,31 @@ export function canStartTask(task: Task, tasks: Task[]) {
   );
 }
 
+export function reviewWaitingReason(task: Task, tasks: Task[]) {
+  if (!task.review_of || task.status === "done" || task.status === "canceled")
+    return null;
+  const result = tasks.find((item) => item.id === task.review_of);
+  if (result?.question && !result.question.answers)
+    return result.status === "needs_you"
+      ? "Answer before review"
+      : "Waiting for answers before review";
+  if (result && result.status !== "needs_you")
+    return "Waiting for an updated result";
+  return null;
+}
+
 export function statusLabel(task: Task, tasks: Task[] = [task]) {
+  const reviewWait = reviewWaitingReason(task, tasks);
+  if (reviewWait) return reviewWait;
+  if (task.status === "blocked" && task.question && !task.question.answers)
+    return task.activity || "Waiting for a teammate";
   if (task.status === "done") return "Completed";
   if (task.status === "canceled") return "Canceled";
   if (task.accepted === false) return "Proposed new work";
-  if (task.question && !task.question.answers) return "Waiting for your answer";
+  if (task.question && !task.question.answers)
+    return task.result
+      ? "Draft ready · Answer needed"
+      : "Waiting for your answer";
   if (task.result && task.status === "needs_you") return "Awaiting acceptance";
   if (task.schedule)
     return task.schedule.paused ? "Schedule paused" : "Scheduled";

@@ -27,6 +27,17 @@ class TaskQuestionItem(BaseModel):
     question: str
     keyword: str
     options: list[str] = Field(default_factory=list)
+    target: TaskAssignee | None = None
+    purpose: Literal["clarification", "approval", "account_setup"] = "clarification"
+    answer: str | None = None
+    answered_by: str | None = None
+    consultation_task_id: str | None = None
+
+
+class TaskQuestionSource(BaseModel):
+    task_id: str
+    question_id: str
+    keyword: str
 
 
 class TaskQuestion(BaseModel):
@@ -34,6 +45,7 @@ class TaskQuestion(BaseModel):
     questions: list[TaskQuestionItem]
     answers: dict[str, str] | None = None
     answered_by: str | None = None
+    context: str = ""
     asked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @model_validator(mode="after")
@@ -157,6 +169,7 @@ class WorkspaceTask(BaseModel):
     dispatch_claimed_at: datetime | None = None
     dispatch_message: str = ""
     question: TaskQuestion | None = None
+    question_for: TaskQuestionSource | None = None
     result: str | None = None
     review_of: str | None = None
     review_version: int | None = None
@@ -230,6 +243,7 @@ class TaskCommand(BaseModel):
         "resume",
         "retry",
         "answer",
+        "route_question",
         "accept_scope",
         "accept_result",
         "request_changes",
@@ -244,6 +258,8 @@ class TaskCommand(BaseModel):
     dependencies: list[str] | None = None
     suggestion_request_id: str | None = Field(default=None, max_length=100)
     question_id: str | None = None
+    question_keyword: str | None = None
+    question_target: TaskAssignee | None = None
     answers: dict[str, str] | None = None
     feedback: str = Field(default="", max_length=10000)
     evidence: str = Field(default="", max_length=20000)

@@ -704,6 +704,9 @@ class ClarifyingQuestion(BaseModel):
     keyword: str
     example: str | None = None
     options: list[str] = Field(default_factory=list)
+    target_kind: Literal["human", "auto", "expert"] = "human"
+    target_id: str | None = None
+    purpose: Literal["clarification", "approval", "account_setup"] = "clarification"
 
 
 class AgentPreviewResponse(ToolResponseBase):

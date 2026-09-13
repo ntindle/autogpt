@@ -2,7 +2,7 @@ import { Button } from "@/components/atoms/Button/Button";
 import { Input } from "@/components/atoms/Input/Input";
 import { Plus, MagnifyingGlass } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
-import { TASK_VIEWS, taskMatches } from "../helpers";
+import { TASK_VIEWS, taskMatches, foldedReview } from "../helpers";
 import type { useTasksPage } from "../useTasksPage";
 
 interface Props {
@@ -26,7 +26,10 @@ export function TasksHeader({ page }: Props) {
             <span className="text-sm font-normal text-muted-foreground">
               {
                 page.tasks.filter(
-                  (task) => !task.schedule && task.status !== "canceled",
+                  (task) =>
+                    !task.schedule &&
+                    task.status !== "canceled" &&
+                    !foldedReview(task, page.tasks),
                 ).length
               }
             </span>
@@ -64,7 +67,7 @@ export function TasksHeader({ page }: Props) {
                 <span className="ml-1.5 text-[10px]">
                   {
                     page.tasks.filter((task) =>
-                      taskMatches(task, filter, "", ""),
+                      taskMatches(task, filter, "", "", page.tasks),
                     ).length
                   }
                 </span>

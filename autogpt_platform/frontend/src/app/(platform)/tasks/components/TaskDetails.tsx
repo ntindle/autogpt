@@ -59,6 +59,8 @@ export function TaskDetails({ task, page }: Props) {
 
 function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
   const count = taskProgress(task, page.tasks);
+  const questionTask =
+    page.tasks.find((item) => item.id === task.review_of) ?? task;
   const participants = Array.from(
     new Map(
       taskBranch(task, page.tasks).flatMap((item) =>
@@ -105,8 +107,10 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
         onChat={() => page.openChat(task)}
       />
       <TaskQuestion
-        task={task}
-        onCommand={(command) => page.command(task, command)}
+        task={questionTask}
+        tasks={page.tasks}
+        assignees={page.assignees}
+        onCommand={(command) => page.command(questionTask, command)}
       />
       <TaskResultSubmission
         task={task}

@@ -156,3 +156,62 @@ test("canceled captures stay out of active views and can be reopened from Cancel
     expect(submitted).toHaveBeenCalledWith({ operation: "reopen", version: 4 }),
   );
 });
+
+test("workspace deliverables are linked and previewable from their review", async () => {
+  const id = "550e8400-e29b-41d4-a716-446655440000";
+  const item = task({
+    assignee: { kind: "auto", id: "auto", name: "AutoPilot" },
+    status: "needs_you",
+    result: `Review [biggerarm_plan.md](workspace://${id}#text/markdown)`,
+    result_version: 1,
+    session_id: "work-session",
+  });
+  server.use(
+    getListWorkspaceTasksMockHandler({ tasks: [item], assignees: [YOU] }),
+    http.get("/api/proxy/api/workspace/files", () =>
+      HttpResponse.json({
+        files: [
+          {
+            id,
+            name: "biggerarm_plan.md",
+            path: "/sessions/work-session/biggerarm_plan.md",
+            mime_type: "text/markdown",
+            size_bytes: 40,
+            origin: "generated",
+            created_at: "2026-09-13T00:00:00Z",
+          },
+        ],
+        has_more: false,
+      }),
+    ),
+    http.get(`/api/proxy/api/workspace/files/${id}/download`, () =>
+      HttpResponse.text(
+        "# Biggerarm deliverable\n\nVerified fixture dimensions",
+      ),
+    ),
+  );
+  render(<TasksPage />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: /^Choose sample kit materials/ }),
+  );
+  expect(screen.queryByText(/\[blocked\]/)).toBeNull();
+  const files = await screen.findByRole("region", {
+    name: "Deliverable files",
+  });
+  expect(
+    within(files).getByRole("link", { name: "Download" }).getAttribute("href"),
+  ).toBe(`/api/proxy/api/workspace/files/${id}/download`);
+  await userEvent.click(
+    within(files).getByRole("button", { name: "biggerarm_plan.md" }),
+  );
+  const preview = await screen.findByRole("dialog", {
+    name: "biggerarm_plan.md",
+  });
+  expect(
+    await within(preview).findByText("Verified fixture dimensions"),
+  ).toBeTruthy();
+  await userEvent.click(
+    within(preview).getByRole("button", { name: "Back to review" }),
+  );
+  expect(screen.getByRole("button", { name: "Accept result" })).toBeTruthy();
+});

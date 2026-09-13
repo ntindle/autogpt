@@ -10,6 +10,7 @@ import {
 import { m } from "framer-motion";
 import { useId, useState } from "react";
 import type { QuestionRequest } from "./helpers";
+import { questionNeedsHumanAnswer } from "../../tools/clarifying-questions";
 import { QuestionAnswerField } from "./QuestionAnswerField";
 
 interface Props {
@@ -42,7 +43,9 @@ export function QuestionsSection({
   const current = Math.min(step, questions.length - 1);
   const { request, question, id } = questions[current];
   const labelId = `${sectionId}-${id}`;
-  const answered = (request.answers[question.keyword] ?? "").trim().length > 0;
+  const answered =
+    !questionNeedsHumanAnswer(question) ||
+    (request.answers[question.keyword] ?? "").trim().length > 0;
   const isLast = current === questions.length - 1;
   const actionEnabled = !submitting && (isLast ? isReady : answered);
 
@@ -93,19 +96,22 @@ export function QuestionsSection({
         >
           {question.question}
         </span>
-        <QuestionAnswerField
-          // The field's typing toggle must reset per question; keying it here
-          // rather than only on the wrapper keeps that contract local to the
-          // component that owns the state.
-          key={id}
-          question={question}
-          value={request.answers[question.keyword] ?? ""}
-          labelId={labelId}
-          autoFocus={current > 0}
-          onChange={(value) => request.onAnswer(question.keyword, value)}
-          onPick={handlePick}
-          onSubmit={handleAction}
-        />
+        {request.renderRecipient?.(question)}
+        {questionNeedsHumanAnswer(question) ? (
+          <QuestionAnswerField
+            // The field's typing toggle must reset per question; keying it here
+            // rather than only on the wrapper keeps that contract local to the
+            // component that owns the state.
+            key={id}
+            question={question}
+            value={request.answers[question.keyword] ?? ""}
+            labelId={labelId}
+            autoFocus={current > 0}
+            onChange={(value) => request.onAnswer(question.keyword, value)}
+            onPick={handlePick}
+            onSubmit={handleAction}
+          />
+        ) : null}
       </m.div>
 
       <div className="flex items-center justify-between px-5 pb-4 pt-1">

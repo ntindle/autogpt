@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { ProviderMetadata } from "@/app/api/__generated__/models/providerMetadata";
 import type { CredentialField } from "@/components/contextual/CredentialsInput/components/CredentialsGroupedView/helpers";
 import { formatProviderName } from "@/components/contextual/IntegrationsPanel/helpers";
@@ -10,6 +11,7 @@ import type { ClarifyingQuestion } from "../../tools/clarifying-questions";
 export interface QuestionRequest {
   id: string;
   questions: ClarifyingQuestion[];
+  renderRecipient?: (question: ClarifyingQuestion) => ReactNode;
   answers: Record<string, string>;
   onAnswer: (keyword: string, value: string) => void;
   onSkip: () => void;

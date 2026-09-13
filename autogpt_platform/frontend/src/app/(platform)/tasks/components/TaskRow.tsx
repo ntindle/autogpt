@@ -10,18 +10,19 @@ import {
   DotsThree,
   Pause,
   Play,
-  WarningCircle,
 } from "@phosphor-icons/react";
 import {
   planningHold,
   canStartTask,
   statusLabel,
+  reviewWaitingReason,
   taskBranch,
   taskProgress,
   type Task,
 } from "../helpers";
 import { TaskAssigneePicker } from "./TaskAssigneePicker/TaskAssigneePicker";
 import { TaskIdentity } from "./TaskIdentity";
+import { TaskAttemptInfo } from "./TaskAttemptInfo";
 
 interface Props {
   task: Task;
@@ -97,7 +98,12 @@ export function TaskRow({
         <input
           type="checkbox"
           checked={task.status === "done"}
-          disabled={pending || task.accepted === false || active}
+          disabled={
+            pending ||
+            task.accepted === false ||
+            active ||
+            Boolean(reviewWaitingReason(task, tasks))
+          }
           onChange={() =>
             onCommand({
               operation: task.status === "done" ? "reopen" : "complete",
@@ -178,7 +184,11 @@ export function TaskRow({
             onClick={onDetails}
             className="rounded-full bg-amber-100 px-2.5 py-1.5 text-xs font-medium text-amber-800"
           >
-            {task.question && !task.question.answers ? "Answer" : "Review"}
+            {reviewWaitingReason(task, tasks)
+              ? "Questions pending"
+              : task.question && !task.question.answers
+                ? "Answer"
+                : "Review"}
           </button>
         ) : null}
         {canStartTask(task, tasks) ? (
@@ -193,16 +203,9 @@ export function TaskRow({
             Start
           </button>
         ) : null}
-        {task.status === "blocked" ? (
-          <button
-            type="button"
-            onClick={onChat}
-            aria-label={`Open stopped attempt for ${task.title}`}
-            title="The attempt stopped before producing an accepted result. Open the chat for details."
-            className="rounded p-1 text-amber-700 focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <WarningCircle size={16} />
-          </button>
+        {task.status === "blocked" &&
+        !(task.question && !task.question.answers) ? (
+          <TaskAttemptInfo title={task.title} onChat={onChat} />
         ) : task.paused ? (
           <Pause size={16} />
         ) : null}

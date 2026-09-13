@@ -52,6 +52,20 @@ async def execute_task_command(
     command: TaskCommand,
     manager_session_id: str | None = None,
 ) -> WorkspaceTask:
+    if command.question_target:
+        candidates = await task_assignees(user_id)
+        target = next(
+            (
+                a
+                for a in candidates
+                if (a.kind, a.id)
+                == (command.question_target.kind, command.question_target.id)
+            ),
+            None,
+        )
+        if target is None:
+            raise NotFoundError("Question recipient is not available in your workspace")
+        command.question_target = target
     if command.assignee:
         candidates = await task_assignees(user_id)
         assignee = next(
@@ -65,9 +79,23 @@ async def execute_task_command(
         if assignee is None:
             raise NotFoundError("Assignee not available in your workspace")
         command.assignee = assignee
+    previous = (
+        await tasks_db().list_workspace_tasks(user_id)
+        if command.operation == "route_question"
+        else []
+    )
     task = await tasks_db().command_workspace_task(
         user_id, task_id, command, manager_session_id=manager_session_id
     )
+    if previous:
+        current = await tasks_db().list_workspace_tasks(user_id)
+        for old in previous:
+            if (
+                old.session_id
+                and old.dispatch_state in ("sent", "claimed")
+                and any(t.id == old.id and t.status == "canceled" for t in current)
+            ):
+                await enqueue_cancel_task(old.session_id)
     if command.operation == "pause" and task.session_id:
         await enqueue_cancel_task(task.session_id)
     if command.operation == "discuss":
@@ -176,12 +204,17 @@ async def _admit(user_id: str, provider: str) -> None:
 
 def task_prompt(task: WorkspaceTask) -> str:
     return (
-        f"You own this task: {task.title}\n\n{task.description}\n"
+        (
+            "You are answering a teammate question, not executing its underlying task. Submit advice with manage_tasks submit_result; the reply returns automatically.\n"
+            if task.question_for
+            else ""
+        )
+        + f"You own this task: {task.title}\n\n{task.description}\n"
         f"Project context: {task.project or 'None'}\nTask ID: {task.id}\n\n"
         "Work toward the actual outcome using your existing permissions. Use manage_tasks to inspect the shared task and necessary steps. "
         "Keep task granularity useful; tool calls are not subtasks. Keep human decisions and physical actions with the user, and respect planning holds. AutoPilot may reroute existing tasks with manage_tasks assign or reparent; preserve their records and stop active attempts before reassigning. "
         "AutoPilot coordinates the outcome: reject unnecessary scope, ask for evidence, and prefer the smallest sufficient approach. "
-        "Use ask_question for a real question or authorization gap. Continue independent steps when possible. "
-        "Use manage_tasks with operation submit_result and evidence when the deliverable is ready. Ending a chat does not complete the task. "
+        "Use ask_question with a recipient for missing information: target_kind auto for the coordinator, expert plus target_id from list_team for specialty questions, human for user decisions. Mark approvals with purpose approval and account setup with purpose account_setup; they stay with the user. Keep the task owner while asking a teammate; do not duplicate its deliverable. Continue independent steps when possible. "
+        "Use manage_tasks with operation submit_result and evidence when the deliverable is ready. Include Markdown links [filename](workspace://file_id) for workspace deliverables, using actual IDs returned by write_workspace_file or list_workspace_files. Ending a chat does not complete the task. "
         "Never treat a plan or instructions as proof that the requested action happened. Acceptance of a draft does not authorize publication."
     )

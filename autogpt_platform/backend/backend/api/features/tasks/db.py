@@ -136,7 +136,8 @@ async def command_workspace_task(
             _prepare_dispatches(tasks)
         for changed in tasks:
             if (
-                command.operation in ("answer", "complete", "submit_result", "cancel")
+                command.operation
+                in ("answer", "route_question", "complete", "submit_result", "cancel")
                 and changed.question
             ):
                 if changed.id == task.id or changed.status in ("done", "canceled"):

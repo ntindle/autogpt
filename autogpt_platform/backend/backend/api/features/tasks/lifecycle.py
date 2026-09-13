@@ -7,6 +7,11 @@ from backend.api.features.tasks.domain import (
     record,
 )
 from backend.api.features.tasks.models import TaskAssignee, TaskQuestion, WorkspaceTask
+from backend.api.features.tasks.question_routing import (
+    prepare_question_tasks,
+    refresh_question_state,
+    submit_question_answer,
+)
 from backend.api.features.tasks.question_sync import sync_task_question
 from backend.api.features.tasks.repository import (
     _load,
@@ -58,7 +63,8 @@ async def workspace_task_run_event(
             task.status, task.activity = "working", "Working on your task"
         elif event == "question" and question:
             task.question = question
-            task.status, task.activity = "needs_you", "Waiting for your answer"
+            prepare_question_tasks(task, tasks)
+            refresh_question_state(task)
             await sync_task_question(tx, task)
         elif event == "result" and text:
             await sync_task_question(tx, task.model_copy(update={"status": "done"}))
@@ -66,7 +72,7 @@ async def workspace_task_run_event(
         elif event == "finished":
             task.dispatch_state = "finished"
             if task.question and task.question.answers is None:
-                task.status, task.activity = "needs_you", "Waiting for your answer"
+                refresh_question_state(task)
             elif (
                 task.question
                 and task.question.answers is not None
@@ -87,6 +93,8 @@ async def workspace_task_run_event(
         record(task, task.assignee.name if task.assignee else "Auto", task.activity)
         _prepare_dispatches(tasks)
         for changed in tasks:
+            if changed.question:
+                await sync_task_question(tx, changed)
             await _save(tx, changed)
         return task
 
@@ -113,6 +121,13 @@ def _submit_result(task: WorkspaceTask, tasks: list[WorkspaceTask], text: str) -
             "coordinate their work and review their results before submitting the outcome. "
             "Use activity for progress updates while waiting."
         )
+    if task.question and task.question.answers is None:
+        raise TaskConflict(
+            "Resolve the outstanding questions before submitting a result"
+        )
+    if task.question_for:
+        submit_question_answer(task, tasks, text)
+        return
     if task.result == text and task.status == "needs_you":
         return
     for review in tasks:

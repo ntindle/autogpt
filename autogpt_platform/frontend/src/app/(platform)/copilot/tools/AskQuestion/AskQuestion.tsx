@@ -1,4 +1,5 @@
 "use client";
+import { TaskQuestionsForm } from "../../components/QuestionDock/TaskQuestionsForm";
 import { useTaskQuestionAnswer } from "./useTaskQuestionAnswer";
 import type { ToolUIPart } from "ai";
 import { ClarificationQuestionsCard } from "../../components/ClarificationQuestionsCard/ClarificationQuestionsCard";
@@ -50,6 +51,18 @@ export function AskQuestionTool({ part }: Props) {
   }
 
   if (output && isClarificationOutput(output)) {
+    if (output.task_id && output.task_question_id)
+      return (
+        <TaskQuestionsForm
+          variant="card"
+          dockId={`${output.task_id}:${output.task_question_id}`}
+          questions={normalizeClarifyingQuestions(output.questions ?? [])}
+          taskBinding={{
+            taskID: output.task_id,
+            questionID: output.task_question_id,
+          }}
+        />
+      );
     return (
       <ClarificationQuestionsCard
         questions={normalizeClarifyingQuestions(output.questions ?? [])}

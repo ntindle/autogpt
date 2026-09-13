@@ -29387,65 +29387,69 @@
       "TaskAssignee": {
         "properties": {
           "kind": {
-            "type": "string",
             "enum": ["human", "auto", "expert"],
-            "title": "Kind"
+            "title": "Kind",
+            "type": "string"
           },
-          "id": { "type": "string", "title": "Id" },
-          "name": { "type": "string", "title": "Name" },
+          "id": { "title": "Id", "type": "string" },
+          "name": { "title": "Name", "type": "string" },
           "avatar_url": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Avatar Url"
           },
           "reason": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Reason"
           },
           "role": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Role"
           },
           "color": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Color"
           }
         },
-        "type": "object",
         "required": ["kind", "id", "name"],
-        "title": "TaskAssignee"
+        "title": "TaskAssignee",
+        "type": "object"
       },
       "TaskBreakdown": {
         "properties": {
-          "id": { "type": "string", "title": "Id" },
-          "context": { "type": "string", "title": "Context" },
-          "detail": {
-            "type": "string",
-            "enum": ["milestones", "steps", "small_steps"],
-            "title": "Detail",
-            "default": "steps"
-          },
-          "guidance": { "type": "string", "title": "Guidance", "default": "" },
-          "state": {
-            "type": "string",
-            "enum": ["pending", "ready", "error", "accepted"],
-            "title": "State",
-            "default": "pending"
-          },
-          "error": { "type": "string", "title": "Error", "default": "" },
-          "steps": {
-            "items": { "$ref": "#/components/schemas/TaskBreakdownStep" },
-            "type": "array",
-            "title": "Steps"
-          },
+          "id": { "title": "Id", "type": "string" },
+          "context": { "title": "Context", "type": "string" },
           "started_at": {
             "format": "date-time",
             "title": "Started At",
             "type": "string"
+          },
+          "detail": {
+            "default": "steps",
+            "enum": ["milestones", "steps", "small_steps"],
+            "title": "Detail",
+            "type": "string"
+          },
+          "guidance": { "default": "", "title": "Guidance", "type": "string" },
+          "state": {
+            "default": "pending",
+            "enum": ["pending", "ready", "error", "accepted"],
+            "title": "State",
+            "type": "string"
+          },
+          "error": { "default": "", "title": "Error", "type": "string" },
+          "steps": {
+            "items": { "$ref": "#/components/schemas/TaskBreakdownStep" },
+            "title": "Steps",
+            "type": "array"
           }
         },
-        "type": "object",
         "required": ["context"],
-        "title": "TaskBreakdown"
+        "title": "TaskBreakdown",
+        "type": "object"
       },
       "TaskBreakdownAccept": {
         "properties": {
@@ -29530,39 +29534,40 @@
       },
       "TaskBreakdownStep": {
         "properties": {
-          "id": { "type": "string", "title": "Id" },
+          "id": { "title": "Id", "type": "string" },
           "title": {
-            "type": "string",
             "maxLength": 500,
             "minLength": 1,
-            "title": "Title"
+            "title": "Title",
+            "type": "string"
           },
           "description": {
-            "type": "string",
+            "default": "",
             "maxLength": 20000,
             "title": "Description",
-            "default": ""
+            "type": "string"
           },
           "suggestion": {
             "anyOf": [
               { "$ref": "#/components/schemas/TaskAssignee" },
               { "type": "null" }
-            ]
+            ],
+            "default": null
           },
           "dependencies": {
             "items": { "type": "string" },
-            "type": "array",
-            "title": "Dependencies"
+            "title": "Dependencies",
+            "type": "array"
           }
         },
-        "type": "object",
         "required": ["title"],
-        "title": "TaskBreakdownStep"
+        "title": "TaskBreakdownStep",
+        "type": "object"
       },
       "TaskCommand": {
+        "additionalProperties": false,
         "properties": {
           "operation": {
-            "type": "string",
             "enum": [
               "edit",
               "reparent",
@@ -29580,43 +29585,50 @@
               "resume",
               "retry",
               "answer",
+              "route_question",
               "accept_scope",
               "accept_result",
               "request_changes",
               "discuss"
             ],
-            "title": "Operation"
+            "title": "Operation",
+            "type": "string"
           },
-          "version": { "type": "integer", "title": "Version" },
+          "version": { "title": "Version", "type": "integer" },
           "title": {
             "anyOf": [
-              { "type": "string", "maxLength": 500, "minLength": 1 },
+              { "maxLength": 500, "minLength": 1, "type": "string" },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Title"
           },
           "description": {
             "anyOf": [
-              { "type": "string", "maxLength": 20000 },
+              { "maxLength": 20000, "type": "string" },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Description"
           },
           "project": {
             "anyOf": [
-              { "type": "string", "maxLength": 100 },
+              { "maxLength": 100, "type": "string" },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Project"
           },
           "assignee": {
             "anyOf": [
               { "$ref": "#/components/schemas/TaskAssignee" },
               { "type": "null" }
-            ]
+            ],
+            "default": null
           },
           "parent_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Parent Id"
           },
           "dependencies": {
@@ -29624,11 +29636,33 @@
               { "items": { "type": "string" }, "type": "array" },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Dependencies"
+          },
+          "suggestion_request_id": {
+            "anyOf": [
+              { "maxLength": 100, "type": "string" },
+              { "type": "null" }
+            ],
+            "default": null,
+            "title": "Suggestion Request Id"
           },
           "question_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Question Id"
+          },
+          "question_keyword": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Question Keyword"
+          },
+          "question_target": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ],
+            "default": null
           },
           "answers": {
             "anyOf": [
@@ -29638,32 +29672,25 @@
               },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Answers"
           },
           "feedback": {
-            "type": "string",
+            "default": "",
             "maxLength": 10000,
             "title": "Feedback",
-            "default": ""
+            "type": "string"
           },
           "evidence": {
-            "type": "string",
+            "default": "",
             "maxLength": 20000,
             "title": "Evidence",
-            "default": ""
-          },
-          "suggestion_request_id": {
-            "anyOf": [
-              { "type": "string", "maxLength": 100 },
-              { "type": "null" }
-            ],
-            "title": "Suggestion Request Id"
+            "type": "string"
           }
         },
-        "additionalProperties": false,
-        "type": "object",
         "required": ["operation", "version"],
-        "title": "TaskCommand"
+        "title": "TaskCommand",
+        "type": "object"
       },
       "TaskContextResponse": {
         "properties": {
@@ -29754,39 +29781,39 @@
       },
       "TaskEvent": {
         "properties": {
-          "id": { "type": "string", "title": "Id" },
-          "at": { "type": "string", "format": "date-time", "title": "At" },
-          "actor": { "type": "string", "title": "Actor" },
-          "text": { "type": "string", "title": "Text" }
+          "id": { "title": "Id", "type": "string" },
+          "at": { "format": "date-time", "title": "At", "type": "string" },
+          "actor": { "title": "Actor", "type": "string" },
+          "text": { "title": "Text", "type": "string" }
         },
-        "type": "object",
         "required": ["actor", "text"],
-        "title": "TaskEvent"
+        "title": "TaskEvent",
+        "type": "object"
       },
       "TaskListResponse": {
         "properties": {
           "tasks": {
             "items": { "$ref": "#/components/schemas/WorkspaceTask" },
-            "type": "array",
-            "title": "Tasks"
+            "title": "Tasks",
+            "type": "array"
           },
           "assignees": {
             "items": { "$ref": "#/components/schemas/TaskAssignee" },
-            "type": "array",
-            "title": "Assignees"
+            "title": "Assignees",
+            "type": "array"
           }
         },
-        "type": "object",
         "required": ["tasks", "assignees"],
-        "title": "TaskListResponse"
+        "title": "TaskListResponse",
+        "type": "object"
       },
       "TaskQuestion": {
         "properties": {
-          "id": { "type": "string", "title": "Id" },
+          "id": { "title": "Id", "type": "string" },
           "questions": {
             "items": { "$ref": "#/components/schemas/TaskQuestionItem" },
-            "type": "array",
-            "title": "Questions"
+            "title": "Questions",
+            "type": "array"
           },
           "answers": {
             "anyOf": [
@@ -29796,66 +29823,101 @@
               },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Answers"
           },
           "answered_by": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Answered By"
           },
+          "context": { "default": "", "title": "Context", "type": "string" },
           "asked_at": {
-            "type": "string",
             "format": "date-time",
-            "title": "Asked At"
+            "title": "Asked At",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": ["questions"],
-        "title": "TaskQuestion"
+        "title": "TaskQuestion",
+        "type": "object"
       },
       "TaskQuestionItem": {
         "properties": {
-          "question": { "type": "string", "title": "Question" },
-          "keyword": { "type": "string", "title": "Keyword" },
+          "question": { "title": "Question", "type": "string" },
+          "keyword": { "title": "Keyword", "type": "string" },
           "options": {
             "items": { "type": "string" },
-            "type": "array",
-            "title": "Options"
+            "title": "Options",
+            "type": "array"
+          },
+          "target": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskAssignee" },
+              { "type": "null" }
+            ],
+            "default": null
+          },
+          "purpose": {
+            "default": "clarification",
+            "enum": ["clarification", "approval", "account_setup"],
+            "title": "Purpose",
+            "type": "string"
+          },
+          "answer": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Answer"
+          },
+          "answered_by": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Answered By"
+          },
+          "consultation_task_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Consultation Task Id"
           }
         },
-        "type": "object",
         "required": ["question", "keyword"],
-        "title": "TaskQuestionItem"
+        "title": "TaskQuestionItem",
+        "type": "object"
       },
       "TaskSchedule": {
         "properties": {
           "id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Id"
           },
           "cron": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Cron"
           },
           "run_at": {
             "anyOf": [
-              { "type": "string", "format": "date-time" },
+              { "format": "date-time", "type": "string" },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Run At"
           },
           "timezone": {
-            "type": "string",
+            "default": "UTC",
             "title": "Timezone",
-            "default": "UTC"
+            "type": "string"
           },
-          "paused": { "type": "boolean", "title": "Paused", "default": false },
+          "paused": { "default": false, "title": "Paused", "type": "boolean" },
           "next_run": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Next Run"
           }
         },
-        "type": "object",
-        "title": "TaskSchedule"
+        "title": "TaskSchedule",
+        "type": "object"
       },
       "TaskScheduleInfo": {
         "properties": {
@@ -32707,46 +32769,48 @@
       },
       "WorkspaceTask": {
         "properties": {
-          "id": { "type": "string", "title": "Id" },
-          "user_id": { "type": "string", "title": "User Id" },
+          "id": { "title": "Id", "type": "string" },
+          "user_id": { "title": "User Id", "type": "string" },
           "organization_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Organization Id"
           },
           "title": {
-            "type": "string",
             "maxLength": 500,
             "minLength": 1,
-            "title": "Title"
+            "title": "Title",
+            "type": "string"
           },
           "description": {
-            "type": "string",
+            "default": "",
             "maxLength": 20000,
             "title": "Description",
-            "default": ""
+            "type": "string"
           },
           "project": {
-            "type": "string",
+            "default": "",
             "maxLength": 100,
             "title": "Project",
-            "default": ""
+            "type": "string"
           },
           "parent_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Parent Id"
           },
           "required": {
-            "type": "boolean",
+            "default": true,
             "title": "Required",
-            "default": true
+            "type": "boolean"
           },
           "accepted": {
-            "type": "boolean",
+            "default": true,
             "title": "Accepted",
-            "default": true
+            "type": "boolean"
           },
           "status": {
-            "type": "string",
+            "default": "todo",
             "enum": [
               "todo",
               "working",
@@ -32756,192 +32820,217 @@
               "canceled"
             ],
             "title": "Status",
-            "default": "todo"
+            "type": "string"
           },
-          "activity": { "type": "string", "title": "Activity", "default": "" },
+          "activity": { "default": "", "title": "Activity", "type": "string" },
           "assignee": {
             "anyOf": [
               { "$ref": "#/components/schemas/TaskAssignee" },
               { "type": "null" }
-            ]
+            ],
+            "default": null
           },
           "suggestion": {
             "anyOf": [
               { "$ref": "#/components/schemas/TaskAssignee" },
               { "type": "null" }
-            ]
+            ],
+            "default": null
           },
           "suggestion_state": {
-            "type": "string",
+            "default": "idle",
             "enum": ["idle", "pending", "ready", "error"],
             "title": "Suggestion State",
-            "default": "idle"
+            "type": "string"
           },
           "suggestion_error": {
-            "type": "string",
+            "default": "",
             "title": "Suggestion Error",
-            "default": ""
+            "type": "string"
           },
           "suggestion_started_at": {
             "anyOf": [
-              { "type": "string", "format": "date-time" },
+              { "format": "date-time", "type": "string" },
               { "type": "null" }
             ],
+            "default": null,
             "title": "Suggestion Started At"
           },
           "suggestion_request_id": {
-            "type": "string",
+            "default": "",
             "title": "Suggestion Request Id",
-            "default": ""
+            "type": "string"
           },
           "suggestion_context": {
-            "type": "string",
+            "default": "",
             "title": "Suggestion Context",
-            "default": ""
+            "type": "string"
           },
           "suggestion_alternatives": {
             "items": { "$ref": "#/components/schemas/TaskAssignee" },
-            "type": "array",
-            "title": "Suggestion Alternatives"
+            "title": "Suggestion Alternatives",
+            "type": "array"
           },
           "breakdown": {
             "anyOf": [
               { "$ref": "#/components/schemas/TaskBreakdown" },
               { "type": "null" }
-            ]
-          },
-          "plan_only": {
-            "type": "boolean",
-            "title": "Plan Only",
-            "default": false
-          },
-          "paused": { "type": "boolean", "title": "Paused", "default": false },
-          "dependencies": {
-            "items": { "type": "string" },
-            "type": "array",
-            "title": "Dependencies"
-          },
-          "session_id": {
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-            "title": "Session Id"
-          },
-          "previous_session_ids": {
-            "items": { "type": "string" },
-            "type": "array",
-            "title": "Previous Session Ids"
-          },
-          "started_turn_ids": {
-            "items": { "type": "string" },
-            "type": "array",
-            "title": "Started Turn Ids"
-          },
-          "last_turn_id": {
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-            "title": "Last Turn Id"
-          },
-          "coordination_state": {
-            "type": "string",
-            "title": "Coordination State",
-            "default": ""
-          },
-          "dispatch_id": {
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-            "title": "Dispatch Id"
-          },
-          "dispatch_state": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": ["pending", "claimed", "sent", "finished"]
-              },
-              { "type": "null" }
             ],
-            "title": "Dispatch State"
-          },
-          "dispatch_claimed_at": {
-            "anyOf": [
-              { "type": "string", "format": "date-time" },
-              { "type": "null" }
-            ],
-            "title": "Dispatch Claimed At"
-          },
-          "dispatch_message": {
-            "type": "string",
-            "title": "Dispatch Message",
-            "default": ""
-          },
-          "question": {
-            "anyOf": [
-              { "$ref": "#/components/schemas/TaskQuestion" },
-              { "type": "null" }
-            ]
-          },
-          "result": {
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-            "title": "Result"
-          },
-          "review_of": {
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-            "title": "Review Of"
-          },
-          "review_version": {
-            "anyOf": [{ "type": "integer" }, { "type": "null" }],
-            "title": "Review Version"
-          },
-          "result_version": {
-            "type": "integer",
-            "title": "Result Version",
-            "default": 0
-          },
-          "schedule": {
-            "anyOf": [
-              { "$ref": "#/components/schemas/TaskSchedule" },
-              { "type": "null" }
-            ]
-          },
-          "occurrence_of": {
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-            "title": "Occurrence Of"
-          },
-          "source_url": {
-            "anyOf": [{ "type": "string" }, { "type": "null" }],
-            "title": "Source Url"
-          },
-          "events": {
-            "items": { "$ref": "#/components/schemas/TaskEvent" },
-            "type": "array",
-            "title": "Events"
-          },
-          "version": { "type": "integer", "title": "Version", "default": 1 },
-          "created_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Created At"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Updated At"
+            "default": null
           },
           "breakdown_refresh": {
             "anyOf": [
               { "$ref": "#/components/schemas/TaskBreakdown" },
               { "type": "null" }
-            ]
+            ],
+            "default": null
+          },
+          "plan_only": {
+            "default": false,
+            "title": "Plan Only",
+            "type": "boolean"
+          },
+          "execution_enabled": {
+            "default": false,
+            "title": "Execution Enabled",
+            "type": "boolean"
+          },
+          "paused": { "default": false, "title": "Paused", "type": "boolean" },
+          "dependencies": {
+            "items": { "type": "string" },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "session_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Session Id"
           },
           "source_session_id": {
             "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
             "title": "Source Session Id"
           },
-          "execution_enabled": {
-            "type": "boolean",
-            "title": "Execution Enabled",
-            "default": false
+          "previous_session_ids": {
+            "items": { "type": "string" },
+            "title": "Previous Session Ids",
+            "type": "array"
+          },
+          "started_turn_ids": {
+            "items": { "type": "string" },
+            "title": "Started Turn Ids",
+            "type": "array"
+          },
+          "last_turn_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Last Turn Id"
+          },
+          "coordination_state": {
+            "default": "",
+            "title": "Coordination State",
+            "type": "string"
+          },
+          "dispatch_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Dispatch Id"
+          },
+          "dispatch_state": {
+            "anyOf": [
+              {
+                "enum": ["pending", "claimed", "sent", "finished"],
+                "type": "string"
+              },
+              { "type": "null" }
+            ],
+            "default": null,
+            "title": "Dispatch State"
+          },
+          "dispatch_claimed_at": {
+            "anyOf": [
+              { "format": "date-time", "type": "string" },
+              { "type": "null" }
+            ],
+            "default": null,
+            "title": "Dispatch Claimed At"
+          },
+          "dispatch_message": {
+            "default": "",
+            "title": "Dispatch Message",
+            "type": "string"
+          },
+          "question": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskQuestion" },
+              { "type": "null" }
+            ],
+            "default": null
+          },
+          "question_for": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskQuestionSource" },
+              { "type": "null" }
+            ],
+            "default": null
+          },
+          "result": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Result"
+          },
+          "review_of": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Review Of"
+          },
+          "review_version": {
+            "anyOf": [{ "type": "integer" }, { "type": "null" }],
+            "default": null,
+            "title": "Review Version"
+          },
+          "result_version": {
+            "default": 0,
+            "title": "Result Version",
+            "type": "integer"
+          },
+          "schedule": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/TaskSchedule" },
+              { "type": "null" }
+            ],
+            "default": null
+          },
+          "occurrence_of": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Occurrence Of"
+          },
+          "source_url": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "default": null,
+            "title": "Source Url"
+          },
+          "events": {
+            "items": { "$ref": "#/components/schemas/TaskEvent" },
+            "title": "Events",
+            "type": "array"
+          },
+          "version": { "default": 1, "title": "Version", "type": "integer" },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": ["user_id", "title"],
-        "title": "WorkspaceTask"
+        "title": "WorkspaceTask",
+        "type": "object"
       },
       "WriteSummary": {
         "properties": {
@@ -33029,6 +33118,16 @@
           "expires_in_hours"
         ],
         "title": "UploadFileResponse"
+      },
+      "TaskQuestionSource": {
+        "properties": {
+          "task_id": { "title": "Task Id", "type": "string" },
+          "question_id": { "title": "Question Id", "type": "string" },
+          "keyword": { "title": "Keyword", "type": "string" }
+        },
+        "required": ["task_id", "question_id", "keyword"],
+        "title": "TaskQuestionSource",
+        "type": "object"
       }
     },
     "securitySchemes": {

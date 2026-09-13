@@ -1,7 +1,7 @@
 "use client";
 
 import type { UIDataTypes, UIMessage, UITools } from "ai";
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { CopilotChatActionsContext } from "../CopilotChatActionsProvider/useCopilotChatActions";
 import { ChainActionsContext } from "../ToolChain/chainActions";
 import {
@@ -11,6 +11,10 @@ import {
 } from "./helpers";
 import { TaskQuestionsForm } from "./TaskQuestionsForm";
 import type { TaskQuestionBinding } from "./helpers";
+import {
+  questionNeedsHumanAnswer,
+  type ClarifyingQuestion,
+} from "../../tools/clarifying-questions";
 import { isKey } from "@/lib/keyboard";
 
 interface FormProps {
@@ -30,6 +34,8 @@ export function QuestionsForm({ taskBinding, ...props }: FormProps) {
 }
 
 interface AnswerProps extends FormProps {
+  isPending?: boolean;
+  renderRecipient?: (question: ClarifyingQuestion) => ReactNode;
   onAnswer?: (
     answers: Record<string, string>,
     context: string,
@@ -40,6 +46,8 @@ export function QuestionAnswerForm({
   dockId,
   questions,
   onAnswer,
+  renderRecipient,
+  isPending = false,
 }: AnswerProps) {
   const actions = useContext(CopilotChatActionsContext);
   const chainActions = useContext(ChainActionsContext);
@@ -53,9 +61,16 @@ export function QuestionAnswerForm({
   const submissionRef = useRef(false);
   const onAnswerRef = useRef(onAnswer);
   onAnswerRef.current = onAnswer;
+  const recipientRef = useRef(renderRecipient);
+  recipientRef.current = renderRecipient;
+  const hasRecipients = Boolean(renderRecipient);
   const taskLinked = Boolean(onAnswer);
   const dismissed = dockId === dismissedId;
-  const allAnswered = questions.every((q) => answers[q.keyword]?.trim());
+  const humanQuestions = questions.filter(questionNeedsHumanAnswer);
+  const allAnswered =
+    !isPending &&
+    humanQuestions.length > 0 &&
+    humanQuestions.every((q) => answers[q.keyword]?.trim());
 
   // Inside a tool chain the Answer button is replaced by the chain's single
   // Proceed step — register readiness + message instead.
@@ -76,6 +91,9 @@ export function QuestionAnswerForm({
       questions: {
         id: dockId,
         questions,
+        renderRecipient: hasRecipients
+          ? (question) => recipientRef.current?.(question)
+          : undefined,
         answers,
         onAnswer: (keyword, value) =>
           setAnswers((prev) => ({ ...prev, [keyword]: value })),
@@ -91,6 +109,7 @@ export function QuestionAnswerForm({
     answers,
     questions,
     taskLinked,
+    hasRecipients,
   ]);
 
   if (renderedDockId !== dockId) {
@@ -147,28 +166,34 @@ export function QuestionAnswerForm({
       </div>
       <div className="flex flex-col gap-2.5">
         {questions.map((q) => (
-          <label key={q.keyword} className="flex flex-col gap-1">
+          <div key={q.keyword} className="flex flex-col gap-1">
             <span className="text-[13px] text-zinc-700">{q.question}</span>
-            <input
-              ref={(element) => {
-                inputRefs.current[q.keyword] = element;
-              }}
-              type="text"
-              required
-              value={answers[q.keyword] ?? ""}
-              onChange={(e) =>
-                setAnswers((prev) => ({
-                  ...prev,
-                  [q.keyword]: e.target.value,
-                }))
-              }
-              onKeyDown={(e) => {
-                if (isKey(e, "Enter")) handleSubmit();
-              }}
-              placeholder={q.example ? `e.g. ${q.example}` : "Type your answer"}
-              className="rounded-xl bg-zinc-50 px-2.5 py-1.5 text-[13px] text-zinc-800 ring-1 ring-zinc-200/70 transition-shadow placeholder:text-zinc-400 focus:outline-none focus:ring-zinc-400"
-            />
-          </label>
+            {renderRecipient?.(q)}
+            {questionNeedsHumanAnswer(q) ? (
+              <input
+                ref={(element) => {
+                  inputRefs.current[q.keyword] = element;
+                }}
+                type="text"
+                aria-label={q.question}
+                required
+                value={answers[q.keyword] ?? ""}
+                onChange={(e) =>
+                  setAnswers((prev) => ({
+                    ...prev,
+                    [q.keyword]: e.target.value,
+                  }))
+                }
+                onKeyDown={(e) => {
+                  if (isKey(e, "Enter")) handleSubmit();
+                }}
+                placeholder={
+                  q.example ? `e.g. ${q.example}` : "Type your answer"
+                }
+                className="rounded-xl bg-zinc-50 px-2.5 py-1.5 text-[13px] text-zinc-800 ring-1 ring-zinc-200/70 transition-shadow placeholder:text-zinc-400 focus:outline-none focus:ring-zinc-400"
+              />
+            ) : null}
+          </div>
         ))}
       </div>
       {error && (
@@ -176,7 +201,7 @@ export function QuestionAnswerForm({
           {error}
         </p>
       )}
-      {!chainActions && (
+      {!chainActions && humanQuestions.length > 0 && (
         <div className="flex justify-end pt-2.5">
           <button
             type="button"

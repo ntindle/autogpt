@@ -43,6 +43,19 @@ async def task_execution_policy(
     context = execution_context(
         task, await tasks_db().list_workspace_tasks(session.user_id)
     )
+    if authority.can_execute and task.question_for:
+        consultation = CopilotPermissions(tools=PLANNING_TOOLS, tools_exclude=False)
+        return (
+            (
+                consultation.merged_with_parent(
+                    permissions, all_tools=frozenset(get_args(ToolName))
+                )
+                if permissions
+                else consultation
+            ),
+            context
+            + "Answer this teammate's question using read-only information. Do not execute the underlying task or manage other tasks. Use manage_tasks submit_result to return your answer automatically. Human approvals and account setup must be asked of the user.",
+        )
     if authority.can_execute:
         return (
             permissions,

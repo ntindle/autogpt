@@ -4,7 +4,12 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from backend.api.features.tasks.models import TaskQuestion, TaskQuestionItem
+from backend.api.features.tasks.models import (
+    TaskAssignee,
+    TaskQuestion,
+    TaskQuestionItem,
+)
+from backend.api.features.tasks.question_routing import pending_human_questions
 from backend.copilot.model import ChatSession, PendingQuestion
 from backend.data.db_accessors import chat_db, tasks_db
 
@@ -36,11 +41,7 @@ class AskQuestionTool(BaseTool):
 
     @property
     def description(self) -> str:
-        return (
-            "Ask the user one or more clarifying questions. Use when the "
-            "request is ambiguous and you need to confirm intent, choose "
-            "between options, or gather missing details before proceeding."
-        )
+        return "Ask one or more questions, each with its own recipient. In a linked Tasks conversation use target_kind auto for AutoPilot (Otto), expert with an existing target_id from list_team for a specialty question, or human for the user. Teammate answers return automatically without changing the task owner. Use purpose approval for consent/authorization, account_setup for credentials or connecting accounts; these must target human. Ask teammates about strategy and domain knowledge before asking the user to relay information. In a regular chat use delegate_to_expert for teammate questions and this tool for human questions."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -66,6 +67,20 @@ class AskQuestionTool(BaseTool):
                                     "is chosen, so split a question that needs "
                                     "several answers into separate questions."
                                 ),
+                            },
+                            "target_kind": {
+                                "type": "string",
+                                "enum": ["human", "auto", "expert"],
+                                "description": "Who should answer this question. Defaults to human. AutoPilot/Otto coordinates; use expert for a teammate's specialty. Requires a linked task for non-human recipients.",
+                            },
+                            "target_id": {
+                                "type": "string",
+                                "description": "Existing Expert ID or exact name from list_team; required for target_kind expert.",
+                            },
+                            "purpose": {
+                                "type": "string",
+                                "enum": ["clarification", "approval", "account_setup"],
+                                "description": "Use approval for human decisions or authorization, account_setup for credentials/connections. Both stay human. Defaults to clarification.",
                             },
                             "keyword": {
                                 "type": "string",
@@ -93,7 +108,6 @@ class AskQuestionTool(BaseTool):
         session: ChatSession,
         **kwargs: Any,
     ) -> ToolResponseBase:
-        del user_id
         raw_questions = kwargs.get("questions", [])
         if not isinstance(raw_questions, list) or not raw_questions:
             raise ValueError("ask_question requires a non-empty 'questions' array")
@@ -104,7 +118,40 @@ class AskQuestionTool(BaseTool):
                 "ask_question requires at least one valid question in 'questions'"
             )
 
+        targeted = any(q.target_kind != "human" for q in questions)
+        if targeted and not (
+            session and session.user_id and session.metadata.workspace_task_id
+        ):
+            raise ValueError(
+                "In a regular chat use delegate_to_expert for teammate questions; ask_question targets require a linked task"
+            )
+        targets: list[TaskAssignee | None] = []
+        if targeted:
+            from backend.api.features.tasks.service import task_assignees
+
+            roster = await task_assignees(session.user_id)
+            for q in questions:
+                if q.target_kind == "human":
+                    targets.append(None)
+                    continue
+                if q.purpose != "clarification":
+                    raise ValueError("Approvals and account setup must target human")
+                matches = [
+                    a
+                    for a in roster
+                    if a.kind == q.target_kind
+                    and (
+                        a.kind == "auto" or a.id == q.target_id or a.name == q.target_id
+                    )
+                ]
+                if len(matches) != 1:
+                    raise ValueError(
+                        "Choose an available recipient from list_team using their exact ID"
+                    )
+                targets.append(matches[0])
+
         task_question = None
+        updated_task = None
         task_id = None
         text = "; ".join(q.question for q in questions)
         if session:
@@ -115,6 +162,8 @@ class AskQuestionTool(BaseTool):
                             question=q.question,
                             keyword=q.keyword or str(i),
                             options=q.options or [],
+                            target=targets[i] if targeted else None,
+                            purpose=q.purpose,
                         )
                         for i, q in enumerate(questions)
                     ]
@@ -143,12 +192,21 @@ class AskQuestionTool(BaseTool):
                     )
                     for i, q in enumerate(questions)
                 ]
-            if task_question:
-                session.metadata.pending_question = PendingQuestion(
-                    text=text,
-                    asked_at=task_question.asked_at,
-                    task_id=task_id,
-                    question_id=task_question.id,
+            if task_question and updated_task:
+                human_questions = pending_human_questions(updated_task)
+                session.metadata.pending_question = (
+                    PendingQuestion(
+                        text="; ".join(item.question for item in human_questions),
+                        asked_at=task_question.asked_at,
+                        task_id=task_id,
+                        question_id=task_question.id,
+                    )
+                    if human_questions
+                    else None
+                )
+            elif targeted:
+                raise ValueError(
+                    "The linked task is no longer available for question routing"
                 )
             else:
                 await _mark_pending(session, text)
@@ -218,6 +276,9 @@ def _parse_one(item: Any, idx: int) -> ClarifyingQuestion | None:
         keyword=keyword,
         example=", ".join(options) if options else None,
         options=options,
+        target_kind=item.get("target_kind", "human"),
+        target_id=item.get("target_id"),
+        purpose=item.get("purpose", "clarification"),
     )
 
 
