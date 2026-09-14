@@ -614,3 +614,37 @@ Live read-only checks verified task-context delivery for the original wholesale
 conversation and registration of the answer RPC. No live task answers or
 conversation messages were changed by verification. Rollback image:
 `autogpt-tasks:pre-clarification-20260913`.
+
+## Shared Markdown rendering for deliverables (September 13, 2026)
+
+Markdown artifact previews now use the same `MessageResponse` / Streamdown
+renderer as chat. Untagged fenced code blocks retain monospace alignment,
+internal horizontal scrolling, and the shared copy/download controls. This
+replaces the older Markdown preview path that applied inline-code backgrounds
+to every line of an untagged code block.
+
+A shared Markdown transformation recognizes bare `workspace://` file IDs. In
+results such as `filename.md (v2) — workspace://...`, the filename becomes an
+inline link and the version remains visible. Existing link labels and public
+shared-chat file routes are preserved; code examples and incomplete IDs are not
+linked. Inline result links open the existing artifact preview and return to
+review, sharing the same dialog as the deliverable file list.
+
+Validation: whole-frontend formatting, lint, and type checks; 344 tests across
+29 Tasks, chat-message, artifact, and Markdown suites; local production build.
+Chromium and WebKit fixtures passed at 1280px desktop and 390px touch widths,
+including all three example filenames, inline preview, return to review,
+monospace styling, exact copied diagram text, and no page overflow. Fixtures
+used the actual components with mock files, not the authenticated live session.
+Evidence is in `/tmp/tasks-deliverable-harness/` and
+`/tmp/tasks-deliverable-*.log`.
+
+The locally built release `58b5e5af8225443fc28171df5f48ed0cf32ebc7b` is deployed
+and healthy at `http://192.168.1.192:3004/tasks`. Image config:
+`sha256:0e5548b5ddeaad8c709a9782f2cc0825f51f6ed45e3e73efb7f784e828a32313`.
+Only the new 20 MB frontend layer was transferred, reusing 97 existing layers.
+All 1,140 packaged frontend files were readable under the production user before
+deployment. All 46 checked live page/Tasks/preview assets match the local build;
+the prototype route and native Unraid Edit control work. The Orgs template,
+21 variables, data mount, and other containers were preserved. Rollback image:
+`autogpt-tasks:pre-deliverable-20260913`.
