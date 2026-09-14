@@ -178,3 +178,63 @@ test("a draft with questions has one row and one review panel", async () => {
   );
   expect(screen.queryByRole("button", { name: /^Approve report/ })).toBeNull();
 });
+
+test("selectable task questions preserve choices and send the selected value", async () => {
+  const item = task();
+  item.question!.questions = [
+    {
+      keyword: "sort",
+      question: "Which sort criterion should the MTG card sorter use?",
+      options: [
+        "Color identity — 8 bins",
+        "Rarity — 4 bins",
+        "Price tier — 3 bins",
+        "Set — variable bin count",
+      ],
+    },
+  ];
+  const command = vi.fn();
+  server.use(
+    getListWorkspaceTasksMockHandler({
+      tasks: [item],
+      assignees: [YOU, OWNER],
+    }),
+    getCommandWorkspaceTaskMockHandler200(async ({ request }) => {
+      command(await request.json());
+      return item;
+    }),
+  );
+  render(<TasksPage />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: /^Research retailers/ }),
+  );
+  const questions = screen.getByRole("region", { name: "Task questions" });
+  const options = within(questions).getByRole("radiogroup", {
+    name: "Which sort criterion should the MTG card sorter use?",
+  });
+  expect(within(options).getAllByRole("radio")).toHaveLength(4);
+  expect(
+    within(questions).getByRole("button", { name: "Submit Answers" }),
+  ).toHaveProperty("disabled", true);
+  await userEvent.click(
+    within(options).getByRole("radio", { name: "Rarity — 4 bins" }),
+  );
+  expect(command).not.toHaveBeenCalled();
+  expect(
+    within(options)
+      .getByRole("radio", { name: "Rarity — 4 bins" })
+      .getAttribute("aria-checked"),
+  ).toBe("true");
+  await userEvent.click(
+    within(questions).getByRole("button", { name: "Submit Answers" }),
+  );
+  await waitFor(() =>
+    expect(command).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "answer",
+        question_id: "questions-1",
+        answers: { sort: "Rarity — 4 bins" },
+      }),
+    ),
+  );
+});

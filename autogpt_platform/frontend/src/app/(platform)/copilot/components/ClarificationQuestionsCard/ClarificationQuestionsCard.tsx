@@ -2,7 +2,7 @@
 
 import { Button } from "@/components/atoms/Button/Button";
 import { Card } from "@/components/atoms/Card/Card";
-import { Input } from "@/components/atoms/Input/Input";
+import { ClarificationQuestion } from "./ClarificationQuestion";
 import { Text } from "@/components/atoms/Text/Text";
 import { cn } from "@/lib/utils";
 import { useEffect, useRef, useState, type ReactNode } from "react";
@@ -180,68 +180,19 @@ export function ClarificationQuestionsCard({
             </div>
 
             <div className="space-y-6">
-              {questions.map((q, index) => {
-                const hasAnswer =
-                  !!q.answer ||
-                  (questionNeedsHumanAnswer(q) && !!answers[q.keyword]?.trim());
-
-                return (
-                  <div
-                    key={`${q.keyword}-${index}`}
-                    className={cn(
-                      "relative rounded-lg border border-dotted p-3",
-                      hasAnswer
-                        ? "border-green-500 bg-green-50/50"
-                        : "border-slate-100 bg-slate-50/50",
-                    )}
-                  >
-                    <div className="mb-2 flex items-start gap-2">
-                      {hasAnswer ? (
-                        <Icon
-                          icon={CheckmarkCircle02Icon}
-                          size={20}
-                          className="mt-0.5 text-green-500"
-                        />
-                      ) : (
-                        <div className="mt-0 flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 font-mono">
-                          {index + 1}
-                        </div>
-                      )}
-                      <div className="flex-1">
-                        <Text
-                          variant="h5"
-                          className="mb-2 font-semibold text-slate-900"
-                        >
-                          {q.question}
-                        </Text>
-                        {q.example && (
-                          <Text
-                            variant="body"
-                            className="mb-2 italic text-slate-500"
-                          >
-                            Example: {q.example}
-                          </Text>
-                        )}
-                        {renderRecipient?.(q)}
-                        {questionNeedsHumanAnswer(q) ? (
-                          <Input
-                            type="textarea"
-                            id={`clarification-${q.keyword}-${index}`}
-                            label={q.question}
-                            hideLabel
-                            placeholder="Your answer..."
-                            rows={2}
-                            value={answers[q.keyword] || ""}
-                            onChange={(e) =>
-                              handleAnswerChange(q.keyword, e.target.value)
-                            }
-                          />
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
+              {questions.map((question, index) => (
+                <ClarificationQuestion
+                  key={`${question.keyword}-${index}`}
+                  question={question}
+                  index={index}
+                  value={answers[question.keyword] || ""}
+                  recipient={renderRecipient?.(question)}
+                  onChange={(value) =>
+                    handleAnswerChange(question.keyword, value)
+                  }
+                  onSubmit={handleSubmit}
+                />
+              ))}
             </div>
 
             {submitError ? (

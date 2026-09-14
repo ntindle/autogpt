@@ -41,7 +41,7 @@ export function QuestionAnswerField({
   // that is what the pager's autoFocus is for.
   const [toggled, setToggled] = useState(false);
 
-  if (options.length === 0 || typing) {
+  if (options.length === 0 || typing || isCustom) {
     return (
       <div className="flex flex-col gap-2">
         <textarea

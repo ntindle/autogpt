@@ -45,3 +45,25 @@ describe("QuestionAnswerField Enter handling", () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 });
+
+it("shows a saved custom answer restored after mounting", () => {
+  const props = {
+    question: {
+      question: "Which material?",
+      keyword: "material",
+      options: ["Cotton", "Wool"],
+    },
+    labelId: "material-label",
+    autoFocus: false,
+    onChange: vi.fn(),
+    onPick: vi.fn(),
+    onSubmit: vi.fn(),
+  };
+  const { rerender } = render(<QuestionAnswerField {...props} value="" />);
+  expect(screen.getAllByRole("radio")).toHaveLength(2);
+  rerender(<QuestionAnswerField {...props} value="Use a silk blend" />);
+  expect(screen.getByRole("textbox")).toHaveProperty(
+    "value",
+    "Use a silk blend",
+  );
+});
