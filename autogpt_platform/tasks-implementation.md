@@ -194,7 +194,6 @@ phone document width remained 390px. Screenshots are saved locally at
 The disposable QA container and temporary source/build copies were removed after
 deployment; the worktree and release images were retained.
 
-
 ## Automatic reconsideration and self identity
 
 Unassigned active tasks are reconsidered when relevant context changes: their
@@ -247,7 +246,6 @@ only an authenticated AutoPilot session can use workspace management. The
 persisted current conversation binding remains authoritative after breakdowns
 preserve original work in a child.
 
-
 Validation for this follow-up: 53 Tasks database tests and 19 shared-prompt tests
 passed. Whole-backend and whole-frontend formatting, lint, and type checks passed,
 as did all 15 Tasks page integration tests and a local production frontend build.
@@ -255,7 +253,6 @@ Coverage includes human-result persistence and prerequisite handoffs, moving an
 active Expert task without losing state, safe owner changes, cancellation and
 recovery, current session authority, and background reconsideration with draft
 preservation. Deployment verification is recorded separately after rollout.
-
 
 ## September 12 runtime verification
 
@@ -317,7 +314,6 @@ frontend integration tests covering Tasks, the real chat action chain, connector
 coexistence, and Home Needs You passed. Whole frontend/backend formatting, lint,
 and type checks were run. Runtime deployment verification follows separately.
 
-
 ## Execution and question-sync rollout
 
 Source revision `f9c14503d9` was built locally, then deployed to the idle
@@ -335,7 +331,6 @@ The reported live Juno BOM record was linked to the user's completed
 configuration through the existing version-checked Tasks command. Its ID,
 conversation, owner, attempt state, and parent hold were preserved. This repaired
 the missing prerequisite relationship without restarting the previous attempt.
-
 
 ## Compact conversational breakdown (D3)
 
@@ -362,7 +357,6 @@ Validation: 62 isolated Tasks database tests and 81 frontend integration tests
 passed, including the D3 generate/edit/refine/accept flow and the mixed-card
 regression. Whole frontend/backend format, lint, and type checks passed; the
 production frontend was built on the local Linux host.
-
 
 ## Latest dev integration
 
@@ -397,7 +391,6 @@ Live checks matched nine Tasks backend files, the schema, dependency lock,
 entrypoint, and Tasks/chat page bundles to the tested build. The Tasks entry and
 assets returned HTTP 200. The standalone prototype URL was restored and its
 content hash verified. `autogpt-tasks:pre-d3-20260912` retains the prior image.
-
 
 ## Suggested owner controls and mobile header
 
@@ -560,7 +553,6 @@ configuration tests/reloads continue to run as `autogpt_proxy` to preserve its
 cache-directory ownership. The previous working image remains available as
 `autogpt-tasks:pre-collaboration-20260913` for rollback.
 
-
 ## Clarification conversations retain tools (September 13, 2026)
 
 Tasks no longer construct or narrow tool permissions, including while waiting for
@@ -595,7 +587,6 @@ The SDK tests passed in two runs: 61 together and the reduced-context transient
 retry case separately. A combined run stalled around that test, which mocks
 `asyncio.sleep`; it passed independently. Provider routing and the independent
 Unraid bubblewrap failure are outside this change.
-
 
 ### Deployment verification
 
@@ -648,3 +639,33 @@ deployment. All 46 checked live page/Tasks/preview assets match the local build;
 the prototype route and native Unraid Edit control work. The Orgs template,
 21 variables, data mount, and other containers were preserved. Rollback image:
 `autogpt-tasks:pre-deliverable-20260913`.
+
+## Selectable questions and learning investigation (September 14, 2026)
+
+Tasks retained question options in stored state but the clarification card rendered
+only free text. The card now reuses chat's existing selection control, preserves
+selected/custom drafts when reopened, and submits the exact option through the
+existing task answer command. The shared field also shows custom values restored
+after mount. No backend answer format or permissions changed.
+
+Whole-frontend format/lint/types and 145 relevant tests passed. Chromium and WebKit
+fixtures passed at desktop and 390px touch widths, including selection, explicit
+submission, draft restoration, and no page overflow. The local production build
+was packaged as one 20 MB layer. Source `e79e64ab6d5c47016ee8df6bd55b3ea318189805`
+is deployed and healthy; all 47 checked frontend assets match the local build.
+Image config: `sha256:537b893119d1134c6ff57b240b8eaaa0e7d02e8bbfc5c8ecfbad7caed3b870bb`.
+All 21 variables, appdata mount, port, native Edit action, and other container IDs
+were preserved. Rollback: `autogpt-tasks:pre-choices-20260914`.
+
+Read-only learning checks verified separate Expert memory graphs and enabled
+skill-writing tools. Provenance matters: 14 recently created skills followed
+explicit create-skills assignments; an older software-factory playbook was saved
+during ordinary work. Those counts do not demonstrate reliable autonomous skill
+distillation. The nightly dream flag was off; it was not changed by this fix.
+
+The user requested a proposal before implementing general nightly skill learning.
+Fable 5.1 reviewed the public proposal twice and, with explicit internal trust,
+the private acceptance adapter. General design draft:
+[#14541](https://github.com/Significant-Gravitas/AutoGPT/pull/14541). It contains no Tasks
+implementation or private feature details. The private adapter proposal remains
+in `tasks-learning-proposal.md`; no learning runtime behavior was deployed.
