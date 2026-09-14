@@ -215,3 +215,63 @@ test("workspace deliverables are linked and previewable from their review", asyn
   );
   expect(screen.getByRole("button", { name: "Accept result" })).toBeTruthy();
 });
+
+test("bare workspace references open inline previews without leaving the review", async () => {
+  const id = "d8ef4076-a348-49bc-9c6b-883a841f2fd4";
+  const filename = "smart_car_platform_spec.md";
+  const item = task({
+    status: "needs_you",
+    result: `1. smart\\_car\\_platform\\_spec.md (v2) — workspace://${id} — architecture document.`,
+    result_version: 2,
+    session_id: "architecture-session",
+  });
+  server.use(
+    getListWorkspaceTasksMockHandler({ tasks: [item], assignees: [YOU] }),
+    http.get("/api/proxy/api/workspace/files", () =>
+      HttpResponse.json({
+        files: [
+          {
+            id,
+            name: filename,
+            path: `/robotics/${filename}`,
+            mime_type: "text/markdown",
+            size_bytes: 200,
+          },
+        ],
+        has_more: false,
+      }),
+    ),
+    http.get(`/api/proxy/api/workspace/files/${id}/download`, () =>
+      HttpResponse.text(
+        "# Autonomy architecture\n\n```\n[sensing] -> [planning]\n                 |\n              [control]\n```",
+      ),
+    ),
+  );
+  render(<TasksPage />);
+  await userEvent.click(
+    await screen.findByRole("button", { name: /^Choose sample kit materials/ }),
+  );
+  const result = await screen.findByRole("region", { name: "Task result" });
+  await screen.findByRole("region", { name: "Deliverable files" });
+  const links = within(result).getAllByRole("button", {
+    name: filename,
+  });
+  expect(links).toHaveLength(2);
+  expect(result.textContent).not.toContain("workspace://");
+  expect(result.textContent).toContain("(v2)");
+  await userEvent.click(links[0]);
+  const preview = await screen.findByRole("dialog", { name: filename });
+  expect(
+    await within(preview).findByRole("heading", {
+      name: "Autonomy architecture",
+    }),
+  ).toBeTruthy();
+  const code = preview.querySelector("pre > code");
+  expect(code?.textContent).toContain("[sensing] -> [planning]");
+  expect(code?.textContent).toContain("                 |");
+  expect(code?.textContent).toContain("              [control]");
+  await userEvent.click(
+    within(preview).getByRole("button", { name: "Back to review" }),
+  );
+  expect(screen.getByRole("button", { name: "Accept result" })).toBeTruthy();
+});

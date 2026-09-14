@@ -100,6 +100,7 @@ function TextWithArtifactCards({
     <>
       <MessageResponse
         components={STREAMDOWN_COMPONENTS}
+        workspaceFileUrlBuilder={fileUrlBuilder}
         className="[&_li]:py-0"
       >
         {resolved}

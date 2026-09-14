@@ -1,5 +1,7 @@
 "use client";
 
+import { MessageResponse } from "@/components/ai-elements/message";
+import { resolveWorkspaceUrls } from "../../ChatMessagesContainer/helpers";
 import { globalRegistry } from "@/components/contextual/OutputRenderers";
 import { codeRenderer } from "@/components/contextual/OutputRenderers/renderers/CodeRenderer";
 import { Suspense, useState } from "react";
@@ -55,7 +57,7 @@ function ArtifactContentLoader({
   }
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto">
+    <div ref={scrollRef} className="min-w-0 flex-1 overflow-y-auto">
       <ArtifactErrorBoundary
         artifactID={artifact.id}
         artifactTitle={artifact.title}
@@ -237,6 +239,16 @@ function ArtifactRenderer({
 
   if (classification.type === "react") {
     return <ArtifactReactPreview source={content} title={artifact.title} />;
+  }
+
+  if (classification.type === "markdown") {
+    return (
+      <div className="min-w-0 p-4">
+        <MessageResponse mode="static">
+          {resolveWorkspaceUrls(content)}
+        </MessageResponse>
+      </div>
+    );
   }
 
   // Code: pass with explicit type metadata so CodeRenderer matches

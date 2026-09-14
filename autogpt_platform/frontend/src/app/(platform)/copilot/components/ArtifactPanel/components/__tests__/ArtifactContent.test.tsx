@@ -1206,7 +1206,7 @@ describe("ArtifactContent", () => {
 
   // ── Markdown ──────────────────────────────────────────────────────
 
-  it("renders markdown via globalRegistry", async () => {
+  it("renders Markdown files through the shared chat renderer", async () => {
     const mdContent = "# Hello\n\nThis is **markdown**.";
     vi.stubGlobal(
       "fetch",
@@ -1234,9 +1234,9 @@ describe("ArtifactContent", () => {
       />,
     );
 
-    const rendered = await screen.findByTestId("global-renderer");
-    expect(rendered).toBeTruthy();
-    expect(rendered.textContent).toContain("text/markdown");
+    expect(await screen.findByRole("heading", { name: "Hello" })).toBeTruthy();
+    expect(screen.getByText("markdown")).toBeTruthy();
+    expect(globalRegistry.getRenderer).not.toHaveBeenCalled();
   });
 
   // ── Text fallback ─────────────────────────────────────────────────

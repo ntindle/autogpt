@@ -20,7 +20,11 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactElement } from "react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import type { LinkSafetyModalProps } from "streamdown";
-import { Streamdown } from "streamdown";
+import { Streamdown, defaultRemarkPlugins } from "streamdown";
+import {
+  remarkWorkspaceLinks,
+  workspaceFileUrls,
+} from "@/lib/remark-workspace-links";
 
 export type MessageProps = HTMLAttributes<HTMLDivElement> & {
   from: UIMessage["role"];
@@ -300,9 +304,11 @@ export const MessageBranchPage = ({
   );
 };
 
-export type MessageResponseProps = ComponentProps<typeof Streamdown>;
+export type MessageResponseProps = ComponentProps<typeof Streamdown> & {
+  workspaceFileUrlBuilder?: (fileID: string) => string;
+};
 
-function isSameOriginLink(url: string): boolean {
+export function isSameOriginLink(url: string): boolean {
   try {
     const parsed = new URL(url, window.location.origin);
     return parsed.origin === window.location.origin;
@@ -311,7 +317,7 @@ function isSameOriginLink(url: string): boolean {
   }
 }
 
-function ExternalLinkModal({
+export function ExternalLinkModal({
   url,
   isOpen,
   onClose,
@@ -352,7 +358,7 @@ function ExternalLinkModal({
 }
 
 export const MessageResponse = memo(
-  ({ className, ...props }: MessageResponseProps) => (
+  ({ className, workspaceFileUrlBuilder, ...props }: MessageResponseProps) => (
     <Streamdown
       className={cn(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_pre]:!bg-white",
@@ -377,6 +383,18 @@ export const MessageResponse = memo(
           </div>
         ),
       }}
+      remarkPlugins={[
+        ...Object.values(defaultRemarkPlugins),
+        [
+          remarkWorkspaceLinks,
+          {
+            fileUrls: workspaceFileUrls(
+              props.children ?? "",
+              workspaceFileUrlBuilder,
+            ),
+          },
+        ],
+      ]}
       plugins={{ code, mermaid, math, cjk }}
       linkSafety={{
         enabled: true,
@@ -386,7 +404,6 @@ export const MessageResponse = memo(
       {...props}
     />
   ),
-  (prevProps, nextProps) => prevProps.children === nextProps.children,
 );
 
 MessageResponse.displayName = "MessageResponse";

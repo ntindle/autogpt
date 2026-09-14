@@ -1,6 +1,4 @@
-import { resolveWorkspaceUrls } from "../../copilot/components/ChatMessagesContainer/helpers";
-import { TaskResultFiles } from "./TaskResultFiles";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { TaskResultContent } from "./TaskResultContent";
 import { Button } from "@/components/atoms/Button/Button";
 import { Textarea } from "@/components/ui/textarea";
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
@@ -42,12 +40,7 @@ export function TaskResult({ task, tasks, pending, onCommand }: Props) {
           Version {resultTask.result_version}
         </span>
       </div>
-      <div className="break-words text-sm">
-        <MessageResponse>
-          {resolveWorkspaceUrls(resultTask.result)}
-        </MessageResponse>
-      </div>
-      <TaskResultFiles
+      <TaskResultContent
         result={resultTask.result}
         sessionId={resultTask.session_id ?? resultTask.source_session_id}
       />
