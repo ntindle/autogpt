@@ -49,7 +49,12 @@ def answer(program, arguments):
                               "updater": os.environ.get("DISABLE_AUTOUPDATER")}) + "\n")
     time.sleep(behaviour.get("sleep", 0))
     if arguments == ["--version"]:
+        # Always answered, whatever `exit` says: on Windows the interpreter
+        # the stub is a copy of answers this itself, and the stub must be the
+        # same program on every system.
         print(behaviour["version"] + " (Claude Code)")
+        sys.stdout.flush()
+        os._exit(0)
     elif arguments == ["auth", "status"]:
         open(os.path.join(os.path.expanduser("~"), ".claude.json"), "a").close()
         time.sleep(behaviour.get("auth_sleep", 0))
