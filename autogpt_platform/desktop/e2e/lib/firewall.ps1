@@ -88,15 +88,25 @@ server.listen(0, '0.0.0.0', () => {
 '@
         $since = Get-Date
         $port = [string](& $program $script)
-        $tail = Get-PathTail $program
+        # The folder's own name, not the whole path: the temporary directory
+        # is given in its short form on some machines (C:\Users\RUNNER~1\...
+        # on GitHub's), and the audit log names programs by their long path.
+        $tail = ('\' + (Split-Path -Leaf $directory) + '\node.exe').ToLowerInvariant()
         $deadline = (Get-Date).AddSeconds(30)
         do {
             Start-Sleep -Seconds 2
-            $events = @(Get-SocketEvents $since | Where-Object { $_.Application.EndsWith($tail) })
+            $seen = @(Get-SocketEvents $since)
+            $events = @($seen | Where-Object { $_.Application.EndsWith($tail) })
             $listened = @($events | Where-Object { $_.Id -eq 5154 -and $_.Port -eq $port }).Count -gt 0
         } until ($listened -or (Get-Date) -gt $deadline)
         if (-not $listened) {
-            throw "firewall instrumentation is not working on this machine: a program listening on 0.0.0.0:$port produced no audit event 5154"
+            # What was logged instead, so that the next failure explains itself.
+            $programs = @($seen | ForEach-Object { "$($_.Id) $($_.Application)" } | Sort-Object -Unique | Select-Object -First 12)
+            $policy = (& auditpol.exe /get "/subcategory:$ConnectionAudit" /r | Select-Object -Last 1)
+            throw ("firewall instrumentation is not working on this machine: a program listening on 0.0.0.0:$port " +
+                "($program) produced no audit event 5154. Socket events since it started: $($seen.Count)" +
+                $(if ($programs.Count) { ", from: " + ($programs -join '; ') } else { '' }) +
+                ". Audit policy: $policy")
         }
         $outgoing = @($events | Where-Object { $_.Id -eq 5158 -and $_.Port -ne $port -and -not (Test-Loopback $_.Address) })
         return @{
