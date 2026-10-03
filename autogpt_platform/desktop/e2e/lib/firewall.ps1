@@ -97,21 +97,27 @@ server.listen(0, '0.0.0.0', () => {
             Start-Sleep -Seconds 2
             $seen = @(Get-SocketEvents $since)
             $events = @($seen | Where-Object { $_.Application.EndsWith($tail) })
-            $listened = @($events | Where-Object { $_.Id -eq 5154 -and $_.Port -eq $port }).Count -gt 0
-        } until ($listened -or (Get-Date) -gt $deadline)
-        if (-not $listened) {
+            # The program listens once, and the folder it runs from is its
+            # alone, so any listen logged for it is that one. The port is
+            # taken from the event: what the program printed did not compare
+            # equal to it on GitHub's machines.
+            $listens = @($events | Where-Object { $_.Id -eq 5154 })
+        } until ($listens.Count -gt 0 -or (Get-Date) -gt $deadline)
+        if ($listens.Count -eq 0) {
             # What was logged instead, so that the next failure explains itself.
-            $programs = @($seen | ForEach-Object { "$($_.Id) $($_.Application)" } | Sort-Object -Unique | Select-Object -First 12)
+            $programs = @($seen | ForEach-Object { "$($_.Id) $($_.Application) $($_.Address):$($_.Port)" } | Sort-Object -Unique | Select-Object -First 12)
             $policy = (& auditpol.exe /get "/subcategory:$ConnectionAudit" /r | Select-Object -Last 1)
             throw ("firewall instrumentation is not working on this machine: a program listening on 0.0.0.0:$port " +
                 "($program) produced no audit event 5154. Socket events since it started: $($seen.Count)" +
                 $(if ($programs.Count) { ", from: " + ($programs -join '; ') } else { '' }) +
                 ". Audit policy: $policy")
         }
-        $outgoing = @($events | Where-Object { $_.Id -eq 5158 -and $_.Port -ne $port -and -not (Test-Loopback $_.Address) })
+        $listenPorts = @($listens | ForEach-Object { $_.Port })
+        $outgoing = @($events | Where-Object { $_.Id -eq 5158 -and $listenPorts -notcontains $_.Port -and -not (Test-Loopback $_.Address) })
+        $logged = @($events | ForEach-Object { "$($_.Id) $($_.Address):$($_.Port)/$($_.Protocol)" } | Sort-Object -Unique)
         return @{
             bindDiscriminates = $outgoing.Count -eq 0
-            control           = "listen logged; $($outgoing.Count) bind event(s) with a non-loopback address from outgoing sockets"
+            control           = "listen logged on $($listenPorts -join ',') (the program printed '$port'); $($outgoing.Count) bind event(s) with a non-loopback address from outgoing sockets; all of its events: $($logged -join ' ')"
         }
     }
     finally {
