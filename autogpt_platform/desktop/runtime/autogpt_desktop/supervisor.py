@@ -27,11 +27,13 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 from typing import NoReturn
 
 from autogpt_desktop import (
     apps,
     bootstrap,
+    claude_code,
     events,
     ports,
     postgres,
@@ -98,6 +100,11 @@ class Stack:
         self.ready_at: float | None = None
         # The bundle version a running publish is for; None once settled.
         self.publishing: str | None = None
+        self.user: dict[str, str] = {}
+        self.claude_code: claude_code.Detection | None = None
+        # What the copilot executor's process gets in place of `env`, when
+        # AutoPilot runs on the user's Claude Code sign-in.
+        self.copilot_env: dict[str, str] | None = None
 
     @property
     def processes(self) -> list[ManagedProcess]:
@@ -158,14 +165,16 @@ class Stack:
         events.progress("config", "Preparing configuration")
         data.prepare()
         self.registry.reap_leftovers()
+        settings.clear_copilot_workspaces(data)
         secret = settings.ensure_secrets(bundle, data)
         port = ports.allocate(data.ports_file)
-        user = settings.read_user_settings(data)
+        self.user = user = settings.read_user_settings(data)
         self.profile = resources.choose(user)
         events.progress("profile", self.profile.describe())
         self.env = settings.backend_environment(
             bundle, data, port, secret, user, self.profile.backend_env
         )
+        self.claude_code = self.look_for_claude_code()
         first_boot = not postgres.is_initialized(data)
         self.start_infrastructure(port, secret, first_boot)
         self.migrate(port, secret, first_boot)
@@ -175,6 +184,41 @@ class Stack:
         )
         self.start_apps(port, secret)
         return self.env["AUTOGPT_PUBLIC_URL"]
+
+    def look_for_claude_code(self) -> claude_code.Detection:
+        """In the background, while the databases start: it asks the CLI and
+        then the backend, which takes a few seconds."""
+        env, user, home = dict(self.env), self.user, claude_code.real_home()
+
+        def as_the_host_gets_it(cli: Path | None) -> dict[str, str]:
+            host = settings.claude_code_host_environment(env, self.data, user, home, cli)
+            return claude_code.service_environment(host)
+
+        return claude_code.Detection(
+            lambda: claude_code.detect(self.bundle, self.data, user, as_the_host_gets_it, home)
+        )
+
+    def use_claude_code(self) -> None:
+        """Say what was found, and with a sign-in to use, turn it on: for
+        every service (the API decides which engine a turn gets), and the
+        real home for the copilot executor, in a process of its own
+        (start_apps)."""
+        if self.claude_code is None:
+            return
+        found = self.claude_code.result()
+        events.claude_code(
+            found.state,
+            found.describe(),
+            str(found.cli) if found.cli else None,
+            found.version,
+            found.bundled,
+        )
+        if not found.in_use:
+            return
+        self.env[settings.CLAUDE_SUBSCRIPTION] = "true"
+        self.copilot_env = settings.claude_code_host_environment(
+            self.env, self.data, self.user, claude_code.real_home(), found.host_cli
+        )
 
     def start_infrastructure(
         self, port: dict[str, int], secret: dict[str, str], first_boot: bool
@@ -287,11 +331,16 @@ class Stack:
         bundle, data = self.bundle, self.data
         self.raise_if_cancelled()
         events.progress("services", "Starting AutoGPT")
+        self.use_claude_code()
         frontend_env = settings.frontend_environment(self.env, port, secret, data)
         self.cache = runs.Cache(port["valkey"], secret["REDIS_PASSWORD"])
         groups = apps.layout(self.profile.merged)
+        if self.copilot_env:
+            groups = apps.copilot_alone(groups)
         self.hosts = {group.name: group for group in groups}
-        hosts = apps.backend_processes(bundle, data, self.env, groups, self.cache)
+        hosts = apps.backend_processes(
+            bundle, data, self.env, groups, self.cache, self.copilot_env
+        )
         # A tier of its own, so that it stops after the services whose way
         # to the database it is: their cleanup still has things to write.
         self.launch([host for host in hosts if host.name == apps.DATABASE_MANAGER])
@@ -412,7 +461,7 @@ class Stack:
         del self.hosts[process.name]
         groups = apps.isolated((group,))
         replacements = apps.backend_processes(
-            self.bundle, self.data, self.env, groups, self.cache
+            self.bundle, self.data, self.env, groups, self.cache, self.copilot_env
         )
         for replacement, single in zip(replacements, groups, strict=True):
             replacement.start()

@@ -41,7 +41,7 @@ databases or ports. The contract is at the top of `src/runtime.js`.
 | nginx | `proxy.py` (same routes, streamed) |
 | frontend role over a Unix socket | the same role policy, with a generated password over loopback TCP |
 | container exit kills everything | a Job Object on Windows; process groups and a recorded-PID sweep elsewhere |
-| `/data/home` as the services' home | `home/` in the data directory, so AutoPilot never finds the user's own Claude Code or Codex sign-in |
+| `/data/home` as the services' home | `home/` in the data directory. One process is given the user's real home instead, when Claude Code is signed in on the machine (see [AutoPilot and Claude Code](#autopilot-and-claude-code)) |
 | FalkorDB / Graphiti memory | not included (Linux-only module, SSPL) |
 | chat-bot bridge services | not included |
 | `autogpt-admin promote`, then closing registration by hand | automatic: the first account is the owner and an admin, and registration closes behind it (see [Accounts](#accounts)) |
@@ -208,6 +208,94 @@ The data belongs to the PostgreSQL major version that created it (18 on
 Windows and macOS, 16 on Linux). A build with a different major refuses to
 start and says why; changing the bundled major needs a migration path first.
 
+## AutoPilot and Claude Code
+
+**When Claude Code is signed in on the machine, AutoPilot uses that sign-in,
+and its turns count against that Claude plan.** Nothing is configured for it
+and no API key is needed. The tray menu, and the Account menu, say in one
+line which it is:
+
+| The runtime found | AutoPilot runs on | The line says |
+| --- | --- | --- |
+| a Claude Code CLI that is signed in | the user's Claude plan | that turns count against the plan |
+| a CLI that is signed out, none, or a home directory Claude Code was never used in | the API keys in `settings.env` | to run `claude`, sign in, and restart |
+| a CLI that did not say whether it is signed in (it took over ten seconds twice, or answered something else) | the API keys | to restart the app, which asks again |
+| `AUTOGPT_CLAUDE_CODE=off` in `settings.env` | the API keys | that the sign-in is turned off |
+| a sign-in, with settings the backend refuses together with it | the API keys | to look in the log |
+
+- **The sign-in comes before API keys.** To keep AutoPilot on the keys, put
+  `AUTOGPT_CLAUDE_CODE=off` in `settings.env`. The backend's own switches do
+  the same: `CHAT_USE_CLAUDE_CODE_SUBSCRIPTION=false`, and `CHAT_USE_LOCAL=true`
+  (a local model). `AUTOGPT_CLAUDE_CODE=off` in the environment the app is
+  started with also turns it off; the smoke test starts the runtime that way,
+  so that it runs the same on a machine that is signed in.
+- **The app has no Claude sign-in of its own**, no field for a token, and
+  never will: signing in is done with Claude Code itself (`claude`, then
+  `/login`). `CLAUDE_CODE_OAUTH_TOKEN` and `CLAUDE_CODE_REFRESH_TOKEN` in
+  `settings.env` are ignored, however they are capitalised, because with
+  them the backend would write a credentials file.
+- **It never touches the credentials.** The runtime starts the stock CLI
+  with `--version` and `auth status`, reads the version and whether it is
+  signed in, and that is all: no credentials file or keychain entry is
+  opened or copied, and the account's email address is neither logged nor
+  shown (`runtime/autogpt_desktop/claude_code.py`). Each question is in
+  `logs/runtime.log` with its exit code and how long it took, never its
+  answer.
+- **A machine without Claude Code stays without it.** `claude auth status`
+  sets up `~/.claude.json` and `~/.claude` in a home directory that has
+  neither, so the runtime starts the CLI only where one of them is already
+  there (or the `CLAUDE_CONFIG_DIR` that `settings.env` names). It looks at
+  the names and opens nothing.
+- **It is read once, while the app starts.** After signing in or out of
+  Claude Code, restart the app. Signed out while the app runs, AutoPilot's
+  turns fail until it is restarted; they do not fall back to a key.
+- **Chat titles still need a key.** With a sign-in and no API key, sessions
+  stay untitled: the backend names them through a separate client that the
+  sign-in does not cover.
+
+**Which process sees the sign-in.** Only the copilot executor, which then
+runs in a process of its own (`copilot-executor`, as in the `isolated`
+profile) instead of in `workers`. It gets the user's real home directory and
+no `CLAUDE_CONFIG_DIR`, so the CLI finds the sign-in exactly where the user's
+terminal does. Every other process keeps `home/` in the data directory. That
+includes the graph executor, which starts the Claude Code CLI itself for an
+orchestrator block in its SDK mode, and does so without AutoPilot's flags
+against loading the user's settings, hooks and MCP servers: in the user's
+home an agent run would pick all of those up. The price is one more
+interpreter, about 700 MB, and only while the sign-in is in use.
+What that one process would otherwise leave in the user's home is sent to
+the data directory by name (`MEM0_DIR`, `XDG_CACHE_HOME`). The CLI itself
+writes where it always does: a transcript directory per chat session under
+`~/.claude/projects` (named after the session's workspace,
+`...-tmp-copilot-<session>`). They are left to Claude Code, which removes old
+transcripts by its own retention setting (`cleanupPeriodDays`). Without a
+sign-in nothing is read from or written to the user's Claude directory, and
+no CLI is started in the user's home.
+
+**Workspaces.** Each chat session works in a directory of its own:
+`/tmp/copilot-<session>` on macOS and Linux, as in the appliance, and
+`tmp\copilot-<session>` in the data directory on Windows, which has no
+`/tmp` (see `build/backend_patches.py`).
+
+**Which CLI.** The one inside the `claude-agent-sdk` package, at the version
+`backend/poetry.lock` pins: what the Docker image runs. Anthropic publishes
+no Windows build of some SDK versions; the Windows bundle then installs the
+same SDK from source and takes the same CLI version, unmodified, from
+Anthropic's release bucket (`build/claude_cli.py`). The user's own Claude Code
+is used only by a bundle that carries none; `AUTOGPT_CLAUDE_CLI=<path>` in
+`settings.env` names another. The app never updates a CLI: the bundled one
+changes when the lock does, and the user's own keeps updating itself when
+they run it.
+
+`build/autopilot_turn.py` sends one real turn through an assembled bundle and
+prints all of the above as it happened. It fails when a service other than
+the copilot executor ran in the user's home, or when the run left something
+new at the top of it:
+
+```bash
+build/runtime/python/bin/python3 -B build/autopilot_turn.py build/runtime   # python\python.exe on Windows
+```
+
 ## Memory
 
 Each interpreter that imports the backend holds 460–860 MB before it does
@@ -226,6 +314,11 @@ straight to the database or through database-manager is decided per process,
 so a service that connects cannot share with one that does not. A watchdog
 in the `workers` host ends it if that ever stops being true.
 
+While AutoPilot runs on the user's Claude Code sign-in there is a fourth,
+`copilot-executor`, taken out of `workers`: it is the one process given the
+user's real home directory, and nothing else is to run there (see
+[AutoPilot and Claude Code](#autopilot-and-claude-code)).
+
 Measured on Windows x64 (31 GB, 24 cores), idle, 45 seconds after ready,
 memory unique to the app's processes (USS):
 
@@ -233,6 +326,7 @@ memory unique to the app's processes (USS):
 | --- | --- | --- | --- |
 | before: a process per service | 8 | 40+ | 6.0 GB |
 | `balanced`, `compact` | 3 | 36–37 | 3.0 GB |
+| `balanced`, with the Claude Code sign-in in use | 4 | one more | 0.7 GB more (the service hosts alone: 3.2 GB against 2.5 GB, as the app became ready) |
 | `isolated` | 8 | 48 | 5.9 GB |
 
 The profile is chosen from the machine and reported in `logs/runtime.log`:
@@ -608,10 +702,23 @@ names a version; the other settings are at the top of
 
 `build_runtime.py` is a list of independent steps; `--only frontend,assets`
 re-runs some of them. The frontend must be built on the OS it will run on.
+After a change to `backend/poetry.lock` or to the backend, on a bundle that
+is already assembled: `--only deps,backend,prisma,assets,prune,relocate,compile,seal`
+(`deps` moves the packages back to where `uv` installs them, so `relocate`
+has to follow it).
+
+The backend is copied into the bundle and then changed there, never in the
+repository: `build/backend_patches.py` replaces a few exact pieces of its
+text, each offered upstream as a patch in `upstream/`. The build stops when
+upstream has changed one of them.
 The last step, `seal`, removes what a run from the bundle may have left in
 it and refuses a bundle that would write into itself or fetch anything when
-installed; run it again before packaging a bundle that has been run from.
-`build/smoke_test.py` boots an assembled bundle, probes it and checks that
+installed, whose `claude-agent-sdk` is not the locked one, whose Claude Code
+CLI is not the version that SDK names, or whose backend lacks the build-time
+patches; run it again before packaging a bundle that has been run from.
+`build/smoke_test.py` boots an assembled bundle (with the machine's Claude
+Code sign-in turned off, so that every machine runs the same three service
+hosts), probes it and checks that
 stopping it leaves no process behind and nothing in the bundle changed
 (a file that came and went during the run shows in its directory's
 modification time). It
@@ -675,6 +782,14 @@ own, and checks every dependency of the host against it (run by
 `test_backend_contract.py` when `build/runtime` exists, and by the smoke test
 always).
 
+AutoPilot's use of the Claude Code sign-in is tested against a stand-in CLI
+(`runtime/tests/claude_stub.py`: a real program, since Windows refuses
+anything else), never the machine's own. Like the real one it leaves a
+`.claude.json` in a home directory that has none, which is how the tests
+see that nothing is started in such a home. `test_backend_patches.py` tries the
+build-time backend patches on the backend in the repository, and holds each
+equal to the patch offered upstream.
+
 A few of the shell tests read `electron-updater` and `@electron/osx-sign` to
 notice when a new version of either drops something this relies on; they are
 skipped until `npm install` has been run.
@@ -697,9 +812,15 @@ It prints one JSON object per line (`progress`, `ready` with the URL,
 
 - About 3 GB of RAM in use when idle (see [Memory](#memory)): three Python
   processes at roughly 850 MB each, because each one imports the whole
-  backend. It was measured on Windows; macOS and Linux have yet to be.
+  backend, and a fourth (about 700 MB more) while AutoPilot runs on the
+  Claude Code sign-in. It was measured on Windows; macOS and Linux have yet
+  to be.
 - AutoPilot's sandboxed shell tool relies on bubblewrap and is unavailable
   outside Linux.
+- AutoPilot on a Claude Code sign-in has been run on Windows only, and there
+  only as far as Anthropic's answer (see [AutoPilot and Claude
+  Code](#autopilot-and-claude-code)); on macOS the sign-in is in the Keychain,
+  which has yet to be tried.
 - Intel Macs are not supported (a locked dependency ships no x86_64 macOS
   wheel).
 - No Windows build is signed by a known publisher yet, and a macOS build is

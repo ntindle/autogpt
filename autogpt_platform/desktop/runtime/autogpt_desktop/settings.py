@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import secrets
+import shutil
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -33,6 +34,19 @@ DB_SETTINGS = {
     "DB_POOL_TIMEOUT": (300, 1, 3600),
 }
 FRONTEND_DB_ROLE = "autogpt_frontend"
+
+# Never taken from settings.env. With one of them set, the backend writes a
+# Claude Code credentials file into the home directory
+# (backend/copilot/sdk/subscription.py), and the app neither stores a Claude
+# sign-in nor asks for one: the only sign-in it uses is the one the user made
+# by running `claude` themselves (claude_code.py).
+CLAUDE_TOKEN_SETTINGS = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_REFRESH_TOKEN")
+CLAUDE_SUBSCRIPTION = "CHAT_USE_CLAUDE_CODE_SUBSCRIPTION"
+# Where AutoPilot's per-session working directories go, in place of the
+# backend's /tmp/copilot-<session> (build/backend_patches.py makes the backend
+# read it). The path has to contain `tmp/copilot-`: the backend only sweeps
+# transcript directories whose name, made from this path, has `-tmp-copilot-`.
+WORKSPACE_PREFIX_VARIABLE = "COPILOT_WORKSPACE_PREFIX"
 
 # Desktop-only secrets. runtime_config.py rejects unknown keys in its own file,
 # so these live beside it rather than in it.
@@ -159,6 +173,10 @@ def backend_environment(
 ) -> dict[str, str]:
     """`defaults` (the profile's pool sizes) give way to settings.env, which
     gives way to the runtime's own wiring: later keys win."""
+    # Whatever their case: Windows has one variable for every spelling.
+    user = {
+        name: value for name, value in user.items() if name.upper() not in CLAUDE_TOKEN_SETTINGS
+    }
     public_url = f"http://127.0.0.1:{ports['public']}"
     database = _database_url(
         "postgres", secret["POSTGRES_PASSWORD"], ports["postgres"], "platform"
@@ -235,6 +253,7 @@ def backend_environment(
         "AGPT_SERVER_URL": f"http://127.0.0.1:{ports['agent_api']}/api",
         "AGPT_WS_SERVER_URL": f"ws://127.0.0.1:{ports['websocket']}/ws",
         "WORKSPACE_STORAGE_DIR": str(data.workspaces),
+        **_copilot_workspaces(data),
         "NODE_ENV": "production",
         "PYTHONUNBUFFERED": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -244,14 +263,76 @@ def backend_environment(
         "XDG_CACHE_HOME": str(data.backend_cache),
         **_home(data.home),
         # AutoPilot's coding agents keep their sign-in and transcripts under
-        # the home directory. Like the appliance, the app has its own: it
-        # must not pick up, or write into, the user's personal Claude Code or
-        # Codex setup.
+        # the home directory. Like the appliance, the app has its own: no
+        # service may pick up, or write into, the user's personal Claude Code
+        # or Codex setup. The one exception is made on purpose, for one
+        # process: claude_code_host_environment.
         "CLAUDE_CONFIG_DIR": str(data.home / ".claude"),
         "CODEX_HOME": str(data.home / ".codex"),
         **_service_addresses(ports),
     }
     return env
+
+
+def claude_code_host_environment(
+    env: dict[str, str],
+    data: DataDir,
+    user: dict[str, str],
+    home: Path,
+    cli: Path | None = None,
+) -> dict[str, str]:
+    """`env` (backend_environment) for the process of the copilot executor,
+    which is then the only service in it (apps.copilot_alone), when AutoPilot
+    runs on the user's own Claude Code sign-in (claude_code.py).
+
+    The CLI finds that sign-in the way the user's terminal does: under the
+    real home directory, with no CLAUDE_CONFIG_DIR of the app's. (The app's
+    home plus CLAUDE_CONFIG_DIR=~/.claude would not do: the macOS Keychain
+    entry is named after that variable, and the CLI then keeps a second copy
+    of its state file.) What the services of that process would otherwise
+    leave in the user's home is sent to the data directory by name; no other
+    XDG_* directory is moved, because the CLI's own install lives under them.
+
+    `cli` is the CLI to use when it is not the one the SDK bundles. The
+    backend's sign-in check does not read CHAT_CLAUDE_AGENT_CLI_PATH and takes
+    `claude` from PATH, so its directory goes first there too."""
+    host = {
+        **env,
+        **_home(home),
+        CLAUDE_SUBSCRIPTION: "true",
+        # The user's own Claude Code keeps updating itself when they run it;
+        # the app never updates one.
+        "DISABLE_AUTOUPDATER": "1",
+        "MEM0_DIR": str(data.home / ".mem0"),
+    }
+    del host["CLAUDE_CONFIG_DIR"]
+    if user.get("CLAUDE_CONFIG_DIR"):
+        host["CLAUDE_CONFIG_DIR"] = user["CLAUDE_CONFIG_DIR"]
+    if cli:
+        host["CHAT_CLAUDE_AGENT_CLI_PATH"] = str(cli)
+        path = env.get("PATH") or os.environ.get("PATH", "")
+        host["PATH"] = os.pathsep.join([str(cli.parent), path])
+    return host
+
+
+def _copilot_workspaces(data: DataDir) -> dict[str, str]:
+    """Windows has no /tmp: the backend's default would be a `tmp` directory
+    at the top of whatever drive the app is installed on, shared by every
+    user of the machine and left behind by an uninstall. macOS and Linux keep the backend's default,
+    which its shell sandbox mounts by that name."""
+    if sys.platform != "win32":
+        return {}
+    return {WORKSPACE_PREFIX_VARIABLE: str(data.root / "tmp" / "copilot-")}
+
+
+def clear_copilot_workspaces(data: DataDir) -> None:
+    """Remove what earlier runs left of AutoPilot's workspaces in the data
+    directory. The backend deletes a session's workspace after every turn,
+    but Windows refuses while the CLI that worked in it is still exiting, and
+    a run that was killed deletes nothing. Called before any service starts:
+    no session is at work."""
+    for prefix in _copilot_workspaces(data).values():
+        shutil.rmtree(Path(prefix).parent, ignore_errors=True)
 
 
 def _database_settings(user: dict[str, str]) -> dict[str, str]:

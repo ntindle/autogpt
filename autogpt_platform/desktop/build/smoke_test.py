@@ -116,6 +116,10 @@ NO_WAY_OUT = {
 }
 if sys.platform != "win32":  # where the two spellings are two variables
     NO_WAY_OUT.update({name.lower(): value for name, value in NO_WAY_OUT.items()})
+# The same run on every machine: where Claude Code is signed in, the runtime
+# would ask the user's CLI and start one more service host for AutoPilot
+# (autogpt_desktop/claude_code.py). build/autopilot_turn.py tests that.
+NO_SIGN_IN = {"AUTOGPT_CLAUDE_CODE": "off"}
 # A public image, small, and of a width the Next configuration allows.
 OPTIMISED_IMAGE = "/_next/image?url=%2Fplaceholder.png&w=64&q=75"
 # What a service says when it is refused a write (--read-only).
@@ -278,7 +282,7 @@ def run(runtime: Path, data: Path, timeout: int, checks: Checks, install: Instal
     process = subprocess.Popen(
         shell_command(runtime),
         cwd=runtime,
-        env={**os.environ, **NO_WAY_OUT, "AUTOGPT_DESKTOP_DATA_DIR": str(data)},
+        env={**os.environ, **NO_WAY_OUT, **NO_SIGN_IN, "AUTOGPT_DESKTOP_DATA_DIR": str(data)},
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         text=True,

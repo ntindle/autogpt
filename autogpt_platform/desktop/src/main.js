@@ -17,6 +17,7 @@ const {
   shell,
 } = require("electron");
 
+const { claudeCodeMenuItems, claudeCodeReports } = require("./claude-code");
 const { claim, identity, runtimeEnvironment, variantOf, windowTitle } = require("./identity");
 const { allowsPermission, classifyMainNavigation, classifyWindowOpen } = require("./navigation");
 const { hearsRuntime } = require("./lifecycle");
@@ -60,6 +61,8 @@ let quitting = false;
 let restarting = false;
 let failure = null;
 let foreignData = null;
+// What AutoPilot runs on, as the running runtime reported it (claude-code.js).
+const claudeCode = claudeCodeReports(() => refreshMenus());
 let updater = null;
 let updaterStarted = false;
 let confirmingUpdate = false;
@@ -131,6 +134,7 @@ function startRuntime() {
     registryFile: path.join(dataDir, "run", "children.json"),
   });
   runtime = started;
+  claudeCode.runtimeStarting();
   // See lifecycle.js: a runtime that is being replaced is not listened to,
   // and neither is one that is being stopped to install an update.
   const heard = (event) =>
@@ -148,6 +152,7 @@ function startRuntime() {
 }
 
 function onRuntimeEvent(event) {
+  if (claudeCode.hears(event)) return;
   report(event);
   if (event.event === "ready" && typeof event.url === "string") {
     appUrl = event.url;
@@ -472,7 +477,7 @@ async function explainCrash(message) {
 // The tray icon can be hidden or missing, so its owner actions are in the
 // application menu as well (owner.js; outside macOS it shows on Alt).
 function applicationMenu() {
-  const template = applicationMenuTemplate(process.platform, ownerItems());
+  const template = applicationMenuTemplate(process.platform, [...ownerItems(), ...autopilotItems()]);
   return Menu.buildFromTemplate(withUpdatesMenu(template, updateItems(), process.platform));
 }
 
@@ -498,6 +503,7 @@ function trayMenu() {
     { label: "Show logs", click: () => shell.openPath(logsDir) },
     { type: "separator" },
     ...ownerItems(),
+    ...autopilotItems(),
     { type: "separator" },
     ...updateItems(),
     { label: `Quit ${install.productName}`, click: () => app.quit() },
@@ -510,6 +516,12 @@ function ownerItems() {
     copyText: (text) => clipboard.writeText(text),
     resetPassword: resetOwnerPassword,
   });
+}
+
+// Below the owner's entries in both menus, under a separator of its own.
+function autopilotItems() {
+  const items = claudeCodeMenuItems({ status: claudeCode.status(), install });
+  return items.length ? [{ type: "separator" }, ...items] : [];
 }
 
 // The menus show the app's address, which is only known once it is ready.

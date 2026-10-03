@@ -293,12 +293,16 @@ def test_lock_export_pins_main_dependencies_only():
     assert all("==" in line for line in lines)
 
 
-def test_lock_export_applies_windows_overrides():
+def test_lock_export_gives_every_platform_the_locks_versions():
+    """A platform that cannot install the locked version of a package is
+    not given another one (tests/test_claude_cli_build.py has the one case
+    there was)."""
     lock = DESKTOP.parent / "backend" / "poetry.lock"
-    windows = dict(line.split(" ; ")[0].split("==") for line in lock_export.export(lock, "win32"))
-    linux = dict(line.split(" ; ")[0].split("==") for line in lock_export.export(lock, "linux"))
-    assert windows["claude-agent-sdk"] == lock_export.PLATFORM_OVERRIDES["win32"]["claude-agent-sdk"]
-    assert linux["claude-agent-sdk"] != windows["claude-agent-sdk"]
+    pins = [
+        {line.split(" ; ")[0] for line in lock_export.export(lock, platform)}
+        for platform in ("win32", "darwin", "linux")
+    ]
+    assert pins[0] == pins[1] == pins[2]
 
 
 def test_frontend_role_policy_is_extracted_from_the_appliance_bootstrap():

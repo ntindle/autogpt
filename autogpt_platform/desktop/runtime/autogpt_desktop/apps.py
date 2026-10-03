@@ -16,6 +16,8 @@ interpreter that imports the backend costs about 600 MB:
 
 `isolated()` is one host per service: what the `isolated` profile runs, and
 what a group is replaced with when upstream stops fitting it.
+`copilot_alone()` takes the copilot executor out of its group, when it is
+the one service that runs in the user's own home directory (claude_code.py).
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ SERVICES = (
     Service("rest", "backend.rest:main", "agent_api", "/health", database=True),
 )
 DATABASE_MANAGER = "database-manager"
+COPILOT_EXECUTOR = "copilot-executor"
 FRONTEND = "frontend"
 # The two that call `uvicorn.run` themselves (the others serve through
 # AppService, each on a loop of its own).
@@ -126,6 +129,23 @@ def isolated(groups: tuple[Group, ...]) -> tuple[Group, ...]:
     return tuple(Group(s.name, (s.name,)) for s in SERVICES if s.name in members)
 
 
+def copilot_alone(groups: tuple[Group, ...]) -> tuple[Group, ...]:
+    """`groups` with the copilot executor in a process of its own, for when
+    that process is given the user's real home directory (`backend_processes`).
+    A service that shared it would be in that home too, and the graph
+    executor is one that starts the Claude Code CLI itself (the orchestrator
+    block), with none of AutoPilot's flags against loading the user's own
+    settings, hooks and MCP servers. It costs one more interpreter."""
+    apart: list[Group] = []
+    for group in groups:
+        others = tuple(name for name in group.services if name != COPILOT_EXECUTOR)
+        if others == group.services or not others:
+            apart.append(group)
+        else:
+            apart += [Group(group.name, others), Group(COPILOT_EXECUTOR, (COPILOT_EXECUTOR,))]
+    return tuple(apart)
+
+
 def service(name: str) -> Service:
     return next(service for service in SERVICES if service.name == name)
 
@@ -148,8 +168,25 @@ def backend_processes(
     env: dict[str, str],
     groups: tuple[Group, ...],
     cache: Cache,
+    copilot_env: dict[str, str] | None = None,
 ) -> list[ManagedProcess]:
-    return [host_process(bundle, data, env, group, cache) for group in groups]
+    """`copilot_env`, when given, is the environment of the copilot
+    executor's process: the user's real home, for AutoPilot on their own
+    Claude Code sign-in (settings.claude_code_host_environment). Every other
+    process gets `env`."""
+    return [
+        host_process(bundle, data, environment_of(group, env, copilot_env), group, cache)
+        for group in groups
+    ]
+
+
+def environment_of(
+    group: Group, env: dict[str, str], copilot_env: dict[str, str] | None
+) -> dict[str, str]:
+    """`copilot_env` only for a process that hosts the copilot executor and
+    nothing else (`copilot_alone`): no other service is to run in the user's
+    home, whatever layout this is called with."""
+    return copilot_env if copilot_env and group.services == (COPILOT_EXECUTOR,) else env
 
 
 def host_process(

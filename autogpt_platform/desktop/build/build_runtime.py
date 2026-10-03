@@ -20,7 +20,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import backend_patches
 import bundled_tools
+import claude_cli
 import elf
 import erlang_patches
 import frontend_role_sql
@@ -32,6 +34,9 @@ from fetch import download, extract
 DESKTOP = Path(__file__).resolve().parents[1]
 PLATFORM = DESKTOP.parent
 REPO = PLATFORM.parent
+LOCK = PLATFORM / "backend" / "poetry.lock"
+# What makes the interpreter read site/ (step_relocate).
+RELOCATION_FILE = "autogpt-desktop.pth"
 WINDOWS = sys.platform == "win32"
 EXE = ".exe" if WINDOWS else ""
 # The Prisma engines a Linux bundle carries, whatever the build machine has:
@@ -106,25 +111,43 @@ class Build:
     # --- AutoGPT backend --------------------------------------------------
 
     def step_deps(self) -> None:
+        self._restore_site_packages()
         requirements = self.cache / "requirements.txt"
-        lines = lock_export.export(PLATFORM / "backend" / "poetry.lock")
+        lines = lock_export.export(LOCK)
         requirements.write_text("\n".join(lines) + "\n", encoding="utf-8")
         uv = ["uv", "pip", "install", "--python", str(self.python), "--break-system-packages"]
         run([*uv, "-r", str(requirements)])
         run([*uv, "--no-deps", str(PLATFORM / "autogpt_libs")])
-        if WINDOWS:
-            self._update_claude_cli()
-
-    def _update_claude_cli(self) -> None:
-        """Give Windows the CLI version the locked SDK ships elsewhere
-        (see artifacts.CLAUDE_CLI_VERSION)."""
-        bundled = self.site_packages / "claude_agent_sdk" / "_bundled" / "claude.exe"
-        if not bundled.is_file():
-            raise RuntimeError(f"claude-agent-sdk no longer bundles its CLI at {bundled}")
-        cli = download(
-            self.artifacts["claude-cli"], self.cache, name=f"claude-{CLAUDE_CLI_VERSION}.exe"
+        # The CLI the locked SDK is built with: from its wheel, or where
+        # this platform has none, put there by claude_cli.py.
+        cli = claude_cli.ensure(
+            self.site_packages / "claude_agent_sdk" / "_bundled",
+            self.artifacts.get("claude-cli"),
+            CLAUDE_CLI_VERSION,
+            self.cache,
         )
-        shutil.copy2(cli, bundled)
+        version = claude_cli.declared_version(cli.parents[1])
+        print(f"  {cli.relative_to(self.out)}: Claude Code {version}")
+
+    def _restore_site_packages(self) -> None:
+        """uv installs into site-packages, and only there does it see what
+        is installed already. A bundle that step_relocate has been through
+        keeps its packages in site/: put them back, so that running this step
+        again changes what the lock changed instead of installing a second
+        copy of everything. step_relocate has to run again afterwards;
+        step_seal refuses a bundle where it has not."""
+        relocated = self.out / "site"
+        if not relocated.is_dir():
+            return
+        (self.site_packages / RELOCATION_FILE).unlink(missing_ok=True)
+        leftovers = [path.name for path in self.site_packages.iterdir()]
+        if leftovers:
+            raise RuntimeError(
+                f"both {relocated} and {self.site_packages} hold packages ({leftovers[:5]}); "
+                "run the python step, then deps again"
+            )
+        self.site_packages.rmdir()
+        shutil.move(relocated, self.site_packages)
 
     def step_backend(self) -> None:
         target = self.out / "backend"
@@ -139,6 +162,8 @@ class Build:
         )
         shutil.copytree(source / "migrations", target / "migrations")
         shutil.copy2(source / "schema.prisma", target / "schema.prisma")
+        # Before step_compile, which ships the bytecode of what is here now.
+        backend_patches.apply(target)
         # backend/util/docs.py finds the docs by walking up to a `docs/platform`
         # directory; markdown only, as in the backend Dockerfile.
         docs = self.out / "docs"
@@ -429,14 +454,36 @@ class Build:
         packages' own .pth files too, which pywin32 depends on)."""
         target = self.out / "site"
         if target.exists():
+            if self._relocated_already(target):
+                print("  the packages are in site/ already")
+                return
             shutil.rmtree(target)
         shutil.move(self.site_packages, target)
         self.site_packages.mkdir()
-        (self.site_packages / "autogpt-desktop.pth").write_text(
+        (self.site_packages / RELOCATION_FILE).write_text(
             "import os, site, sys; "
             'site.addsitedir(os.path.join(sys.prefix, os.pardir, "site"))\n',
             encoding="utf-8",
         )
+
+    def _relocated_already(self, relocated: Path) -> bool:
+        """Whether this step has been through the bundle before: the file
+        it leaves in site-packages is there. Moving site-packages again
+        would then put that one file, and whatever was installed beside it
+        since, in the place of every package the bundle has."""
+        if not (self.site_packages / RELOCATION_FILE).is_file():
+            return False  # a fresh install; a site/ beside it is an older one
+        added = sorted(
+            path.name for path in self.site_packages.iterdir() if path.name != RELOCATION_FILE
+        )
+        if added:
+            raise RuntimeError(
+                f"{relocated} holds the bundle's packages, and {added[:5]} were installed "
+                f"into {self.site_packages} afterwards: relocating would replace the first "
+                "with the second. Remove them and install through the lock instead "
+                "(the deps step, then relocate)."
+            )
+        return True
 
     def step_tools(self) -> None:
         """Programs the backend runs by name, in tools/bin (bundled_tools.py)."""
@@ -509,6 +556,18 @@ class Build:
                 if problem:
                     raise RuntimeError(f"prisma/{kind} {problem}; run the prisma step again")
         bundled_tools.check(self.out)
+        backend_patches.check(self.out / "backend")
+        if [path.name for path in self.site_packages.iterdir()] != [RELOCATION_FILE]:
+            raise RuntimeError(
+                f"third-party packages are in {self.site_packages}, not in site/; "
+                "run the deps step and then the relocate step"
+            )
+        claude_cli.check(
+            self.out / "site" / "claude_agent_sdk" / "_bundled",
+            LOCK,
+            self.cache,
+            CLAUDE_CLI_VERSION,
+        )
 
 
 def fetched_engine(engines: Path, kind: str, platform: str) -> Path:

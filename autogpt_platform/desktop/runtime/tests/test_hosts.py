@@ -136,7 +136,7 @@ def isolating(stack: Stack, monkeypatch) -> list[tuple[str, ...]]:
     """Replace apps.backend_processes with stand-ins; returns what was asked."""
     asked: list[tuple[str, ...]] = []
 
-    def backend_processes(bundle, data, env, groups, cache) -> list[ManagedProcess]:
+    def backend_processes(bundle, data, env, groups, cache, copilot_env=None) -> list[ManagedProcess]:
         asked.append(tuple(group.name for group in groups))
         return [process(stack, group.name) for group in groups]
 
@@ -417,7 +417,7 @@ def test_database_manager_stops_after_the_services_that_write_through_it(
 ):
     order: list[str] = []
 
-    def backend_processes(bundle, data, env, groups, cache) -> list[ManagedProcess]:
+    def backend_processes(bundle, data, env, groups, cache, copilot_env=None) -> list[ManagedProcess]:
         return [
             process(stack, group.name, graceful_stop=lambda p: (order.append(p.name), p.kill()))
             for group in groups

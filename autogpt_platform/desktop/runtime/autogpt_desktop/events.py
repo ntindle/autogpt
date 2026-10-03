@@ -40,6 +40,25 @@ def ready(url: str) -> None:
     _emit({"event": "ready", "url": url})
 
 
+def claude_code(
+    state: str, message: str, cli: str | None, version: str | None, bundled: bool
+) -> None:
+    """Whether AutoPilot runs on the user's Claude Code sign-in
+    (claude_code.py). The shell words its status line from `state`; nothing
+    here names the account."""
+    logger.info(message)
+    _emit(
+        {
+            "event": "claude_code",
+            "state": state,
+            "message": message,
+            "cli": cli,
+            "version": version,
+            "bundled": bundled,
+        }
+    )
+
+
 def error(message: str, *, fatal: bool) -> None:
     logger.error(message)
     _emit({"event": "error", "message": message, "fatal": fatal})

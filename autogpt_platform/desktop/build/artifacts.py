@@ -26,10 +26,12 @@ PGVECTOR_VERSION = "0.8.7"
 ERLANG_VERSION = "27.3.4.18"  # RabbitMQ 4.1 supports Erlang 26.2-27.x
 RABBITMQ_VERSION = "4.1.8"  # matches single-container/Dockerfile
 VALKEY_VERSION = "8.1.10"
-# The Claude Code CLI that the locked claude-agent-sdk bundles on macOS and
-# Linux. The SDK publishes no Windows wheel for that version, so the Windows
-# bundle installs the newest SDK that has one (lock_export.PLATFORM_OVERRIDES)
-# and replaces its older CLI with this one. Bump both together with the lock.
+# The Claude Code CLI that the locked claude-agent-sdk is built with, and
+# carries in its macOS and Linux wheels. That SDK version has no Windows
+# wheel: the Windows bundle installs the same SDK from source and gets this,
+# the same CLI, from Anthropic's release bucket (claude_cli.py). The build
+# stops, on every platform, when the lock moves to an SDK built with another
+# CLI; bump it then.
 CLAUDE_CLI_VERSION = "2.1.284"
 REDIS_WINDOWS_VERSION = "8.10.2"
 

@@ -11,16 +11,11 @@ import sys
 import tomllib
 from pathlib import Path
 
-# The lock pins one version for every platform, but upstream does not always
-# publish every platform's wheel for it. Each override names the nearest
-# version that does, and why.
-PLATFORM_OVERRIDES: dict[str, dict[str, str]] = {
-    "win32": {
-        # 0.2.160+ ship no win_amd64 wheel (the wheel carries the Claude Code
-        # binary); 0.2.159 is the newest that does.
-        "claude-agent-sdk": "0.2.159",
-    },
-}
+# A package for which one platform gets another version than the lock's.
+# There is none, and each one would have the desktop run code the Docker image
+# does not. Before adding one, see whether the locked version installs from
+# its source distribution: claude_cli.py does that for the one case so far.
+PLATFORM_OVERRIDES: dict[str, dict[str, str]] = {}
 
 
 def export(lock_path: Path, platform: str = sys.platform) -> list[str]:
