@@ -993,10 +993,12 @@ It prints one JSON object per line (`progress`, `ready` with the URL,
 - An update is the installer again (555 MB on Windows). Where the installer
   the app was installed from is still in the updater's cache, only the parts
   that changed are downloaded (see [Size](#size)); otherwise all of it.
-- How long the Windows installer takes with Defender's real-time scanning
-  on has not been measured for this bundle (22,500 files) on a clean
-  machine. The installed-app tests record it, with the first start and the
-  upgrade, in `e2e/test-results/durations.md`.
+- The Windows installer takes about three minutes on a clean machine with
+  Defender's real-time scanning on (171 s to install and 174 s to upgrade on
+  GitHub's Windows Server 2022, where the first start then took 42 s and a
+  restart 38 s; macOS 15: 66 s and 42 s; Ubuntu 24.04 `.deb`: 44 s and
+  31 s). The installed-app tests record these on every run, in
+  `e2e/test-results/durations.md` and on the run's summary page.
 - Quitting does not wait for an agent run in flight, and does not ask. The
   run is interrupted and picked up again at the next start if it began less
   than 24 hours ago (the interrupted step runs again); an older one is marked

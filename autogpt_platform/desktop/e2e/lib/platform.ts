@@ -89,7 +89,14 @@ class WindowsInstall implements Platform {
     // The uninstaller copies itself to a temporary directory and returns
     // before the copy has finished the work.
     await run(path.join(this.dir, `Uninstall ${product.productFilename}.exe`), ["/S"], { timeoutMs: INSTALL_TIMEOUT_MS });
-    await waitUntil(() => !fs.existsSync(this.dir), INSTALL_TIMEOUT_MS, `${this.dir} to be removed`);
+    // The folder is renamed away before it is deleted (resources/installer.nsh),
+    // so its name is free long before its files are gone.
+    const moved = `${this.dir}.old-install`;
+    await waitUntil(
+      () => !fs.existsSync(this.dir) && !fs.existsSync(moved),
+      INSTALL_TIMEOUT_MS,
+      `${this.dir} to be removed`,
+    );
   }
 
   async damage(): Promise<string | null> {

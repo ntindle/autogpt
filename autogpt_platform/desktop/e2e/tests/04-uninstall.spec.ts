@@ -22,7 +22,12 @@ test("uninstalls the app and keeps the data", async () => {
   const installDir = platform.installDir();
   if (installDir) expect(fs.existsSync(installDir), `${installDir} is gone`).toBe(false);
   expect(describe(appProcesses()), "processes still running after uninstalling").toBe("");
-  expect(await registeredWithSystem(), "the system no longer lists the app").toBe(false);
+  // Asked until it is so: the uninstaller takes its entry out of the list
+  // last, after the files, and on Windows it is still at work when the
+  // program that was started has returned.
+  await expect
+    .poll(registeredWithSystem, { message: "the system no longer lists the app", timeout: 180_000 })
+    .toBe(false);
 
   // The database, with the account and the agent in it (electron-builder.config.js
   // `deleteAppDataOnUninstall: false`; the other installers never touch it).
