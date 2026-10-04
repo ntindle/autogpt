@@ -1094,34 +1094,46 @@ def test_the_interpreter_is_pointed_at_site_and_at_the_zips(tmp_path: Path, monk
     assert sys.path.index(str(tmp_path / "site")) < sys.path.index(str(zips / "00.zip"))
 
 
-def test_the_windows_standard_library_is_zipped_beside_the_interpreter(tmp_path: Path, monkeypatch):
-    home = write(
-        tmp_path / "python",
-        {
-            "Lib/os.py": "x = 1\n",
-            "Lib/json/__init__.py": "",
-            "Lib/__pycache__/os.cpython-313.pyc": "old",
-            "Lib/site-packages/autogpt-desktop.pth": "",
-        },
-    )
-    monkeypatch.setattr(site_zip.sys, "platform", "win32")
+def test_a_zipped_standard_library_is_put_back_as_files(tmp_path: Path):
+    """A bundle built while the Windows standard library was zipped. With
+    the archive beside the interpreter, an installed Python's search path is
+    read from the registry (site_zip.py); the build undoes it."""
+    home = write(tmp_path / "python", {"Lib/site-packages/autogpt-desktop.pth": ""})
+    with zipfile.ZipFile(home / "python313.zip", "w") as bundle:
+        bundle.writestr("os.py", "x = 1\n")
+        bundle.writestr("os.pyc", b"bytecode")
+        bundle.writestr("json/", b"")
+        bundle.writestr("json/__init__.py", "")
+        bundle.writestr("json/__init__.pyc", b"bytecode")
 
-    archive = site_zip.pack_stdlib(home, Path(sys.executable), (3, 13))
+    assert site_zip.unpack_stdlib(home, (3, 13)) is True
 
-    assert archive == home / "python313.zip"
-    with zipfile.ZipFile(home / "python313.zip") as bundle:
-        assert {"os.py", "os.pyc", "json/", "json/__init__.py", "json/__init__.pyc"} <= set(bundle.namelist())
-    assert [path.name for path in (home / "Lib").iterdir()] == ["site-packages"]
+    assert not (home / "python313.zip").exists()
+    assert site_zip.zipped_stdlib(home) == []
+    assert (home / "Lib" / "os.py").read_text() == "x = 1\n"
+    assert (home / "Lib" / "json" / "__init__.py").is_file()
+    assert not list((home / "Lib").rglob("*.pyc")), "the caller compiles it again"
     assert (home / "Lib" / "site-packages" / "autogpt-desktop.pth").is_file()
-    # Again: nothing left to pack, and the archive stays.
-    assert site_zip.pack_stdlib(home, Path(sys.executable), (3, 13)) == archive
+    # Again: nothing to put back.
+    assert site_zip.unpack_stdlib(home, (3, 13)) is False
 
 
-def test_elsewhere_the_standard_library_stays_as_files(tmp_path: Path, monkeypatch):
-    home = write(tmp_path / "python", {"lib/python3.13/os.py": ""})
-    monkeypatch.setattr(site_zip.sys, "platform", "darwin")
-    assert site_zip.pack_stdlib(home, Path(sys.executable), (3, 13)) is None
-    assert (home / "lib" / "python3.13" / "os.py").is_file()
+def test_nothing_zips_the_standard_library():
+    assert not hasattr(site_zip, "pack_stdlib"), (
+        "the standard library must stay as files: zipped beside the interpreter it makes "
+        "Windows add an installed Python's paths from the registry (build/site_zip.py)"
+    )
+    build = (DESKTOP / "build" / "build_runtime.py").read_text("utf-8")
+    assert "unpack_stdlib" in build and "zipped_stdlib" in build
+
+
+def test_a_search_path_entry_outside_the_bundle_is_found(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    (runtime / "python" / "Lib").mkdir(parents=True)
+    inside = [str(runtime / "python" / "Lib"), str(runtime / "site-zip" / "00.zip"), ""]
+    assert bundle_gate.entries_outside(inside, runtime) == []
+    system = str(tmp_path / "hostedtoolcache" / "Python" / "3.13.7" / "x64" / "Lib")
+    assert bundle_gate.entries_outside([*inside, system], runtime) == [system]
 
 
 # --- the budgets ----------------------------------------------------------------
@@ -1170,7 +1182,9 @@ def test_the_budgets_are_the_ones_the_size_work_was_held_to():
     """Loosening one is a decision, made here."""
     assert build_runtime.MAX_RELATIVE_PATH == 130
     if sys.platform == "win32":
-        assert build_runtime.MAX_FILES == 23_000
+        # 23,616 files: 22,530 with the packages zipped, and the standard
+        # library's 1,087, which must stay files (site_zip.py).
+        assert build_runtime.MAX_FILES == 24_500
         assert build_runtime.MAX_BYTES == 1_600_000_000
 
 

@@ -548,8 +548,11 @@ each entry with what was read: eleven packages whose other files are read
 through the import system, or by nothing, with those files named, and ten
 whose uses of `__file__` open nothing. A version of one of them that has
 another file, or names its file in another module, stops the build. Every
-`*.dist-info` stays a directory. On Windows the standard library is
-`python313.zip` beside `python313.dll`. The backend itself is never zipped:
+`*.dist-info` stays a directory. The standard library stays files as well:
+zipped beside the interpreter on Windows, it makes the interpreter take the
+search path of an installed Python from the registry, and that Python's
+modules then load in place of the bundle's. The build checks that the
+interpreter looks nowhere outside the bundle. The backend itself is never zipped:
 it finds blocks, templates and documents by walking its own directories.
 
 A module from an archive differs from a file in one way that is left:

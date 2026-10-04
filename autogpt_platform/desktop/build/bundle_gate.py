@@ -95,11 +95,54 @@ def main() -> int:
         failing = sum(outcome != "ok" for outcome in outcomes.values())
         print(f"  recorded {len(outcomes)} modules ({failing} do not import as files either)")
         return 0
-    problems = in_the_backend(runtime) + zipped_imports(runtime, args.imports)
+    problems = looks_outside(runtime) + in_the_backend(runtime) + zipped_imports(runtime, args.imports)
     for problem in problems:
         print(f"{FINDING}{problem}")
     print("the bundle passed its gates" if not problems else f"{len(problems)} problem(s)")
     return 1 if problems else 0
+
+
+# --- 0: the interpreter looks for modules in the bundle and nowhere else ------
+
+
+def looks_outside(runtime: Path) -> list[str]:
+    """The search path of the bundle's interpreter, started as the app starts
+    it and with no PYTHON* variable set: every entry must be inside the
+    bundle. One that is not means another Python's modules can load in place
+    of the bundle's. On Windows the registry is how that happens (an
+    installed Python of the same version, when the standard library is not
+    found as files: site_zip.py), so this only has teeth on a machine that
+    has such a Python, as GitHub's have."""
+    env = {name: value for name, value in os.environ.items() if not name.upper().startswith("PYTHON")}
+    answer = subprocess.run(
+        [sys.executable, "-B", "-c", "import json, sys; print(json.dumps(sys.path))"],
+        capture_output=True,
+        text=True,
+        cwd=runtime,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+    if answer.returncode != 0:
+        return [f"the interpreter did not say where it looks: {answer.stderr[-500:]}"]
+    outside = entries_outside(json.loads(answer.stdout), runtime)
+    print(f"  the interpreter looks in {len(json.loads(answer.stdout))} places, {len(outside)} outside the bundle")
+    return [
+        f"the interpreter also looks for modules in {entry}, which is not in the bundle: another "
+        "Python's modules would load in place of the bundle's (build/site_zip.py says how this "
+        "happens on Windows)"
+        for entry in outside
+    ]
+
+
+def entries_outside(search_path: list[str], runtime: Path) -> list[str]:
+    """The entries of a module search path that are not inside `runtime`.
+    The empty entry is the working directory, which is the bundle's."""
+    root = runtime.resolve()
+    return [
+        entry
+        for entry in search_path
+        if entry and not Path(entry).resolve().is_relative_to(root)
+    ]
 
 
 # --- 1 to 3: in one interpreter, set up as a service's is --------------------

@@ -56,10 +56,19 @@ archive a package is in depends on its name alone, so it stays there from
 one build to the next. More archives would make an update smaller still and
 every start slower: each is one more place the interpreter looks.
 
-The Windows bundle's standard library goes the same way, into
-`python313.zip` next to `python313.dll`, the layout of python.org's own
-embeddable distribution. On macOS and Linux the standard library stays
-loose: the interpreter there finds its home by `lib/python3.13/os.py`.
+The standard library is not zipped, on any system. On Windows a
+`python313.zip` beside `python313.dll` looks like the way to do it (it is
+the layout of python.org's embeddable distribution), and it makes the
+interpreter find its home by that archive instead of by `Lib/os.py`. Found
+that way, it also takes the search path of any Python 3.13 installed on the
+machine from the registry (CPython's getpath.py reads
+the key `PythonCore/3.13/PythonPath` under `Software/Python` unless the standard library
+was found as files, or a `._pth` file or `-E` turns the registry and every
+PYTHON* variable off). That installation's modules and extension modules
+then load in place of the bundle's and of what was pruned from it. A build
+on GitHub's Windows machines, which have one, showed it: `tkinter`, which
+the bundle does not have, imported. `unpack_stdlib` puts back a bundle that
+was built that way, and bundle_gate.py checks where the interpreter looks.
 """
 
 from __future__ import annotations
@@ -71,7 +80,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import warnings
 import zipfile
 from collections.abc import Iterator
@@ -200,7 +208,6 @@ ON_DISK_DISTRIBUTIONS = {
 PTH_IMPORT = re.compile(r"^import\s+([\w.]+)", re.MULTILINE)
 STDLIB_ARCHIVE = "python{major}{minor}.zip"
 # Of the standard library's directory, what stays a directory on Windows.
-STDLIB_KEPT = ("site-packages",)
 # One fixed time for every entry: an archive is the same bytes whenever it
 # is built from the same files, which is what a differential update compares.
 EPOCH = (2020, 1, 1, 0, 0, 0)
@@ -572,38 +579,24 @@ def _check_not_split(packages: Path, archives: Path) -> None:
 # --- the standard library, on Windows ---------------------------------------
 
 
-def pack_stdlib(python_home: Path, python: Path, version: tuple[int, int]) -> Path | None:
-    """Lib/ into python313.zip beside the interpreter; Windows only.
-    Extension modules live in DLLs/ and site-packages stays a directory."""
-    library = python_home / "Lib"
+def unpack_stdlib(python_home: Path, version: tuple[int, int]) -> bool:
+    """Put a zipped standard library back as files in Lib/ (see the module
+    docstring for why it is not zipped). True when there was one: its
+    bytecode is not put back, so the caller compiles Lib/ again."""
     archive = python_home / STDLIB_ARCHIVE.format(major=version[0], minor=version[1])
-    if sys.platform != "win32" or not (library / "os.py").is_file():
-        return archive if archive.is_file() else None
-    shutil.rmtree(library / "__pycache__", ignore_errors=True)
-    _compile(python, library, _stdlib_members(library), archive.name)
-    # Listed again: every module now has its bytecode beside it.
-    members = _stdlib_members(library)
-    with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as bundle:
-        for member in members:
-            for path in [member, *sorted(member.rglob("*"))] if member.is_dir() else [member]:
-                name = path.relative_to(library).as_posix()
-                if path.is_dir():
-                    bundle.writestr(zipfile.ZipInfo(name + "/", EPOCH), b"")
-                else:
-                    bundle.writestr(zipfile.ZipInfo(name, EPOCH), path.read_bytes())
-    # Only now, with the archive complete: the interpreter that compiled the
-    # modules was running from these files.
-    for member in members:
-        if member.is_dir():
-            shutil.rmtree(member)
-        else:
-            member.unlink()
-    check_bytecode(python_home, archive)
-    return archive
+    if not archive.is_file():
+        return False
+    library = python_home / "Lib"
+    with zipfile.ZipFile(archive) as bundle:
+        members = [name for name in bundle.namelist() if not name.endswith(COMPILED)]
+        bundle.extractall(library, members)
+    archive.unlink()
+    return True
 
 
-def _stdlib_members(library: Path) -> list[Path]:
-    return [path for path in sorted(library.iterdir()) if path.name not in STDLIB_KEPT]
+def zipped_stdlib(python_home: Path) -> list[Path]:
+    """The archives the interpreter would take for its standard library."""
+    return sorted(python_home.glob("python3*.zip"))
 
 
 def longest_path(root: Path) -> tuple[int, str]:

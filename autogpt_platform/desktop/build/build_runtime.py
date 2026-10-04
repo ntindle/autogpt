@@ -575,23 +575,24 @@ class Build:
         )
 
     def step_zip(self) -> None:
-        """A few files in place of the pure-Python packages, and on Windows
-        one in place of the standard library (site_zip.py)."""
+        """A few files in place of the pure-Python packages (site_zip.py).
+        The standard library stays as files; a bundle that has it zipped,
+        from a build before this was known to be wrong, is put back."""
+        major, minor = PYTHON_VERSION.split(".")[:2]
+        if site_zip.unpack_stdlib(self.out / "python", (int(major), int(minor))):
+            print("  the standard library is files again; compiling it")
+            self.step_compile()
         before, _ = site_zip.count(self.out)
         if site_zip.plan(self.out / site_zip.PACKAGES).zipped:
             # How every module about to be zipped imports while it is still a
             # file: what step_verify compares the zip with.
             self._gate("--imports", str(self._import_record()), "--record")
         chosen = site_zip.pack(self.out, self.python)
-        major, minor = PYTHON_VERSION.split(".")[:2]
-        stdlib = site_zip.pack_stdlib(self.out / "python", self.python, (int(major), int(minor)))
         after, _ = site_zip.count(self.out)
         print(f"  {len(chosen.zipped)} packages into {site_zip.ARCHIVES}/; {before} files before, {after} now")
         naming = sorted(unit for unit, why in chosen.kept.items() if why.startswith(site_zip.NAMES_OWN))
         if naming:
             print(f"  kept as files because they name their own: {', '.join(naming)}")
-        if stdlib:
-            print(f"  the standard library is in {stdlib.relative_to(self.out)}")
 
     def step_verify(self) -> None:
         """The bundle's own interpreter imports the whole backend, loads
@@ -660,7 +661,15 @@ class Build:
                 f"the bundle holds what is never shipped: {', '.join(left[:5])}. An older "
                 "build left it; run the prune step, or build into a fresh --out."
             )
-        site_zip.check_bytecode(self.out, *(self.out / "python").glob("python3*.zip"))
+        site_zip.check_bytecode(self.out)
+        zipped = site_zip.zipped_stdlib(self.out / "python")
+        if zipped:
+            raise RuntimeError(
+                f"{zipped[0].relative_to(self.out)}: the standard library must not be zipped. With "
+                "it the interpreter also takes the search path of a Python installed on the "
+                "machine from the Windows registry (build/site_zip.py). Run "
+                "`--only compile,zip,verify,seal`: the zip step puts it back as files."
+            )
         over = over_budget(self.out)
         if over:
             raise RuntimeError(
@@ -802,7 +811,8 @@ MAX_RELATIVE_PATH = 130
 # part of it files only Windows has: Linux would be about 1.9 to 2.0 GB.
 # Their budgets leave room over that until a build has printed their numbers
 # (the `[seal]` line), and are then to be set from them.
-MAX_FILES = 23_000 if WINDOWS else 30_000
+# Windows: 23,616 with the standard library as files (1,087 of them).
+MAX_FILES = 24_500 if WINDOWS else 30_000
 MAX_BYTES = 1_600_000_000 if WINDOWS else 2_300_000_000
 
 # OTP applications RabbitMQ 4.1 and its Elixir-based CLI load.
