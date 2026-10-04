@@ -11,6 +11,16 @@ with upstream's own arguments, without starting them. Each then runs in a
 thread of its own, exactly as it would in a process of its own:
 `service.start(background=False)`. The main thread stays the host's.
 
+While the app starts, the supervisor starts the hosts before the databases
+are up, so that the slow part (importing the backend) overlaps theirs. It
+names a file in GO_FILE_ENV; a host that is given one imports its services'
+modules and then waits for the file to exist. Only then does it call an
+entry point: one that hands its service over costs milliseconds to call (the
+five of the largest host took 4 ms together, 2026-10-03), and one that has
+come to run its service itself (the case `entry_point_is_serving` is for)
+starts it right there, which must not be before the databases answer and
+the migrations are in.
+
 A stop is asked for with SIGTERM, or on Windows (where a signal cannot reach
 a console-less process) by setting a named event the supervisor created. The
 host then calls every service's `cleanup()` at once, waits for them just
@@ -62,6 +72,8 @@ EXIT_CONTRACT = 78
 EXIT_SERVER_DID_NOT_START = 3
 
 STOP_EVENT_ENV = "AUTOGPT_DESKTOP_STOP_EVENT"
+GO_FILE_ENV = "AUTOGPT_DESKTOP_GO_FILE"
+GO_POLL_SECONDS = 0.05
 
 # An entry point builds its service and hands it over; importing is the slow
 # part and happens before. One that has not returned by now is running its
@@ -110,6 +122,8 @@ class Host:
     foreground: bool = False
     # Whether the collector was put in place of backend.app.run_processes.
     seam: bool = False
+    # Where the supervisor says that services may start; None: at once.
+    go_file: str | None = None
     _ending: threading.Lock = field(default_factory=threading.Lock)
     _loop: Any = None
     _loop_thread: threading.Thread | None = None
@@ -121,6 +135,7 @@ class Host:
 
     def run(self) -> NoReturn:
         self.listen_for_stop()
+        self.go_file = os.environ.pop(GO_FILE_ENV, None)  # not for the services' children
         try:
             self.collect()
             if self.shared_loop:
@@ -130,6 +145,19 @@ class Host:
         make_signals_thread_aware()
         self.start_services()
         self.supervise()
+
+    def wait_for_the_go(self) -> None:
+        """Nothing a service connects to may be up yet. The supervisor writes
+        the file when it is; a host it restarts later finds it there. Made
+        before anything of upstream's is called, whichever way the services
+        are then run."""
+        if not self.go_file or os.path.exists(self.go_file):
+            return
+        self.say("loaded; waiting for the databases before starting any service")
+        while not (os.path.exists(self.go_file) or self.stop.is_set()):
+            time.sleep(GO_POLL_SECONDS)
+        if self.stop.is_set():
+            park()  # the thread that saw the request ends the process
 
     # --- taking the services from upstream --------------------------------
 
@@ -144,8 +172,11 @@ class Host:
         app.run_processes = lambda *processes, **_: handed_over.extend(processes)
         self.seam = True
         try:
-            for name, entry in self.entries:
-                function = entry_point(entry)
+            # Imported first, all of them: the slow part, and all that is
+            # done before the go.
+            functions = [entry_point(entry) for _, entry in self.entries]
+            self.wait_for_the_go()
+            for (name, entry), function in zip(self.entries, functions, strict=True):
                 taken = len(handed_over)
                 self.call_entry_point(name, function)
                 self.services += [Hosted(name, service) for service in handed_over[taken:]]
@@ -187,6 +218,7 @@ class Host:
         self.say("update autogpt_desktop/servicehost.py; tests/backend_contract.py says what to")
         if self.merged or (self.seam and not self.services):
             leave(EXIT_CONTRACT)
+        self.wait_for_the_go()
         self.say("running the service in the foreground, as its entry point would")
         self.foreground = True
         if sys.platform != "win32":  # upstream installs its own handlers

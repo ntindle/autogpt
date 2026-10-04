@@ -7,6 +7,11 @@
 //   {"event": "progress", "step": "postgres", "message": "Starting the database"}
 //   {"event": "ready", "url": "http://127.0.0.1:43117"}
 //   {"event": "error", "message": "...", "fatal": true}
+//   {"event": "timing", "phase": "queue", "seconds": 6.3}
+//
+// `timing` says how long a part of the start took, and once more for the
+// whole of it ("phase": "total", with every phase in "phases"). It is for
+// the log and for the smoke test; the window shows nothing for it.
 //
 // Anything on stdout that is not a JSON object is treated as a log line.
 // The shell asks the runtime to stop by closing its stdin. Signals do not

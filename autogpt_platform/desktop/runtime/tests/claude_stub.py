@@ -93,7 +93,10 @@ def make(directory: Path, **behaviour: object) -> Path:
         # Named after the program: the interpreter then takes its path from
         # this file and from nothing in the environment.
         home = Path(sys.base_prefix)
-        lines = [str(home / "Lib"), str(home / "DLLs"), ".", "import site"]
+        # The bundle's interpreter has its standard library in an archive
+        # beside it (build/site_zip.py); any other has it in Lib.
+        archive = home / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+        lines = [str(archive), str(home / "Lib"), str(home / "DLLs"), ".", "import site"]
         (directory / "claude._pth").write_text("\n".join(lines) + "\n", encoding="utf-8")
     else:
         (directory / "stub.py").write_text(

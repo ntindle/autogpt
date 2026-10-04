@@ -32,6 +32,7 @@ from autogpt_desktop.process import (
     LOG_ROTATE_BYTES,
     ManagedProcess,
     _windows_descendants,
+    listening,
     run_tool,
     send_posix_signal,
     wait_until,
@@ -404,6 +405,8 @@ def _rotate(path: Path) -> None:
 
 
 def is_ready(port: int, password: str) -> bool:
+    if not listening(port):
+        return False
     import psycopg2
 
     try:

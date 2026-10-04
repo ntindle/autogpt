@@ -9,18 +9,18 @@ Erlang installation on the machine.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 import os
 import secrets
-import socket
 import sys
 import tempfile
 from pathlib import Path
 
 from autogpt_desktop import install, winlinks
 from autogpt_desktop.layout import EXE, SCRIPT, Bundle, DataDir, write_private
-from autogpt_desktop.process import ManagedProcess, base_env, run_tool
+from autogpt_desktop.process import ManagedProcess, base_env, listening, run_tool
 
 NODE_NAME = "rabbit@localhost"
 INETRC_NAME = "erl_inetrc"
@@ -31,10 +31,13 @@ LOOPBACK_DISTRIBUTION = "-kernel inet_dist_use_interface {127,0,0,1}"
 # Windows Firewall to prompt. In TCP mode it connects only when it has a
 # message to send, and with console logging it never does.
 QUIET_SYSLOG = "-syslog protocol {rfc5424,tcp}"
+# Read by rabbitmq-server alone, of RabbitMQ's scripts.
+SERVER_FLAGS = "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS"
 WINDOWS = sys.platform == "win32"
 
 
 def prepare(data: DataDir, port: int, user: str, password: str) -> None:
+    forget_dangling_aliases()
     base = data.rabbitmq
     (base / "mnesia").mkdir(parents=True, exist_ok=True)
     write_private(
@@ -104,7 +107,7 @@ def environment(bundle: Bundle, data: DataDir, ports: dict[str, int]) -> dict[st
         # rabbitmq-server.bat launches. A non-loopback socket from any of
         # them is needless exposure, and on Windows raises a firewall prompt.
         "ERL_AFLAGS": _erlang_flags(bundle),
-        "RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS": QUIET_SYSLOG,
+        SERVER_FLAGS: _server_flags(ports),
         "ERL_CRASH_DUMP": str(Path(base) / "erl_crash.dump"),
         # Erlang finds its cookie in the home directory; point every flavour
         # of "home" at the data dir so the server and rabbitmqctl agree.
@@ -116,6 +119,38 @@ def environment(bundle: Bundle, data: DataDir, ports: dict[str, int]) -> dict[st
         env["HOMEDRIVE"] = drive
         env["HOMEPATH"] = rest or "\\"
     return env
+
+
+def _server_flags(ports: dict[str, int]) -> str:
+    """The server's VM is started as a distributed node, under the name and
+    on the port RabbitMQ would give it.
+
+    Left to itself RabbitMQ starts the VM undistributed and, while it boots,
+    makes sure there is a port mapper by starting a second Erlang VM that
+    exits at once (`epmd-starter`), checks the distribution port and looks
+    for a node of the same name, and only then turns distribution on. That
+    is two to three seconds of every start on Windows, and here there is
+    nothing to find out: the port mapper is this runtime's own and already
+    answers (supervisor.py), and the name and both ports are this install's.
+    A VM that is already the node RabbitMQ wants skips all of it
+    (rabbit_prelaunch_dist: "Erlang distribution already running").
+
+    tests/test_start.py names the RabbitMQ version this was seen with;
+    `start_the_plain_way` is what a version that boots differently gets."""
+    port = ports["rabbitmq_dist"]
+    return (
+        f"{QUIET_SYSLOG} -sname {NODE_NAME} "
+        f"-kernel inet_dist_listen_min {port} -kernel inet_dist_listen_max {port}"
+    )
+
+
+def start_the_plain_way(process: ManagedProcess) -> bool:
+    """Take `_server_flags` off a broker's process, so that its next start
+    is RabbitMQ's own. False when they were off already."""
+    if process.env.get(SERVER_FLAGS) == QUIET_SYSLOG:
+        return False
+    process.env[SERVER_FLAGS] = QUIET_SYSLOG
+    return True
 
 
 def _erlang_flags(bundle: Bundle) -> str:
@@ -158,14 +193,12 @@ def epmd_process(bundle: Bundle, data: DataDir, ports: dict[str, int]) -> Manage
 
 
 def epmd_is_ready(port: int) -> bool:
-    try:
-        socket.create_connection(("127.0.0.1", port), timeout=1).close()
-        return True
-    except OSError:
-        return False
+    return listening(port)
 
 
 def is_ready(port: int, user: str, password: str) -> bool:
+    if not listening(port):
+        return False
     import pika
     import pika.exceptions
 
@@ -241,6 +274,28 @@ def _cache_alias_root() -> Path:
     # A folder of its own for each install: a variant of the app shares
     # none with the normal app.
     return cache / install.name() / "links"
+
+
+def forget_dangling_aliases() -> None:
+    """Links to folders that are gone: a data directory that was moved or
+    deleted, an app that was run from a disk image since unmounted, a test
+    run's temporary folder. Nothing else takes them away, and each start is a
+    chance to. Windows does the same for its junctions (winlinks.junction)."""
+    if sys.platform == "win32":
+        return
+    for root in (_cache_alias_root(), _temp_alias_root()):
+        forget_dangling(root)
+
+
+def forget_dangling(root: Path) -> None:
+    """Only what `_short` could have made: a link, never a file or a folder
+    somebody put there."""
+    with contextlib.suppress(OSError):
+        for entry in list(os.scandir(root)):
+            # exists() follows the link; lexists() is true of a dangling one.
+            if entry.is_symlink() and not os.path.exists(entry.path):
+                with contextlib.suppress(OSError):
+                    os.unlink(entry.path)
 
 
 def _temp_alias_root() -> Path:

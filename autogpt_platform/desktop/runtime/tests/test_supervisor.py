@@ -16,6 +16,9 @@ from autogpt_desktop.supervisor import Stack, StartupError
 posix_only = pytest.mark.skipif(
     sys.platform == "win32", reason="Windows ties children to the runtime with a Job Object"
 )
+posix_links_only = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows uses junctions, which winlinks.py clears"
+)
 
 
 @pytest.fixture
@@ -314,3 +317,52 @@ def test_rabbitmq_scripts_are_run_through_the_alias(tmp_path: Path):
     assert script.parent.name == "sbin"
     if not any(character.isspace() for character in str(tmp_path)):
         assert not any(character.isspace() for character in str(script))
+
+
+def symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError as exc:  # Windows without the right to make symbolic links
+        pytest.skip(f"this account cannot make symbolic links: {exc}")
+
+
+def test_links_to_folders_that_are_gone_are_removed(tmp_path: Path):
+    """A data directory that was deleted, a disk image that was unmounted:
+    seven such links had gathered on one Mac."""
+    root = tmp_path / "links"
+    root.mkdir()
+    here, gone = tmp_path / "data here", tmp_path / "data gone"
+    here.mkdir()
+    gone.mkdir()
+    symlink_or_skip(root / "0123456789abcdef", here)
+    symlink_or_skip(root / "fedcba9876543210", gone)
+    gone.rmdir()
+    (root / "a folder someone put here").mkdir()
+    (root / "a file someone put here").write_text("x")
+
+    rabbitmq.forget_dangling(root)
+
+    assert sorted(entry.name for entry in root.iterdir()) == [
+        "0123456789abcdef",
+        "a file someone put here",
+        "a folder someone put here",
+    ]
+    assert here.is_dir()
+    rabbitmq.forget_dangling(tmp_path / "no such folder")  # nothing to do, and no error
+
+
+@posix_links_only
+@pytest.mark.usefixtures("cache_home")
+def test_every_start_clears_the_dangling_links_of_this_install(tmp_path: Path):
+    """Also when this start needs no link itself (no space in its paths)."""
+    spaced = tmp_path / "Application Support" / "rabbitmq"
+    spaced.mkdir(parents=True)
+    stale = Path(rabbitmq._short(spaced))
+    assert stale.is_symlink()
+    spaced.rmdir()
+    data = DataDir(tmp_path / "data")
+    data.prepare()
+
+    rabbitmq.prepare(data, 15000, "user", "password")
+
+    assert not stale.is_symlink()

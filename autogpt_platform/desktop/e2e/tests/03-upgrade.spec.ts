@@ -16,6 +16,7 @@ import {
   type RunningApp,
 } from "../lib/app";
 import { dataDir, readyTimeoutMs, upgradeInstaller } from "../lib/config";
+import { timed } from "../lib/durations";
 import { appProcesses, platform } from "../lib/platform";
 import { describe, recordedPids } from "../lib/processes";
 import { appVersion, currentUser, isNewer, signIn, signOut } from "../lib/session";
@@ -44,7 +45,7 @@ test("installs a newer version over the old one", async () => {
     note("upgrade", "installed while the app was running");
   }
 
-  const notes = await platform.install(upgradeInstaller!);
+  const notes = await timed("upgrade (the installer, over the old version)", () => platform.install(upgradeInstaller!));
   for (const [type, description] of Object.entries(notes)) note(type, description);
 
   if (app) {
@@ -61,7 +62,7 @@ test("installs a newer version over the old one", async () => {
 
 test("the new version starts with the old data", async () => {
   const state = loadState();
-  app = await startApp(readyTimeoutMs);
+  app = await startApp(readyTimeoutMs, "first start after the upgrade");
   const { page, url } = app;
   expect(app.url).toBe(state.url);
 

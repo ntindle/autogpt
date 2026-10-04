@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 import backend_patches
+import backend_tests
 import bundled_tools
 import claude_cli
 import elf
@@ -28,15 +29,45 @@ import erlang_patches
 import frontend_role_sql
 import lock_export
 import next_config
-from artifacts import ARTIFACTS, CLAUDE_CLI_VERSION, platform_key
+import site_zip
+import slim
+from artifacts import ARTIFACTS, CLAUDE_CLI_VERSION, PYTHON_VERSION, platform_key
 from fetch import download, extract
 
 DESKTOP = Path(__file__).resolve().parents[1]
 PLATFORM = DESKTOP.parent
 REPO = PLATFORM.parent
 LOCK = PLATFORM / "backend" / "poetry.lock"
-# What makes the interpreter read site/ (step_relocate).
+# What makes the interpreter read site/ (step_relocate) and, after it, the
+# archives of pure-Python packages beside it (step_zip). One line: a .pth line
+# that starts with `import` is run as it stands, inside a function of
+# site.py, where a comprehension or a generator would not see the names the
+# line itself defines.
+#
+# Its last part gives code loaded from an archive the name of the file it
+# came from. The import of a .pyc file does that (`_imp._fix_co_filename`);
+# zipimport does not, and the bytecode in the archives is compiled under a
+# name that is the same wherever the bundle is built (site_zip.py). Left so,
+# a traceback names `site-zip/openai/_client.py`, a file that is nowhere, and
+# a package that tells its own frames from a caller's by file name (neo4j,
+# e2b) takes its own for the caller's. It leans on two private names of
+# CPython, and where either is gone it does nothing: the app starts all the
+# same and the build is stopped by its gate (bundle_gate.py,
+# code_named_for_another_file), which says what to read.
 RELOCATION_FILE = "autogpt-desktop.pth"
+RELOCATION = (
+    "import os, site, sys, zipimport, _imp; "
+    "root = os.path.dirname(os.path.abspath(sys.prefix)); "
+    f'site.addsitedir(os.path.join(root, "{site_zip.PACKAGES}")); '
+    f'zips = os.path.join(root, "{site_zip.ARCHIVES}"); '
+    "names = sorted(os.listdir(zips)) if os.path.isdir(zips) else []; "
+    "sys.path.extend(map(os.path.join, [zips] * len(names), names)); "
+    'load = getattr(zipimport, "_unmarshal_code", None); '
+    'rename = getattr(_imp, "_fix_co_filename", None); '
+    'load and rename and setattr(zipimport, "_unmarshal_code", '
+    "lambda importer, path, *rest, load=load, rename=rename: "
+    "(code := load(importer, path, *rest), code and rename(code, path[:-1]))[0])\n"
+)
 WINDOWS = sys.platform == "win32"
 EXE = ".exe" if WINDOWS else ""
 # The Prisma engines a Linux bundle carries, whatever the build machine has:
@@ -91,6 +122,11 @@ class Build:
     def step_python(self) -> None:
         extract(self.fetch("python"), self.out / "python", strip_top_level=True)
         shutil.rmtree(self.out / "site", ignore_errors=True)  # see step_relocate
+        # What step_zip made of an earlier build's packages and standard
+        # library: the interpreter would read the archive before the files.
+        shutil.rmtree(self.out / site_zip.ARCHIVES, ignore_errors=True)
+        for archive in (self.out / "python").glob("python3*.zip"):
+            archive.unlink()
         # uv treats a standalone build as externally managed; this tree is
         # ours to install into.
         for marker in (self.out / "python").rglob("EXTERNALLY-MANAGED"):
@@ -118,6 +154,12 @@ class Build:
         uv = ["uv", "pip", "install", "--python", str(self.python), "--break-system-packages"]
         run([*uv, "-r", str(requirements)])
         run([*uv, "--no-deps", str(PLATFORM / "autogpt_libs")])
+        # What the lock lists and the bundle leaves out (lock_export.py), and
+        # the pip that came with the interpreter: nothing in the bundle
+        # installs anything. Named, so that a bundle built before they were
+        # left out loses them too.
+        unwanted = [*lock_export.excluded(LOCK), "pip"]
+        run(["uv", "pip", "uninstall", "--python", str(self.python), *unwanted])
         # The CLI the locked SDK is built with: from its wheel, or where
         # this platform has none, put there by claude_cli.py.
         cli = claude_cli.ensure(
@@ -139,6 +181,7 @@ class Build:
         relocated = self.out / "site"
         if not relocated.is_dir():
             return
+        site_zip.unpack(self.out)  # step_zip; uv sees files only
         (self.site_packages / RELOCATION_FILE).unlink(missing_ok=True)
         leftovers = [path.name for path in self.site_packages.iterdir()]
         if leftovers:
@@ -155,11 +198,13 @@ class Build:
             shutil.rmtree(target)
         target.mkdir(parents=True)
         source = PLATFORM / "backend"
-        # The whole package, tests included: some runtime modules are named
-        # like tests (backend/blocks/exa/_test.py) and are imported at start.
         shutil.copytree(
             source / "backend", target / "backend", ignore=shutil.ignore_patterns("__pycache__")
         )
+        # Without its tests, except the modules that are only named like one
+        # (backend_tests.py).
+        left_out = backend_tests.prune(target / "backend")
+        print(f"  left out {len(left_out)} test modules of the backend")
         shutil.copytree(source / "migrations", target / "migrations")
         shutil.copy2(source / "schema.prisma", target / "schema.prisma")
         # Before step_compile, which ships the bytecode of what is here now.
@@ -407,9 +452,9 @@ class Build:
     # --- size and startup ------------------------------------------------
 
     def step_prune(self) -> None:
-        """Drop what the runtime never loads. Erlang/OTP ships every
-        application it has (a GUI toolkit, SNMP, CORBA-era protocols);
-        RabbitMQ needs the handful in ERLANG_APPS."""
+        """Drop what the runtime never loads (slim.py has the rules).
+        Erlang/OTP ships every application it has (a GUI toolkit, SNMP,
+        CORBA-era protocols); RabbitMQ needs the handful in ERLANG_APPS."""
         for application in (self.out / "erlang" / "lib").iterdir():
             name = application.name.rsplit("-", 1)[0]
             if name not in ERLANG_APPS:
@@ -424,24 +469,38 @@ class Build:
                 engine.unlink()
         for cache in (self.out / "python").rglob("__pycache__"):
             shutil.rmtree(cache, ignore_errors=True)
-        shutil.rmtree(self.out / "python" / "include", ignore_errors=True)
-        if WINDOWS:
-            self._check_path_budget()
+        packages = self.packages()
+        python = self.out / "python"
+        backend = self.out / "backend"
+        removed = {
+            # First: what imports a test directory is read from the sources.
+            "tests of third-party packages": slim.unused_test_directories(packages),
+            "Google API descriptions the backend does not name": (
+                slim.unused_discovery_documents(packages, [backend, packages])
+            ),
+            "typing stubs, C sources and link libraries": [
+                *slim.build_only_files(packages),
+                *slim.build_only_files(python),
+            ],
+            "pywin32's editor, examples and help": slim.pywin32_extras(packages),
+            "Tcl/Tk, IDLE, pip's installer, console scripts": slim.interpreter_extras(python),
+            "Erlang's documentation, headers and debug builds": (
+                slim.erlang_extras(self.out / "erlang")
+            ),
+            "RabbitMQ plugins the server does not start": (
+                slim.unused_rabbitmq_plugins(self.out / "rabbitmq")
+            ),
+            "RabbitMQ's other command-line tools": slim.unused_rabbitmq_tools(self.out / "rabbitmq"),
+            "PostgreSQL's headers and build files": slim.postgres_extras(self.out / "postgres"),
+        }
+        for what, paths in removed.items():
+            print(f"  {slim.remove(paths):6} files: {what}")
 
-    def _check_path_budget(self) -> None:
-        """Fail the build rather than ship a file Windows cannot install."""
-        packages = self.site_packages.relative_to(self.out)
-        saving = len(str(packages)) - len("site")  # what step_relocate removes
-        over_budget = []
-        for path in self.out.rglob("*"):
-            relative = path.relative_to(self.out)
-            length = len(str(relative))
-            if packages in relative.parents:
-                length -= saving
-            if path.is_file() and length > MAX_RELATIVE_PATH:
-                over_budget.append(str(relative))
-        if over_budget:
-            raise RuntimeError(f"paths too long for a Windows install: {over_budget[:5]}")
+    def packages(self) -> Path:
+        """Where the third-party packages are now: site/ once step_relocate
+        has run, the interpreter's site-packages before."""
+        relocated = self.out / "site"
+        return relocated if relocated.is_dir() else self.site_packages
 
     def step_relocate(self) -> None:
         """Move third-party packages from python/Lib/site-packages to site/.
@@ -453,18 +512,13 @@ class Build:
         interpreter treat site/ exactly like site-packages (it runs the moved
         packages' own .pth files too, which pywin32 depends on)."""
         target = self.out / "site"
-        if target.exists():
-            if self._relocated_already(target):
-                print("  the packages are in site/ already")
-                return
-            shutil.rmtree(target)
-        shutil.move(self.site_packages, target)
-        self.site_packages.mkdir()
-        (self.site_packages / RELOCATION_FILE).write_text(
-            "import os, site, sys; "
-            'site.addsitedir(os.path.join(sys.prefix, os.pardir, "site"))\n',
-            encoding="utf-8",
-        )
+        if target.exists() and self._relocated_already(target):
+            print("  the packages are in site/ already")
+        else:
+            shutil.rmtree(target, ignore_errors=True)
+            shutil.move(self.site_packages, target)
+            self.site_packages.mkdir()
+        (self.site_packages / RELOCATION_FILE).write_text(RELOCATION, encoding="utf-8")
 
     def _relocated_already(self, relocated: Path) -> bool:
         """Whether this step has been through the bundle before: the file
@@ -519,12 +573,42 @@ class Build:
             ],
             check=False,  # a few vendored test fixtures are intentionally invalid
         )
-        # __pycache__/name.cpython-313.pyc is 24 characters longer than its
-        # source. Where that would break the path budget, ship the source
-        # alone; those few modules compile in memory when imported.
-        for compiled in self.out.rglob("*.pyc"):
-            if len(str(compiled.relative_to(self.out))) > MAX_RELATIVE_PATH:
-                compiled.unlink()
+
+    def step_zip(self) -> None:
+        """A few files in place of the pure-Python packages, and on Windows
+        one in place of the standard library (site_zip.py)."""
+        before, _ = site_zip.count(self.out)
+        if site_zip.plan(self.out / site_zip.PACKAGES).zipped:
+            # How every module about to be zipped imports while it is still a
+            # file: what step_verify compares the zip with.
+            self._gate("--imports", str(self._import_record()), "--record")
+        chosen = site_zip.pack(self.out, self.python)
+        major, minor = PYTHON_VERSION.split(".")[:2]
+        stdlib = site_zip.pack_stdlib(self.out / "python", self.python, (int(major), int(minor)))
+        after, _ = site_zip.count(self.out)
+        print(f"  {len(chosen.zipped)} packages into {site_zip.ARCHIVES}/; {before} files before, {after} now")
+        naming = sorted(unit for unit, why in chosen.kept.items() if why.startswith(site_zip.NAMES_OWN))
+        if naming:
+            print(f"  kept as files because they name their own: {', '.join(naming)}")
+        if stdlib:
+            print(f"  the standard library is in {stdlib.relative_to(self.out)}")
+
+    def step_verify(self) -> None:
+        """The bundle's own interpreter imports the whole backend, loads
+        every block, and reads what the zipped packages keep as data
+        (bundle_gate.py). What pruning or zipping broke shows here, not on a
+        user's machine."""
+        self._gate("--imports", str(self._import_record()))
+
+    def _import_record(self) -> Path:
+        return self.cache / f"zip-imports-{platform_key()}.json"
+
+    def _gate(self, *arguments: str) -> None:
+        gate = Path(__file__).with_name("bundle_gate.py")
+        command = [str(self.python), "-B", str(gate), str(self.out), *arguments]
+        print(f"  $ {' '.join(command)}", flush=True)
+        if subprocess.run(command, stdin=subprocess.DEVNULL).returncode != 0:
+            raise RuntimeError("the bundle did not pass its gates; see above")
 
 
     # --- last ------------------------------------------------------------
@@ -535,8 +619,10 @@ class Build:
         older build of the runtime has what that run wrote into it; a bundle
         that would write into itself again must not be packaged."""
         shutil.rmtree(self.out / "frontend" / ".next" / "cache", ignore_errors=True)
-        for stray in downloaded_engines(self.out / "prisma" / "node_modules"):
+        modules = self.out / "prisma" / "node_modules"
+        for stray in downloaded_engines(modules):
             stray.unlink()
+        shutil.rmtree(modules / "@prisma" / "engines" / "node_modules" / ".cache", ignore_errors=True)
         next_config.check(self.out / "frontend")
         unread = unread_by_prisma_cli(self.out / "prisma" / "node_modules")
         if unread:
@@ -568,6 +654,79 @@ class Build:
             self.cache,
             CLAUDE_CLI_VERSION,
         )
+        left = [str(path.relative_to(self.out)) for path in never_shipped(self.out)]
+        if left:
+            raise RuntimeError(
+                f"the bundle holds what is never shipped: {', '.join(left[:5])}. An older "
+                "build left it; run the prune step, or build into a fresh --out."
+            )
+        site_zip.check_bytecode(self.out, *(self.out / "python").glob("python3*.zip"))
+        over = over_budget(self.out)
+        if over:
+            raise RuntimeError(
+                "the bundle is over its budget: " + "; ".join(over) + ". What grew: read the "
+                "table above beside the same table in the log of the last build that passed."
+            )
+
+
+def never_shipped(out: Path) -> list[Path]:
+    """What a run of the app, or a build older than the step that removes
+    it, leaves in a bundle. electron-builder packs the directory as it is."""
+    engines = out / "prisma" / "node_modules" / "@prisma" / "engines"
+    candidates = [
+        out / "frontend" / ".next" / "cache",
+        out / "erlang" / "doc",
+        out / "postgres" / "include",
+        engines / "node_modules" / ".cache",
+        *(out / "prisma").rglob("*.dll.node"),
+        *(out / "prisma").rglob("*.so.node"),
+        *(out / "prisma").rglob("*.dylib.node"),
+    ]
+    return [path for path in candidates if path.exists()]
+
+
+def over_budget(out: Path) -> list[str]:
+    """Which of the bundle's budgets it breaks, in words. The three numbers
+    are what installing costs: the Windows installer writes every file twice
+    and has it scanned, a path past 260 characters cannot be installed at
+    all, and every byte is downloaded again by an update."""
+    files, size = site_zip.count(out)
+    length, longest = site_zip.longest_path(out)
+    found = []
+    if files > MAX_FILES:
+        found.append(f"{files} files, and the budget is {MAX_FILES}")
+    if WINDOWS and length > MAX_RELATIVE_PATH:
+        found.append(
+            f"{longest} is {length} characters long, and the budget is {MAX_RELATIVE_PATH}"
+        )
+    if size > MAX_BYTES:
+        found.append(f"{size / 1e6:.0f} MB, and the budget is {MAX_BYTES / 1e6:.0f} MB")
+    print(f"  {files} files, {size / 1e6:.0f} MB, longest path {length}")
+    # On every build, not only one that fails: what grew is found by reading
+    # this beside the same lines of the last build that passed.
+    print("\n".join(where_it_is(out)))
+    return found
+
+
+def where_it_is(out: Path, largest: int = 10) -> list[str]:
+    """The bundle's files and megabytes by directory: each directory of the
+    bundle, then the largest of what site/ holds (the packages that are not
+    zipped), which is where a dependency that grew or was added shows."""
+    lines = [_tally_line(f"{path.name}/", path) for path in _directories(out)]
+    packages = sorted(
+        _directories(out / site_zip.PACKAGES), key=lambda path: site_zip.count(path)[0], reverse=True
+    )
+    shown = [_tally_line(f"{site_zip.PACKAGES}/{path.name}/", path) for path in packages[:largest]]
+    return [*lines, f"  the {len(shown)} directories of {site_zip.PACKAGES}/ with most files:", *shown]
+
+
+def _directories(parent: Path) -> list[Path]:
+    return sorted(path for path in parent.iterdir() if path.is_dir()) if parent.is_dir() else []
+
+
+def _tally_line(label: str, directory: Path) -> str:
+    files, size = site_zip.count(directory)
+    return f"    {label:<34} {files:>6} files {size / 1e6:>7.0f} MB"
 
 
 def fetched_engine(engines: Path, kind: str, platform: str) -> Path:
@@ -627,10 +786,24 @@ def unread_by_prisma_cli(node_modules: Path) -> list[str]:
     return [name for name in READ_BY_THE_CLI if name not in code]
 
 
-# The install prefix on Windows is at most 80 characters
-# (C:\Users\<20-character name>\AppData\Local\Programs\AutoGPT\resources\runtime\),
-# which leaves this much of the 260-character limit for paths inside the bundle.
-MAX_RELATIVE_PATH = 170
+# The budgets step_seal holds the bundle to (`over_budget`).
+#
+# A path: Windows refuses one over 260 characters. The installer unpacks
+# into %TEMP%\ns<5>.tmp\7z-out\resources\runtime\ before it copies, which
+# for a user name of 20 characters is 73 characters, and installs into
+# %LOCALAPPDATA%\Programs\<name>\resources\runtime\, which is 67 for the
+# normal app. 130 inside the bundle leaves room for a user name of some 70
+# characters, or a long variant name.
+MAX_RELATIVE_PATH = 130
+# Measured on Windows x64 (README.md, "Size"). The macOS and Linux bundles
+# keep the standard library as files, and have not been measured since the
+# pruning. Before it CI printed 2.2 GiB for Linux and 1.9 GiB for macOS and
+# Windows (`du -sh`; run 37154118481), and Windows lost 450 MB of its 1.96 GB,
+# part of it files only Windows has: Linux would be about 1.9 to 2.0 GB.
+# Their budgets leave room over that until a build has printed their numbers
+# (the `[seal]` line), and are then to be set from them.
+MAX_FILES = 23_000 if WINDOWS else 30_000
+MAX_BYTES = 1_600_000_000 if WINDOWS else 2_300_000_000
 
 # OTP applications RabbitMQ 4.1 and its Elixir-based CLI load.
 ERLANG_APPS = {
@@ -671,6 +844,8 @@ STEPS = (
     "relocate",
     "tools",
     "compile",
+    "zip",
+    "verify",
     "seal",
 )
 

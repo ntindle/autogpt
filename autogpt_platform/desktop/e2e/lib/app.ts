@@ -8,6 +8,7 @@ import path from "node:path";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 
 import { attach, freePort } from "./attach";
+import { recordDuration } from "./durations";
 import { dataDir, dataDirOverride } from "./config";
 import { firewallReport } from "./firewall";
 import { appProcesses, platform } from "./platform";
@@ -33,7 +34,8 @@ export interface RunningApp {
 /** What the launcher and the shell printed on the latest start. */
 let launcherLog: string | null = null;
 
-export async function startApp(readyTimeoutMs: number): Promise<RunningApp> {
+/** `what` names the start in the durations this run records (lib/durations.ts). */
+export async function startApp(readyTimeoutMs: number, what = "restart"): Promise<RunningApp> {
   const running = appProcesses();
   if (running.length > 0) {
     throw new Error(`the app is already running; only one instance can run:\n${describe(running)}`);
@@ -50,7 +52,7 @@ export async function startApp(readyTimeoutMs: number): Promise<RunningApp> {
     isRunning: () => appProcesses().length > 0,
     output: launcherOutput,
   });
-  note("seconds to ready", String(Math.round((Date.now() - started) / 1000)));
+  recordDuration(`${what}, to ready`, (Date.now() - started) / 1000);
   const { browser, page } = await attach(debugPort, url, ATTACH_TIMEOUT_MS);
   // Kept only if a test fails (recordFailure). Not worth failing a test over.
   await page.context().tracing.start({ screenshots: true, snapshots: true }).catch(() => undefined);

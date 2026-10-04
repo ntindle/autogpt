@@ -40,6 +40,26 @@ def ready(url: str) -> None:
     _emit({"event": "ready", "url": url})
 
 
+def timing(phase: str, seconds: float) -> None:
+    """How long one phase of the start took (timing.py). The shell shows
+    nothing for it; it is for the log and for build/smoke_test.py."""
+    logger.info(f"{phase}: {seconds:.1f} s")
+    _emit({"event": "timing", "phase": phase, "seconds": round(seconds, 2)})
+
+
+def started(message: str, seconds: float, phases: dict[str, float]) -> None:
+    """The whole start, from the runtime beginning it to the app answering."""
+    logger.info(message)
+    _emit(
+        {
+            "event": "timing",
+            "phase": "total",
+            "seconds": round(seconds, 2),
+            "phases": {name: round(spent, 2) for name, spent in phases.items()},
+        }
+    )
+
+
 def claude_code(
     state: str, message: str, cli: str | None, version: str | None, bundled: bool
 ) -> None:

@@ -10,6 +10,7 @@ import { expect, test } from "@playwright/test";
 import { createCalculatorAgent, executionResult, runAndWatch, type Graph } from "../lib/agent";
 import { note, quitAndVerify, recordFailure, startApp, stopStrayApp, type RunningApp } from "../lib/app";
 import { dataDir, firstReadyTimeoutMs, installer, kind, product } from "../lib/config";
+import { timed } from "../lib/durations";
 import { beginFirewallCheck } from "../lib/firewall";
 import { appProcesses, platform } from "../lib/platform";
 import { describe } from "../lib/processes";
@@ -39,7 +40,7 @@ test("installs without starting anything", async () => {
 
   if (installer) {
     expect(platform.isInstalled(), "the app is already installed; this test needs a machine without it").toBe(false);
-    const notes = await platform.install(installer);
+    const notes = await timed("install", () => platform.install(installer!));
     for (const [type, description] of Object.entries(notes)) note(type, description);
   }
   expect(platform.isInstalled(), `nothing installed at ${platform.executable()}`).toBe(true);
@@ -52,7 +53,7 @@ test("starts for the first time", async () => {
     `${dataDir()} already holds a database; the first run needs an empty data directory`,
   ).toBe(false);
 
-  app = await startApp(firstReadyTimeoutMs);
+  app = await startApp(firstReadyTimeoutMs, "first start");
   await app.page.context().clearCookies();
   saveState({ url: app.url, version: await appVersion(app.page) });
   checkLinuxSandbox();

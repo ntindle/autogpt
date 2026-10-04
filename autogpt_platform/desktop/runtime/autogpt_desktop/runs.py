@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections.abc import Callable, Iterable
 from contextlib import closing
 from dataclasses import dataclass
@@ -72,12 +73,17 @@ class Cache:
 
     port: int
     password: str
+    # Set once the node answers, when it is given. While the app starts, the
+    # hosts are started before the node is up; there is nothing to connect to
+    # yet, and the supervisor clears the locks itself before any service
+    # starts (supervisor.Stack.give_the_go).
+    up: threading.Event | None = None
 
     def clear_stale_locks(self, services: Iterable[str]) -> None:
         """Before the process hosting `services` starts: any lock of theirs
         that exists belongs to a process that is gone."""
         patterns = [LOCK_PATTERNS[name] for name in services if name in LOCK_PATTERNS]
-        if not patterns:
+        if not patterns or (self.up is not None and not self.up.is_set()):
             return
         try:
             removed = self._delete_matching(patterns)

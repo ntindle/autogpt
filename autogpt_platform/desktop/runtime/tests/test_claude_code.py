@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -927,17 +928,13 @@ def test_the_real_bundle_still_reads_what_keeps_files_out_of_the_users_home():
     if not (REAL_BUNDLE / "manifest.json").is_file():
         pytest.skip("no assembled bundle (build/runtime)")
     update = "Update claude_code_host_environment in desktop/runtime/autogpt_desktop/settings.py."
-    mem0 = REAL_BUNDLE / "site" / "mem0"
-    for module in (mem0 / "configs" / "base.py", mem0 / "memory" / "setup.py"):
-        assert 'os.environ.get("MEM0_DIR")' in module.read_text(encoding="utf-8"), (
-            f"{module.relative_to(REAL_BUNDLE)} no longer takes its directory from MEM0_DIR: "
+    mem0 = bundled_sources("mem0")
+    for module in ("configs/base.py", "memory/setup.py"):
+        assert 'os.environ.get("MEM0_DIR")' in mem0[module], (
+            f"mem0/{module} no longer takes its directory from MEM0_DIR: "
             f"mem0 would write ~/.mem0 into the user's home. {update}"
         )
-    homes = sorted(
-        path.relative_to(mem0).as_posix()
-        for path in mem0.rglob("*.py")
-        if "expanduser(" in path.read_text(encoding="utf-8", errors="replace")
-    )
+    homes = sorted(module for module, source in mem0.items() if "expanduser(" in source)
     assert homes == ["configs/base.py", "memory/setup.py"], (
         f"mem0 looks for the home directory in {homes} now; see that each is sent to the "
         f"data directory. {update}"
@@ -952,6 +949,31 @@ def test_the_real_bundle_still_reads_what_keeps_files_out_of_the_users_home():
         "the bundled Claude Code CLI no longer knows DISABLE_AUTOUPDATER: started in the "
         f"user's home, it could update the user's own install. {update}"
     )
+
+
+def bundled_sources(package: str) -> dict[str, str]:
+    """The Python sources of a third-party package in the real bundle, by
+    their path inside the package: from site/, or from the archive in
+    site-zip/ where the build puts a package that is nothing but source
+    (build/site_zip.py)."""
+    directory = REAL_BUNDLE / "site" / package
+    if directory.is_dir():
+        return {
+            path.relative_to(directory).as_posix(): path.read_text(encoding="utf-8", errors="replace")
+            for path in directory.rglob("*.py")
+        }
+    prefix = f"{package}/"
+    found: dict[str, str] = {}
+    for zipped in sorted((REAL_BUNDLE / "site-zip").glob("*.zip")):
+        with zipfile.ZipFile(zipped) as archive:
+            found.update(
+                {
+                    name.removeprefix(prefix): archive.read(name).decode("utf-8", errors="replace")
+                    for name in archive.namelist()
+                    if name.startswith(prefix) and name.endswith(".py")
+                }
+            )
+    return found
 
 
 def overlapping_chunks(file, size: int, overlap: int):

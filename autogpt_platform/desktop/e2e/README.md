@@ -66,7 +66,7 @@ uses.
 Per OS:
 
 - **Windows.** `AutoGPT-Setup-*.exe /S` into `%LOCALAPPDATA%\Programs\autogpt`.
-  The install takes ten minutes or more.
+  The install takes minutes; how many is recorded (see below).
 - **macOS.** The disk image is marked as downloaded, mounted, and the app is
   copied to `/Applications`. The test records what `spctl` says about it and
   then removes the quarantine mark, which is what "Open Anyway" does: the
@@ -79,6 +79,37 @@ Per OS:
   `xvfb-run -a dbus-run-session --`, so `xvfb`, `xauth` and `dbus` must be
   installed. `xauth` is only recommended by `xvfb`, not required, and
   `xvfb-run` does not start without it.
+
+## Durations
+
+What a user waits for is timed on every run: the installer, the first start
+to `ready`, each later start, the upgrade (the installer run over the old
+version), and the first start after it. Each is a note on the test that
+measured it (`seconds: install`, `seconds: first start, to ready`, ...), and
+all of them are in `test-results/durations.md`, a table in the order they
+happened:
+
+```
+| What | Seconds |
+| --- | ---: |
+| install | ... |
+| first start, to ready | ... |
+| restart, to ready | ... |
+| upgrade (the installer, over the old version) | ... |
+| first start after the upgrade, to ready | ... |
+```
+
+Timing an install means something only on a machine like a user's: a clean
+one, with the virus scanner on.
+
+On Windows the upgrade's installer is started from inside the install
+directory, as an update starts it (from the running app, whose working
+directory that is). Windows does not rename a directory a program is
+standing in, and one rename is how the old version is moved away
+(`resources/installer.nsh`): started from anywhere else, the upgrade timed
+here would be one no user gets. The removal that is compiled into a version
+runs when the next one replaces it, so the fast one is measured from the
+second upgrade on.
 
 ## The firewall check
 

@@ -356,3 +356,124 @@ test("the installer's check is electron-builder's, changed in two places", (t) =
     );
   }
 });
+
+// --- how an update removes the old version ------------------------------------
+
+const UNINSTALLER = path.join(DESKTOP, "node_modules", "app-builder-lib", "templates", "nsis", "uninstaller.nsh");
+const lines = (text) => text.split("\n").map((line) => line.trim()).filter(Boolean);
+
+test("an update moves the old install away in one rename, to a sibling on the same drive", () => {
+  const include = fs.readFileSync(INCLUDE, "utf8").replace(/\r\n/g, "\n");
+  const remove = macro(include, "customRemoveFiles");
+  assert.ok(remove, "installer.nsh has no customRemoveFiles: every update renames each file of the old version");
+  const steps = lines(remove).filter((line) => !line.startsWith("#"));
+  const rename = steps.indexOf('Rename "$INSTDIR" "$INSTDIR.old-install"');
+  assert.ok(rename > 0, "the whole directory is renamed, beside itself");
+  // A directory cannot be renamed while it is somebody's working directory,
+  // and the uninstaller's is $INSTDIR.
+  assert.ok(steps.slice(0, rename).includes("SetOutPath $TEMP"));
+  // What an earlier update left is in the way of the rename.
+  assert.ok(steps.slice(0, rename).includes('RMDir /r "$INSTDIR.old-install"'));
+  assert.equal(steps[rename - 1], "ClearErrors");
+  assert.equal(steps[rename + 1], "${if} ${Errors}");
+  // Not into the installer's temporary directory: that may be another drive.
+  assert.ok(!/Rename "\$INSTDIR" "\$(PLUGINSDIR|TEMP)/.test(remove));
+  // An uninstall that is not an update deletes in place, as it always did.
+  assert.deepEqual(steps.slice(-4), ["SetOutPath $TEMP", "RMDir /r $INSTDIR", "${endif}", "!macroend"]);
+});
+
+test("an uninstall takes what an update could not finish deleting", () => {
+  // A file held by a scanner while the renamed directory was deleted leaves
+  // it behind, up to 1.5 GB beside the install, registered nowhere.
+  const include = fs.readFileSync(INCLUDE, "utf8").replace(/\r\n/g, "\n");
+  const steps = lines(macro(include, "customRemoveFiles")).filter((line) => !line.startsWith("#"));
+  const plain = steps.slice(steps.lastIndexOf("${else}"));
+  assert.deepEqual(plain.slice(0, 5), [
+    "${else}",
+    '${if} ${FileExists} "$INSTDIR.old-install\\*.*"',
+    'RMDir /r "$INSTDIR.old-install"',
+    "ClearErrors",
+    "${endif}",
+  ]);
+  // And the update that could not finish tries once more itself.
+  const renamed = steps.indexOf('DetailPrint "Moved the old version away in one piece."');
+  assert.ok(renamed > 0);
+  assert.deepEqual(steps.slice(renamed + 1, renamed + 4), ['RMDir /r "$INSTDIR.old-install"', "${if} ${Errors}", "Sleep 2000"]);
+});
+
+test("the installer that waits for the old version's removal is not standing in its directory", (t) => {
+  // Windows refuses to rename a directory that is a program's working
+  // directory. electron-updater starts the installer without one, so it has
+  // the app's: the install directory, for an app started from its shortcut.
+  const include = fs.readFileSync(INCLUDE, "utf8").replace(/\r\n/g, "\n");
+  assert.equal(macro(include, "customInit"), "!macro customInit\n  SetOutPath $TEMP\n!macroend");
+
+  const templates = path.join(DESKTOP, "node_modules", "app-builder-lib", "templates", "nsis");
+  const updater = path.join(DESKTOP, "node_modules", "electron-updater", "out", "BaseUpdater.js");
+  if (!fs.existsSync(templates) || !fs.existsSync(updater)) return t.skip("electron-builder is not installed (npm ci)");
+  // The template runs customInit in the installer's .onInit, after the line
+  // that would otherwise leave the installer in $INSTDIR, and not in the
+  // uninstaller's build.
+  const installer = fs.readFileSync(path.join(templates, "installer.nsi"), "utf8").replace(/\r\n/g, "\n");
+  const onInit = /^Function \.onInit\n([\s\S]*?)^FunctionEnd$/m.exec(installer);
+  assert.ok(onInit, "electron-builder's installer has no .onInit any more: read templates/nsis/installer.nsi");
+  const own = onInit[1].indexOf("!ifmacrodef customInit\n      !insertmacro customInit");
+  assert.ok(own > onInit[1].indexOf("SetOutPath $INSTDIR"), "customInit no longer runs after .onInit goes to $INSTDIR");
+  assert.ok(own > onInit[1].indexOf("!ifdef BUILD_UNINSTALLER") && own > onInit[1].indexOf("!else"));
+  // The old version is removed in the install section, which only afterwards
+  // goes back to $INSTDIR and does not go there before.
+  const section = fs.readFileSync(path.join(templates, "installSection.nsh"), "utf8").replace(/\r\n/g, "\n");
+  const removal = section.indexOf("!insertmacro uninstallOldVersion SHELL_CONTEXT");
+  assert.ok(removal > 0, "electron-builder removes the old version somewhere else now: read installSection.nsh");
+  assert.ok(!section.slice(0, removal).includes("SetOutPath"), "the installer changes directory before the old version is removed");
+  assert.ok(section.slice(removal).includes("\nSetOutPath $INSTDIR\n"), "the installer no longer returns to $INSTDIR to write the files");
+  // And the updater still starts the installer where the app is.
+  const spawn = /async spawnLog\([\s\S]*?\n {4}\}\n/.exec(fs.readFileSync(updater, "utf8"));
+  assert.ok(spawn, "electron-updater starts the installer some other way now: read BaseUpdater.js");
+  assert.ok(!spawn[0].includes("cwd"), "electron-updater names a working directory now: customInit may no longer be needed");
+});
+
+test("when Windows refuses that rename, the removal is electron-builder's own", (t) => {
+  if (!fs.existsSync(UNINSTALLER)) return t.skip("electron-builder is not installed (npm ci)");
+  const template = fs.readFileSync(UNINSTALLER, "utf8").replace(/\r\n/g, "\n");
+  // The template still takes a replacement, and still has the two functions
+  // the replacement calls (unused, they would be a warning, which fails the build).
+  const own = /!ifmacrodef customRemoveFiles\n\s+!insertmacro customRemoveFiles\n\s+!else\n([\s\S]*?)\n\s+!endif/.exec(template);
+  assert.ok(own, "electron-builder's uninstaller no longer takes customRemoveFiles: read templates/nsis/uninstaller.nsh");
+  for (const name of ["un.atomicRMDir", "un.restoreFiles"]) {
+    assert.match(template, new RegExp(`^Function ${name.replace(".", "[.]")}$`, "m"), `${name} is gone from the template`);
+  }
+  // It still moves the files one by one into its temporary directory.
+  assert.match(own[1], /Call un\.atomicRMDir/);
+
+  const include = fs.readFileSync(INCLUDE, "utf8").replace(/\r\n/g, "\n");
+  const code = (text) => lines(text).filter((line) => !line.startsWith("#"));
+  const ours = code(macro(include, "customRemoveFiles"));
+  // Theirs: `${if} ${isUpdated} <move file by file> ${endif} <delete>`.
+  const theirs = code(own[1]);
+  const updated = theirs.indexOf("${if} ${isUpdated}");
+  const closing = theirs.lastIndexOf("${endif}");
+  assert.ok(updated === 0 && closing > 0, "electron-builder changed the shape of its removal");
+  const moveFileByFile = theirs.slice(updated + 1, closing);
+  const thenDelete = theirs.slice(closing + 1);
+  const start = ours.indexOf('CreateDirectory "$PLUGINSDIR\\old-install"');
+  assert.ok(start > 0, "customRemoveFiles no longer falls back to electron-builder's removal");
+  assert.deepEqual(
+    ours.slice(start, start + moveFileByFile.length + thenDelete.length),
+    [...moveFileByFile, ...thenDelete],
+    "electron-builder changed how its uninstaller removes the old files: carry the change over to " +
+      "customRemoveFiles in resources/installer.nsh",
+  );
+  assert.deepEqual(ours.slice(-2 - thenDelete.length, -2), thenDelete, "the plain uninstall is no longer the template's");
+});
+
+test("the Windows installer stays one that an update can download in parts", () => {
+  // Solid, it would be 83 MB smaller (measured: 472 MB against 555 MB) and
+  // have no block map: every update would be all of it. `useZip` only takes
+  // effect on such an installer.
+  for (const variant of ["", "voice"]) {
+    const { nsis } = configured({ AUTOGPT_DESKTOP_VARIANT: variant });
+    assert.notEqual(nsis.differentialPackage, false);
+    assert.equal(nsis.useZip, undefined);
+  }
+});

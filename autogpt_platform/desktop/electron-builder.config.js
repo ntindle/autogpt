@@ -224,8 +224,15 @@ module.exports = {
     perMachine: false,
     deleteAppDataOnUninstall: false,
     artifactName: names.nsis,
+    // `differentialPackage` is left at its default, on. Measured on the
+    // Windows bundle: the installer is 555 MB with it and 472 MB without,
+    // and without it there is no block map, so every update would be the
+    // whole installer instead of the parts that changed (half a megabyte
+    // for a change to the shell or to a backend module).
+    //
     // Which running programs the installer closes: this install's, and not
-    // those of an install whose folder name merely starts the same.
+    // those of an install whose folder name merely starts the same. And how
+    // an update removes the version it replaces.
     include: "resources/installer.nsh",
   },
   mac: mac(),

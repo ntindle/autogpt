@@ -13,7 +13,7 @@ import logging
 import time
 
 from autogpt_desktop.layout import Bundle, DataDir, write_private
-from autogpt_desktop.process import ManagedProcess, base_env, wait_until
+from autogpt_desktop.process import ManagedProcess, base_env, listening, wait_until
 
 logger = logging.getLogger("autogpt_desktop")
 
@@ -72,6 +72,8 @@ def process(bundle: Bundle, data: DataDir, port: int, password: str) -> ManagedP
 
 
 def is_ready(port: int, password: str) -> bool:
+    if not listening(port):
+        return False
     import redis
 
     try:

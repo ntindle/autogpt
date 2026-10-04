@@ -34,6 +34,7 @@ class Service:
         # What AppProcess.execute_run_command does first; off the main thread
         # it raises unless the host has made it thread-aware.
         signal.signal(signal.SIGTERM, lambda signum, frame: None)
+        mark(f"{self.name}.environment", " ".join(sorted(os.environ)))
         mark(f"{self.name}.started", threading.current_thread().name)
         mark(f"{self.name}.argv", " ".join(sys.argv))
         try:
@@ -168,3 +169,9 @@ def web_b() -> None:
 def hands_nothing_over() -> None:
     """An upstream whose entry point no longer goes through run_processes."""
     mark("nothing.called")
+
+
+def serves_itself() -> None:
+    """An upstream whose entry point runs its service in the foreground."""
+    mark("itself.started")
+    time.sleep(1e5)

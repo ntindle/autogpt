@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -410,7 +411,11 @@ class ChildRegistry:
             except psutil.Error:
                 continue
             entries.append({"name": process.name, "pid": process.pid, "started": started})
-        self.path.write_text(json.dumps(entries), encoding="utf-8")
+        # Whole or not at all: a runtime killed in the middle of this must
+        # not leave half a list, which the next start could not read.
+        fresh = self.path.with_name(self.path.name + ".new")
+        fresh.write_text(json.dumps(entries), encoding="utf-8")
+        os.replace(fresh, self.path)
 
     def reap_leftovers(self) -> None:
         import psutil
@@ -449,6 +454,23 @@ def send_posix_signal(sig: int) -> Callable[[ManagedProcess], None]:
             os.killpg(process.popen.pid, sig)
 
     return stop
+
+
+def listening(port: int, timeout: float = 0.25) -> bool:
+    """Whether something accepts connections on a loopback port.
+
+    Asked before any client is pointed at a server that may not be up yet.
+    Windows answers a connection to a closed port only after retrying it for
+    two seconds, which a database driver or an HTTP client then sits through
+    on every attempt: a start that asked nine services in turn noticed the
+    last of them up to twenty seconds late. An open port accepts at once (the
+    system does, however busy the program is), so a short timeout loses
+    nothing."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
 
 
 def wait_until(predicate: Callable[[], bool], timeout: float, interval: float = 0.5) -> bool:

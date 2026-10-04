@@ -3,6 +3,7 @@
     <runtime>/python/python smoke_test.py <runtime> [--timeout 600] [--quick]
                                           [--profile compact|balanced|isolated]
                                           [--data-dir DIR] [--keep] [--read-only]
+                                          [--restart-budget SECONDS]
 
 Run it with the bundle's own interpreter (it uses psutil, psycopg2 and redis
 from the bundle). This is the shell's contract exercised without the shell:
@@ -32,6 +33,11 @@ account's promises are about restarts:
 
 Every start must come up on the address the first one had: sessions and OAuth
 redirect URLs hang off it.
+
+Every start is timed, by the runtime's own account of it (its `timing`
+events: autogpt_desktop/timing.py), and the table is printed at the end. A
+restart that takes longer than `--restart-budget` fails the run: see
+RESTART_BUDGET_SECONDS.
 
 `--quick` stops after the first.
 
@@ -104,6 +110,19 @@ CATALOG = "skills-catalog"
 CATALOG_NOT_BEFORE_SECONDS = 55
 CATALOG_SECONDS = 420
 STALE_LOCK = "exec_lock:left-by-the-smoke-test"
+# From starting the runtime to its `ready`, for a start that finds its data
+# there (a first start also creates the database, and is not held to this).
+# Measured on Windows x64, 24 cores, 2026-10-03: 22 seconds with 6 GB of
+# memory free, every time; 25 to 36 with eight service hosts (the isolated
+# profile) and half a gigabyte free. A start that makes each of its waits one
+# after the other takes 40 to 54 on the same machine. The default is more
+# than five times the first figure, because the machines that run this in CI
+# have three or four cores, less memory than the stack wants, and neighbours,
+# and none of them has been timed yet: it catches a start that has come to
+# wait a minute for something, not one that lost ten seconds. On a quiet
+# machine, hold it tighter: `--restart-budget 35`.
+RESTART_BUDGET_SECONDS = 120
+PHASES = ("config", "database", "cache", "queue", "migrations", "services", "frontend")
 
 # Nothing listens on the discard port. What the runtime starts with these in
 # its environment cannot reach the network through a proxy-aware client; its
@@ -157,6 +176,23 @@ class Install:
         self.quit_mid_run = False
         # --read-only: puts the bundle's permissions back (see `unwritable`).
         self.give_back: Callable[[], None] | None = None
+        # The runtime's last `timing` event of the start that is running.
+        self.timing: dict | None = None
+        self.starts: list[Start] = []
+
+
+class Start:
+    """How long one start took: to `ready` as seen from outside, and the
+    runtime's own phases."""
+
+    def __init__(self, name: str, to_ready: float | None, timing: dict | None) -> None:
+        self.name = name
+        self.to_ready = to_ready
+        self.phases: dict[str, float] = (timing or {}).get("phases", {})
+
+    @property
+    def restart(self) -> bool:
+        return self.name != fresh_install.__name__
 
 
 Checks = Callable[[str, Path, Install], list[str]]
@@ -180,6 +216,12 @@ def main() -> int:
         help="macOS and Linux: run with the bundle unwritable, as an installed app has it",
     )
     parser.add_argument("--quick", action="store_true", help="one start, no restarts")
+    parser.add_argument(
+        "--restart-budget",
+        type=float,
+        default=RESTART_BUDGET_SECONDS,
+        help="seconds a restart may take to become ready (default: %(default)s)",
+    )
     parser.add_argument(
         "--profile",
         default=os.environ.get("AUTOGPT_DESKTOP_PROFILE"),
@@ -222,8 +264,14 @@ def end_on_signals() -> None:
         raise KeyboardInterrupt(signal.Signals(number).name)
 
     for number in END_SIGNALS:
-        if number != signal.SIGINT:  # which already does this
-            signal.signal(number, interrupt)
+        if number == signal.SIGINT:  # which already does this
+            continue
+        # A signal that is being ignored stays ignored: `nohup` runs a
+        # program that way so that it outlives the terminal it was started
+        # from, and a handler here would end the run when that one closes.
+        if signal.getsignal(number) is signal.SIG_IGN:
+            continue
+        signal.signal(number, interrupt)
 
 
 @contextlib.contextmanager
@@ -263,6 +311,8 @@ def smoke(
         failures += run(runtime, data, args.timeout, checks, install)
     failures += changed_files(bundle_before, snapshot(runtime))
     failures += stale
+    print_starts(install.starts)
+    failures += slow_restarts(install.starts, args.restart_budget)
     if args.read_only:
         failures += refused_writes(data)
 
@@ -292,8 +342,11 @@ def run(runtime: Path, data: Path, timeout: int, checks: Checks, install: Instal
     install.runtime = psutil.Process(process.pid)
     family = Family(install.runtime, data, runtime)
     try:
+        install.timing = None
         url = wait_for_ready(process, timeout, started, install)
         install.ready_at, install.ready_wall = time.monotonic(), time.time()
+        to_ready = install.ready_at - started if url else None
+        install.starts.append(Start(checks.__name__, to_ready, install.timing))
         failures += [] if url else ["the runtime never reported ready"]
         install.quit_mid_run = False
         if url:
@@ -566,6 +619,38 @@ def left_by_earlier_runs(runtime: Path) -> list[str]:
     ]
 
 
+def print_starts(starts: list[Start]) -> None:
+    """Seconds: to `ready` from outside, then each phase by the runtime's
+    own clock. Phases overlap; they do not add up."""
+    if not starts:
+        return
+    print("\n== how long each start took, in seconds")
+    print(f"  {'start':30} {'to ready':>8} " + " ".join(f"{name:>10}" for name in PHASES))
+    for start in starts:
+        to_ready = "never" if start.to_ready is None else f"{start.to_ready:.1f}"
+        phases = " ".join(
+            f"{start.phases[name]:10.1f}" if name in start.phases else f"{'-':>10}" for name in PHASES
+        )
+        print(f"  {start.name.replace('_', ' '):30} {to_ready:>8} {phases}")
+
+
+def slow_restarts(starts: list[Start], budget: float) -> list[str]:
+    """A restart has nothing to create and nothing to migrate: what it takes
+    is what every start of the app costs its user."""
+    return [
+        f"the start `{start.name.replace('_', ' ')}` took {start.to_ready:.0f}s to become "
+        f"ready, and a restart's budget is {budget:g}s (--restart-budget). Its phases, in "
+        f"seconds: {phases_of(start)}"
+        for start in starts
+        if start.restart and start.to_ready is not None and start.to_ready > budget
+    ]
+
+
+def phases_of(start: Start) -> str:
+    listed = ", ".join(f"{name} {spent:.1f}" for name, spent in start.phases.items())
+    return listed or "the runtime reported none"
+
+
 def checked(checks: Checks, url: str, data: Path, install: Install) -> list[str]:
     """A check that blows up is a failure, and the runtime is still stopped."""
     try:
@@ -707,6 +792,10 @@ def wait_for_ready(
             except ValueError:
                 continue
             elapsed = time.monotonic() - started
+            if event.get("event") == "timing":
+                install.timing = event
+                print(f"{elapsed:6.1f}s timing: {event.get('phase')} {event.get('seconds')} s")
+                continue
             print(f"{elapsed:6.1f}s {event.get('event')}: {event.get('message') or event.get('url')}")
             if event.get("step") == "profile":
                 named = re.search(r"Using the (\w+) profile", str(event.get("message")))

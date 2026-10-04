@@ -3,16 +3,26 @@
 This is the appliance's entrypoint.sh + bootstrap.sh + supervisord, in one
 process:
 
-    config -> epmd -> postgres | valkey | rabbitmq -> migrations
-           -> service hosts | frontend -> proxy -> ready
+    config -> epmd -> valkey, rabbitmq
+                    | initdb -> postgres -> migrations -> frontend
+                    | service hosts, loading
+           -> service hosts, serving -> proxy -> ready
 
 The backend services run in service hosts (servicehost.py), grouped as the
 machine's profile says (resources.py, apps.py).
 
-Processes start in tiers; those in a tier do not depend on each other. Tiers
-stop in reverse order, each one all at once. Like supervisord's two stop
-groups, that takes the stateless services away first so the data stores get
-a quiet, clean shutdown.
+What takes the time of a start is three things that do not need each other:
+RabbitMQ booting, the database being created and migrated (which needs
+PostgreSQL alone), and each service host importing the backend. They run
+side by side. A host is started as soon as its environment is known, loads,
+and then waits for the supervisor's word (the go file) before it starts a
+service: no service runs before the databases answer, the migrations are in
+and interrupted runs are settled. timing.py reports how long each part took.
+
+Processes are kept in tiers; those in a tier do not depend on each other.
+Tiers stop in reverse order, each one all at once. Like supervisord's two
+stop groups, that takes the stateless services away first so the data stores
+get a quiet, clean shutdown.
 """
 
 from __future__ import annotations
@@ -25,8 +35,10 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NoReturn
 
@@ -35,6 +47,7 @@ from autogpt_desktop import (
     bootstrap,
     claude_code,
     events,
+    migrations,
     ports,
     postgres,
     rabbitmq,
@@ -42,6 +55,7 @@ from autogpt_desktop import (
     runs,
     servicehost,
     settings,
+    timing,
     valkey,
 )
 from autogpt_desktop.layout import Bundle, DataDir
@@ -49,8 +63,9 @@ from autogpt_desktop.process import (
     ChildRegistry,
     ManagedProcess,
     adopt_kill_on_exit_job,
-    raise_file_limit,
     base_env,
+    listening,
+    raise_file_limit,
     stop_together,
     wait_until,
 )
@@ -68,8 +83,13 @@ OTHER_SERVICES_SECONDS = 90
 # while it runs. Not while the app is starting and the user first clicks.
 SKILLS_CATALOG_DELAY_SECONDS = 60
 SKILLS_CATALOG_MARKER = "skills-catalog.published"
+# In the data directory's run/: written when the services may start.
+GO_FILE = "services.go"
 # What the shell allows a stop before it kills the runtime (src/runtime.js).
 SHELL_STOP_GRACE_SECONDS = 60
+# How often a server that is starting is asked whether it answers yet. What
+# is asked is cheap while the answer is no (process.listening).
+READY_POLL_SECONDS = 0.25
 PASSWORD_RESET_LOST = (
     "The owner password was not changed, because AutoGPT did not finish "
     "starting. Reset it again."
@@ -78,6 +98,11 @@ PASSWORD_RESET_LOST = (
 
 class StartupError(RuntimeError):
     pass
+
+
+class Abandoned(StartupError):
+    """One side of a start gave up because the other had already failed.
+    What the other side raised is the reason the user is given."""
 
 
 class Stack:
@@ -105,6 +130,21 @@ class Stack:
         # What the copilot executor's process gets in place of `env`, when
         # AutoPilot runs on the user's Claude Code sign-in.
         self.copilot_env: dict[str, str] | None = None
+        self.phases = timing.Phases()
+        self.hosts_launched = 0.0
+        self.frontend_launched = 0.0
+        # The two sides of a start, each on a thread of its own: the cache
+        # and the broker, and everything the database needs.
+        self.servers_branch: Background | None = None
+        self.database_branch: Background | None = None
+        # Set when one side has failed: the other begins nothing more.
+        self.start_failed = threading.Event()
+        # Started hosts load and then wait for this file (servicehost.py).
+        self.go_file = data.run / GO_FILE
+        self.cache_is_up = threading.Event()
+        # Held to start a process and to write down what is running: both
+        # sides of a start do, and the record is one file.
+        self._launching = threading.RLock()
 
     @property
     def processes(self) -> list[ManagedProcess]:
@@ -155,16 +195,28 @@ class Stack:
         if self.stop_requested.is_set():
             raise StartupError("startup was cancelled")
 
+    def raise_if_abandoned(self) -> None:
+        """Asked before each thing a side of the start begins. What is
+        already running (a migration above all) is never cut short by it."""
+        self.raise_if_cancelled()
+        if self.start_failed.is_set():
+            raise Abandoned("the other side of this start failed")
+
     def start(self) -> str:
         bundle, data = self.bundle, self.data
+        self.phases = timing.Phases()
         # First, ahead of anything that can fail: whatever happens to this
         # start, the password does not stay on disk in the clear.
         self.password_reset = bootstrap.take_password_reset(
             data.config / bootstrap.RESET_PASSWORD_FILE
         )
+        # What this machine lacks (Linux: OpenSSL 3) is said in the first
+        # second, not once a database has been created for nothing.
+        migrations.require_engines(bundle)
         events.progress("config", "Preparing configuration")
         data.prepare()
         self.registry.reap_leftovers()
+        self.go_file.unlink(missing_ok=True)
         settings.clear_copilot_workspaces(data)
         secret = settings.ensure_secrets(bundle, data)
         port = ports.allocate(data.ports_file)
@@ -176,13 +228,16 @@ class Stack:
         )
         self.claude_code = self.look_for_claude_code()
         first_boot = not postgres.is_initialized(data)
-        self.start_infrastructure(port, secret, first_boot)
-        self.migrate(port, secret, first_boot)
+        self.phases.record("config", self.phases.since_start())
+        cache_and_queue = self.start_infrastructure(port, secret, first_boot)
+        self.load_services(port, secret)
+        self.settle(cache_and_queue)
         runs.reconcile(
             self.database_connector(port["postgres"], secret["POSTGRES_PASSWORD"]),
             data.run / runs.STOPPED_RUNS_FILE,
         )
         self.start_apps(port, secret)
+        self.phases.finish()
         return self.env["AUTOGPT_PUBLIC_URL"]
 
     def look_for_claude_code(self) -> claude_code.Detection:
@@ -222,9 +277,17 @@ class Stack:
 
     def start_infrastructure(
         self, port: dict[str, int], secret: dict[str, str], first_boot: bool
-    ) -> None:
-        """PostgreSQL, Valkey and RabbitMQ do not depend on each other, so
-        they boot side by side; RabbitMQ is the slowest and sets the pace."""
+    ) -> Callable[[], None]:
+        """Start Valkey and RabbitMQ and wait for them on one thread, and on
+        another do everything the database needs: created (a first start),
+        started, migrated. Returns the wait for the first two; `settle` makes
+        it and then waits for the database's side. RabbitMQ boots as slowly
+        as a database is created, and neither needs the other.
+
+        The wait has a thread of its own so that each server is asked from
+        the moment it is started: what the main thread does meanwhile
+        (starting the hosts, waiting for the look for Claude Code) would
+        otherwise be counted as the cache's and the broker's time."""
         bundle, data = self.bundle, self.data
         events.progress(
             "infrastructure",
@@ -234,8 +297,6 @@ class Stack:
         )
         rabbit_user = secret["RABBITMQ_DEFAULT_USER"]
         rabbit_password = secret["RABBITMQ_DEFAULT_PASS"]
-        postgres.check_compatible(bundle, data)
-        postgres.initialize(bundle, data, secret["POSTGRES_PASSWORD"])
         valkey.write_config(
             data, port["valkey"], port["valkey_bus"], secret["REDIS_PASSWORD"]
         )
@@ -243,29 +304,151 @@ class Stack:
 
         port_mapper = rabbitmq.epmd_process(bundle, data, port)
         self.launch([port_mapper])
+        # Before anything is created or started on this data: a database this
+        # build cannot open is the user's to keep.
+        postgres.check_compatible(bundle, data)
         self.await_ready(
             port_mapper, lambda: rabbitmq.epmd_is_ready(port["epmd"]), timeout=30
         )
 
-        database = postgres.process(
-            bundle, data, port["postgres"], resources.POSTGRES_LIMITS
-        )
         cache = valkey.process(bundle, data, port["valkey"], secret["REDIS_PASSWORD"])
         queue = rabbitmq.process(bundle, data, port)
-        self.launch([database, cache, queue])
+        began = time.monotonic()
+        servers = self.launch([cache, queue])
+        self.database_branch = Background(
+            lambda: self.start_database(servers, port, secret, first_boot)
+        )
 
-        self.await_ready(
-            database,
-            lambda: postgres.is_ready(port["postgres"], secret["POSTGRES_PASSWORD"]),
-            timeout=120,
-        )
-        self.await_cache(cache, port, secret["REDIS_PASSWORD"])
-        valkey.ensure_cluster(port["valkey"], secret["REDIS_PASSWORD"])
-        self.await_ready(
-            queue,
-            lambda: rabbitmq.is_ready(port["rabbitmq"], rabbit_user, rabbit_password),
-            timeout=240,
-        )
+        def cache_and_queue() -> None:
+            try:
+                self.await_cache(cache, port, secret["REDIS_PASSWORD"])
+                valkey.ensure_cluster(port["valkey"], secret["REDIS_PASSWORD"])
+                self.cache_is_up.set()
+                self.phases.record("cache", time.monotonic() - began)
+                self.await_queue(queue, port, rabbit_user, rabbit_password)
+                self.phases.record("queue", time.monotonic() - began)
+            except BaseException:
+                # At once, not when `settle` gets to hear of it: the
+                # database's side then creates and migrates nothing more.
+                self.start_failed.set()
+                raise
+
+        self.servers_branch = Background(cache_and_queue)
+        return self.servers_branch.result
+
+    def start_database(
+        self,
+        servers: list[ManagedProcess],
+        port: dict[str, int],
+        secret: dict[str, str],
+        first_boot: bool,
+    ) -> None:
+        """The database's side of a start, from nothing to migrated."""
+        bundle, data = self.bundle, self.data
+        with self.phases.measure("database"):
+            self.raise_if_abandoned()
+            postgres.initialize(bundle, data, secret["POSTGRES_PASSWORD"])
+            self.raise_if_abandoned()
+            database = postgres.process(
+                bundle, data, port["postgres"], resources.POSTGRES_LIMITS
+            )
+            self.launch_into(servers, database)
+            self.await_ready(
+                database,
+                lambda: postgres.is_ready(port["postgres"], secret["POSTGRES_PASSWORD"]),
+                timeout=120,
+            )
+        with self.phases.measure("migrations"):
+            self.migrate(port, secret, first_boot)
+        # What is still being waited for, if anything is: the broker, and the
+        # hosts loading.
+        events.progress("loading", "Loading AutoGPT")
+        self.start_frontend(port, secret)
+
+    def start_frontend(self, port: dict[str, int], secret: dict[str, str]) -> None:
+        """Once the migrations are in: its environment says whether
+        registration is open, which their last step decided (`secure_owner`),
+        and it signs in to the database as the role they set up. It needs
+        neither the broker nor the backend to start. A tier of its own."""
+        self.raise_if_abandoned()
+        frontend_env = settings.frontend_environment(self.env, port, secret, self.data)
+        frontend = apps.frontend_process(self.bundle, self.data, frontend_env)
+        self.frontend_launched = time.monotonic()
+        self.launch([frontend])
+        self.time_the_frontend(frontend, apps.health_urls(port)[apps.FRONTEND])
+
+    def time_the_frontend(self, frontend: ManagedProcess, url: str) -> None:
+        """Its phase ends when it answers. The start itself asks only once
+        the broker is up and the hosts have their go (`wait_for_apps`), and
+        what it saw then was the broker's time under the frontend's name."""
+        launched = self.frontend_launched
+
+        def watch() -> None:
+            deadline = launched + APP_READY_TIMEOUT_SECONDS
+            while time.monotonic() < deadline and frontend.exit_code() is None:
+                if self.stop_requested.is_set() or self.start_failed.is_set():
+                    return
+                if _http_ok(url):
+                    self.phases.record("frontend", time.monotonic() - launched)
+                    return
+                time.sleep(READY_POLL_SECONDS)
+
+        threading.Thread(target=watch, name="frontend-timing", daemon=True).start()
+
+    def settle(self, waiting: Callable[[], None]) -> None:
+        """Make the wait for the cache and the broker, then wait for the
+        database's side, and raise what either raised.
+
+        Whatever happens to the first wait, the database's side is seen to
+        its end before this returns or raises: what follows a failed start
+        is a stop of every server, and a migration that loses its database
+        half-way leaves one that has to be repaired by hand. It is told of
+        the failure, though, and begins nothing it has not begun: no
+        database is created, migrated or given a frontend for a start that
+        has already failed. When both fail, the database's error is the one
+        reported; the other is in the log."""
+        branch = self.database_branch
+        assert branch, "start_infrastructure starts the database"
+        try:
+            waiting()
+        except Exception as exc:
+            self.start_failed.set()
+            if self.migrating:
+                events.progress("migrate", "Finishing a database update")
+            failed = branch.wait()
+            if failed is None or isinstance(failed, Abandoned) or self.stop_requested.is_set():
+                raise
+            logger.error(f"besides the database, which is the error reported: {exc}")
+            raise failed from None
+        failed = branch.wait()
+        if failed:
+            raise failed
+
+    def await_queue(
+        self, queue: ManagedProcess, port: dict[str, int], user: str, password: str
+    ) -> None:
+        """RabbitMQ is started the quick way (rabbitmq.py, `_server_flags`),
+        which leans on how this version of it boots. A broker that exits
+        instead of starting gets one more start, the way its own script
+        would have started it."""
+
+        def answers() -> bool:
+            return rabbitmq.is_ready(port["rabbitmq"], user, password)
+
+        try:
+            self.await_ready(queue, answers, timeout=240)
+        except StartupError:
+            exited = queue.exit_code() is not None
+            if not exited or self.stop_requested.is_set() or self.database_failed():
+                raise
+            if not rabbitmq.start_the_plain_way(queue):
+                raise
+            logger.warning(
+                f"rabbitmq exited while starting (see {self.log_of(queue)}); starting it "
+                "again without the flags that skip its own distribution set-up"
+            )
+            self.relaunch(queue)
+            self.await_ready(queue, answers, timeout=240)
 
     def await_cache(self, cache: ManagedProcess, port: dict[str, int], password: str) -> None:
         """Valkey exits at once when it cannot read its files (another build
@@ -281,8 +464,7 @@ class Stack:
                 raise
             valkey.set_aside(self.data)
             valkey.write_config(self.data, port["valkey"], port["valkey_bus"], password)
-            cache.start()
-            self.record()
+            self.relaunch(cache)
             self.await_ready(cache, answers, timeout=60)
 
     def migrate(
@@ -294,6 +476,7 @@ class Stack:
             if first_boot
             else "Checking for database updates",
         )
+        self.raise_if_abandoned()
         connect = self.database_connector(port["postgres"], secret["POSTGRES_PASSWORD"])
         bootstrap.create_schemas(self.bundle, connect)
         bootstrap.refuse_interrupted_migration(connect)
@@ -301,7 +484,7 @@ class Stack:
         # hand. Once it starts it runs to the end, and a stop request waits.
         self.migrating = True
         try:
-            self.raise_if_cancelled()
+            self.raise_if_abandoned()
             bootstrap.remove_owner_trigger(connect)
             bootstrap.apply_migrations(self.bundle, self.env)
         finally:
@@ -327,29 +510,42 @@ class Stack:
         if password:
             bootstrap.reset_owner_password(connect, password)
 
-    def start_apps(self, port: dict[str, int], secret: dict[str, str]) -> None:
+    def load_services(self, port: dict[str, int], secret: dict[str, str]) -> None:
+        """Start the service hosts. Each imports the backend, which is most
+        of what a start takes, and then waits for the go file: `start_apps`
+        writes it once there is something for a service to connect to."""
         bundle, data = self.bundle, self.data
         self.raise_if_cancelled()
-        events.progress("services", "Starting AutoGPT")
         self.use_claude_code()
-        frontend_env = settings.frontend_environment(self.env, port, secret, data)
-        self.cache = runs.Cache(port["valkey"], secret["REDIS_PASSWORD"])
+        self.cache = runs.Cache(port["valkey"], secret["REDIS_PASSWORD"], self.cache_is_up)
         groups = apps.layout(self.profile.merged)
         if self.copilot_env:
             groups = apps.copilot_alone(groups)
         self.hosts = {group.name: group for group in groups}
-        hosts = apps.backend_processes(
-            bundle, data, self.env, groups, self.cache, self.copilot_env
-        )
+        env, copilot_env = self.host_environments()
+        hosts = apps.backend_processes(bundle, data, env, groups, self.cache, copilot_env)
+        self.hosts_launched = time.monotonic()
         # A tier of its own, so that it stops after the services whose way
         # to the database it is: their cleanup still has things to write.
         self.launch([host for host in hosts if host.name == apps.DATABASE_MANAGER])
-        self.launch(
-            [
-                *[host for host in hosts if host.name != apps.DATABASE_MANAGER],
-                apps.frontend_process(bundle, data, frontend_env),
-            ]
-        )
+        self.launch([host for host in hosts if host.name != apps.DATABASE_MANAGER])
+
+    def host_environments(self) -> tuple[dict[str, str], dict[str, str] | None]:
+        """What `apps.backend_processes` is given as `env` and `copilot_env`:
+        the services' environment, and where the host waits for the go."""
+        wait = {servicehost.GO_FILE_ENV: str(self.go_file)}
+        copilot = {**self.copilot_env, **wait} if self.copilot_env else None
+        return {**self.env, **wait}, copilot
+
+    def start_apps(self, port: dict[str, int], secret: dict[str, str]) -> None:
+        """Everything a service needs is there now: let the hosts start
+        theirs, and wait for them and the frontend to answer."""
+        self.raise_if_cancelled()
+        events.progress("services", "Starting AutoGPT")
+        if not self.hosts:
+            self.load_services(port, secret)
+        if not self.frontend_launched:
+            self.start_frontend(port, secret)
 
         self.proxy = ProxyThread(
             Upstreams(
@@ -361,20 +557,49 @@ class Stack:
             port["public"],
         )
         self.proxy.start()
+        self.give_the_go()
         self.wait_for_apps(port)
         self.record()
 
-    def launch(self, tier: list[ManagedProcess]) -> None:
+    def give_the_go(self) -> None:
+        """Let the hosts start their services. The locks of executors that
+        are gone go first: a host's own preparation ran when it was started,
+        before there was a cache to clear them from (runs.py)."""
+        self.cache_is_up.set()
+        for group in self.hosts.values():
+            self.cache.clear_stale_locks(group.services)
+        self.go_file.parent.mkdir(parents=True, exist_ok=True)
+        self.go_file.write_text("go\n", encoding="ascii")
+
+    def launch(self, tier: list[ManagedProcess]) -> list[ManagedProcess]:
+        """Start a tier. Returned so that a process which could only be
+        started later can still join it (`launch_into`)."""
         started: list[ManagedProcess] = []
         self.tiers.append(started)
         for process in tier:
+            self.launch_into(started, process)
+        return started
+
+    def launch_into(self, tier: list[ManagedProcess], process: ManagedProcess) -> None:
+        # One at a time: each side of a start launches on its own thread.
+        with self._launching:
             process.start()
-            started.append(process)
+            tier.append(process)
+            self.record()
+
+    def relaunch(self, process: ManagedProcess) -> None:
+        """Start again a process that is in a tier already."""
+        with self._launching:
+            process.start()
             self.record()
 
     def record(self) -> None:
-        oneshot = [self.oneshot] if self.oneshot else []
-        self.registry.record([*self.processes, *oneshot])
+        # Under the lock from the list being read to the file being written:
+        # a list read before another thread's launch must not be the one
+        # that is written after it.
+        with self._launching:
+            oneshot = [self.oneshot] if self.oneshot else []
+            self.registry.record([*self.processes, *oneshot])
 
     def await_ready(
         self, process: ManagedProcess, probe: Callable[[], bool], timeout: float
@@ -386,15 +611,25 @@ class Stack:
         def settled() -> bool:
             if self.stop_requested.is_set() or process.exit_code() is not None:
                 return True
-            return probe()
+            return self.start_failed.is_set() or self.database_failed() or probe()
 
-        wait_until(settled, timeout)
-        self.raise_if_cancelled()
+        wait_until(settled, timeout, interval=READY_POLL_SECONDS)
+        self.raise_if_abandoned()
+        if self.database_failed():
+            # No reason to wait for anything else; `settle` reports why.
+            raise StartupError("the database did not start")
         log = self.data.logs / f"{process.name}.log"
         if process.exit_code() is not None:
             raise StartupError(f"{process.name} exited while starting. See {log} for details.")
         if not probe():
             raise StartupError(f"{process.name} did not start. See {log} for details.")
+
+    def database_failed(self) -> bool:
+        """Whether the database's side of this start has ended in an error
+        (asked from the other side; the branch itself is still running while
+        it waits for anything)."""
+        branch = self.database_branch
+        return bool(branch and branch.failed)
 
     def wait_for_apps(self, port: dict[str, int]) -> None:
         """The app is ready when what the window talks to answers
@@ -405,6 +640,7 @@ class Stack:
         names them."""
         waiting = apps.health_urls(port)
         usable_since: list[float] = []
+        asking = ThreadPoolExecutor(max_workers=len(waiting), thread_name_prefix="health")
 
         def settled() -> bool:
             if self.stop_requested.is_set():
@@ -415,15 +651,17 @@ class Stack:
                         f"{process.name} exited while starting. "
                         f"See {self.log_of(process)} for details."
                     )
-            for name in [name for name, url in waiting.items() if _http_ok(url)]:
+            for name in answering(asking, waiting):
                 del waiting[name]
+                self.answered(name, waiting)
             if apps.NEEDED_TO_OPEN & waiting.keys():
                 return False
             if not usable_since:
                 usable_since.append(time.monotonic())
             return not waiting or time.monotonic() - usable_since[0] >= OTHER_SERVICES_SECONDS
 
-        wait_until(settled, APP_READY_TIMEOUT_SECONDS, interval=1)
+        with asking:
+            wait_until(settled, APP_READY_TIMEOUT_SECONDS, interval=READY_POLL_SECONDS)
         self.raise_if_cancelled()
         if apps.NEEDED_TO_OPEN & waiting.keys():
             raise StartupError(
@@ -436,6 +674,13 @@ class Stack:
                 "without waiting longer. If their logs show them running, the backend "
                 "changed where they answer: see SERVICES in autogpt_desktop/apps.py."
             )
+
+    def answered(self, name: str, waiting: dict[str, str]) -> None:
+        now = time.monotonic()
+        if name == apps.FRONTEND:
+            self.phases.record("frontend", now - self.frontend_launched)
+        elif not (apps.NEEDED_TO_OPEN - {apps.FRONTEND}) & waiting.keys():
+            self.phases.record("services", now - self.hosts_launched)
 
     def applications(self) -> list[ManagedProcess]:
         ours = {*self.hosts, apps.FRONTEND}
@@ -460,8 +705,9 @@ class Stack:
         tier.remove(process)
         del self.hosts[process.name]
         groups = apps.isolated((group,))
+        env, copilot_env = self.host_environments()
         replacements = apps.backend_processes(
-            self.bundle, self.data, self.env, groups, self.cache, self.copilot_env
+            self.bundle, self.data, env, groups, self.cache, copilot_env
         )
         for replacement, single in zip(replacements, groups, strict=True):
             replacement.start()
@@ -576,6 +822,11 @@ class Stack:
 
     def stop(self) -> None:
         self.stop_requested.set()
+        for branch in (self.servers_branch, self.database_branch):
+            # Never under a migration: it ends by itself, and is not long.
+            # Nor while the other side could still start a server again.
+            if branch:
+                branch.wait()
         if self.proxy:
             try:
                 self.proxy.stop()
@@ -585,6 +836,41 @@ class Stack:
         for tier in reversed([*self.tiers, oneshot]):
             stop_together(tier)
         self.registry.path.unlink(missing_ok=True)
+
+
+class Background:
+    """Work done on a thread of its own, and what it raised."""
+
+    def __init__(self, work: Callable[[], None]) -> None:
+        self.failed: BaseException | None = None
+        self.thread = threading.Thread(target=self.run, args=(work,), name="background")
+        self.thread.start()
+
+    def run(self, work: Callable[[], None]) -> None:
+        try:
+            work()
+        except BaseException as exc:
+            self.failed = exc
+
+    def wait(self) -> BaseException | None:
+        """Until the work has ended, however long that takes; what it raised."""
+        self.thread.join()
+        return self.failed
+
+    def result(self) -> None:
+        """Wait, and raise here what the work raised."""
+        failed = self.wait()
+        if failed:
+            raise failed
+
+
+def answering(asking: ThreadPoolExecutor, waiting: dict[str, str]) -> list[str]:
+    """Of the services in `waiting` (name -> health address), those that
+    answer now. Asked all at once: one that is not up yet costs its own
+    wait, not everybody's."""
+    names = list(waiting)
+    answers = asking.map(lambda name: _http_ok(waiting[name]), names)
+    return [name for name, answered in zip(names, answers, strict=True) if answered]
 
 
 def serve() -> NoReturn:
@@ -635,6 +921,8 @@ def _stop_when_stdin_closes(stack: Stack) -> None:
 
 
 def _http_ok(url: str) -> bool:
+    if not listening(urllib.parse.urlsplit(url).port or 80):
+        return False
     try:
         with urllib.request.urlopen(url, timeout=3) as response:
             return response.status < 500

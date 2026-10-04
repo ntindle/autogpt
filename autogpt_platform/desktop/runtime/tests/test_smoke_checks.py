@@ -22,6 +22,7 @@ sys.path.insert(0, str(DESKTOP / "build"))
 smoke_test = importlib.import_module("smoke_test")
 
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="permission bits are POSIX's")
+posix_only_signals = pytest.mark.skipif(sys.platform == "win32", reason="Windows has no hang-up signal")
 
 
 @pytest.fixture
@@ -403,6 +404,26 @@ def test_a_process_working_in_the_data_directory_is_of_this_run(tmp_path: Path):
 BUNDLE = Path(psutil.Process().exe()).resolve().parent
 
 
+@posix_only_signals
+def test_a_run_started_with_nohup_outlives_its_terminal():
+    """nohup runs a program with the hang-up signal ignored. The smoke test
+    turns signals that would kill it into a tidy end, and must leave that one
+    alone, or the run ends when the terminal it was started from closes."""
+    probe = (
+        "import signal, sys; sys.path.insert(0, sys.argv[1]); import smoke_test; "
+        "signal.signal(signal.SIGHUP, signal.SIG_IGN); smoke_test.end_on_signals(); "
+        "print(signal.getsignal(signal.SIGHUP) is signal.SIG_IGN, "
+        "callable(signal.getsignal(signal.SIGTERM)))"
+    )
+    answer = subprocess.run(
+        [sys.executable, "-c", probe, str(DESKTOP / "build")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert answer.stdout.split() == ["True", "True"], answer.stderr
+
+
 # --- the links a run leaves outside the data directory ------------------------
 
 
@@ -480,3 +501,71 @@ def test_a_stale_postmaster_pid_is_not_taken_for_this_runs_server(tmp_path: Path
     assert smoke_test.nobodys_children(tmp_path, me) == []
     (tmp_path / "postgres" / "postmaster.pid").write_text("not a pid\n")
     assert smoke_test.nobodys_children(tmp_path, me) == []
+
+
+# --- how long a start takes ----------------------------------------------------
+
+
+def start(name: str, to_ready: float | None, **phases: float) -> "smoke_test.Start":
+    return smoke_test.Start(name, to_ready, {"phase": "total", "phases": phases} if phases else None)
+
+
+def test_a_restart_over_its_budget_fails_the_run_and_a_first_start_does_not():
+    """A first start also creates the database; a restart is what every
+    start of the app costs."""
+    starts = [
+        start("fresh_install", 300.0, database=40.0),
+        start("restart", 95.0, queue=70.0, services=20.0),
+        start("restart_with_a_password_reset", 30.0, queue=6.0),
+    ]
+
+    (failure,) = smoke_test.slow_restarts(starts, 90)
+
+    assert "`restart` took 95s" in failure
+    assert "budget is 90s (--restart-budget)" in failure
+    assert "queue 70.0, services 20.0" in failure
+    assert smoke_test.slow_restarts(starts, 120) == []
+
+
+def test_a_start_that_never_became_ready_is_not_also_a_slow_one():
+    """It is already a failure, in its own words."""
+    assert smoke_test.slow_restarts([start("restart", None)], 90) == []
+
+
+def test_the_table_of_starts_has_every_phase_and_a_dash_for_one_that_did_not_run(capsys):
+    smoke_test.print_starts(
+        [start("fresh_install", 24.1, config=0.03, database=6.5, queue=7.0), start("restart", None)]
+    )
+    printed = capsys.readouterr().out.splitlines()
+    header, first, second = printed[-3:]
+    assert header.split() == ["start", "to", "ready", *smoke_test.PHASES]
+    assert first.split() == ["fresh", "install", "24.1", "0.0", "6.5", "-", "7.0", "-", "-", "-"]
+    assert second.split()[:2] == ["restart", "never"]
+
+
+def test_the_phases_the_table_shows_are_the_ones_the_runtime_reports():
+    sys.path.insert(0, str(DESKTOP / "runtime"))
+    timing = importlib.import_module("autogpt_desktop.timing")
+    assert smoke_test.PHASES == timing.PHASES
+
+
+class NoAliases:
+    def __init__(self, runtime: Path, data: Path) -> None:
+        pass
+
+    def remove_new(self) -> None:
+        pass
+
+
+def test_the_restart_budget_is_a_parameter(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(smoke_test, "smoke", lambda runtime, data, args, give_back=None: seen.update(vars(args)) or 0)
+    monkeypatch.setattr(smoke_test, "end_on_signals", lambda: None)
+    monkeypatch.setattr(smoke_test, "Aliases", NoAliases)
+    monkeypatch.setattr(sys, "path", list(sys.path))  # main() adds the runtime to it
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", str(DESKTOP), "--restart-budget", "35", "--data-dir", str(DESKTOP)])
+    assert smoke_test.main() == 0
+    assert seen["restart_budget"] == 35
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", str(DESKTOP), "--data-dir", str(DESKTOP)])
+    smoke_test.main()
+    assert seen["restart_budget"] == smoke_test.RESTART_BUDGET_SECONDS

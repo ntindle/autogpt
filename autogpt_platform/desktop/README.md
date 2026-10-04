@@ -61,6 +61,55 @@ than failing to start. That covers the list at the top of `servicehost.py`
 and uvicorn's part in the shared event loop; a change that stops a service
 from running at all is that service's host exiting, and the app says so.
 
+**Starting.** Three things take the time of a start, and none of them needs
+another: RabbitMQ booting, the database being created (a first start) and
+migrated, which needs PostgreSQL alone, and each service host importing the
+backend. They run side by side (`supervisor.py`). A host is started as soon
+as its environment is known; it imports its services' modules, and then
+waits for the supervisor's word, a file in `run/`, before it calls anything
+of theirs (that call takes milliseconds). So no service runs before the
+databases answer, the migrations are in, and interrupted runs are settled,
+whichever way upstream's entry points come to run their services. The
+frontend is started as soon as the migrations are in. A migration is never
+cut short: whatever else fails or is cancelled, the start waits for the
+database's side to end before it stops anything. But a side that has failed
+is not followed by new work on the other: when the broker does not start,
+no database is created or migrated for a start that is already lost, and
+the error is shown when what was running has ended.
+
+Whether a server is up yet is asked four times a second, of all of them at
+once, and with a plain connection before any client is pointed at it:
+Windows answers a connection to a closed port only after retrying it for two
+seconds. RabbitMQ's VM is started as the node RabbitMQ would make of it,
+which lets it skip its own search for a port mapper (a second Erlang VM that
+exits at once); a version that does not boot that way is started again the
+plain way, and a test names the version this was seen with.
+
+The runtime says how long each part took, as `timing` events to the shell
+and in `logs/runtime.log`, and in one line when it is ready:
+
+```
+started in 22 s (config 0.0, database 0.3, cache 2.3, queue 6.5, migrations 0.7, services 21.8, frontend 1.9)
+```
+
+A phase runs from its work being started to its result being seen, and
+phases overlap, so they do not add up. Each server is asked by a thread that
+does nothing else, so a phase is that server's own time: `frontend` is from
+its launch to its first answer, not to when the start got round to asking.
+Measured on Windows x64 (24 cores, 6 GB of memory free), three times each:
+
+| | to `ready`, seconds |
+| --- | --- |
+| A first start (the database is created) | 23.8, 23.5, 24.1 |
+| A later start | 22.6, 22.5, 22.5 |
+
+What is left is the backend's own: a host imports 7,500 modules, which takes
+13 seconds with three of them at it, and its services answer 8 seconds after
+they are started. The smoke test prints the table for every start and holds
+a restart to a budget (see [Building](#building)). On Linux, a machine
+without OpenSSL 3 is told so in the first second of a start, before a
+database is created.
+
 **Ready.** The window opens when what it talks to answers: the REST and
 websocket servers, database-manager behind them, and the frontend. The other
 five services are waited for as well, each on its own port, but where they
@@ -143,7 +192,8 @@ app writes goes to the data directory:
   for the platform it detects into its own package. It is told to use the
   two engines the bundle carries and touches nothing else
   (`runtime/autogpt_desktop/migrations.py`).
-- The interpreter runs with `-B`, on bytecode the build compiled.
+- The interpreter runs with `-B`, on bytecode the build compiled: beside
+  each module, or inside the archives of `site-zip/` (see [Size](#size)).
 - The backend's optional file logging (`ENABLE_FILE_LOGGING` in
   `settings.env`) goes to `logs/backend` in the data directory.
 
@@ -165,8 +215,9 @@ that nobody else may change; all three facts are read from one open handle,
 which also keeps the folder from being renamed while the junction is made.
 RabbitMQ and Erlang are run, and read their configuration and cookie,
 through the junctions, so another user of the machine must not be able to
-point one elsewhere. Junctions whose folder is gone are removed at the next
-start.
+point one elsewhere. Junctions, and on macOS and Linux symlinks, whose
+folder is gone (a data directory that was moved, an app that was run from a
+disk image) are removed at the next start.
 
 **PostgreSQL on Windows** is started through `pg_ctl start` for every user.
 `postgres.exe` refuses to run for an account with administrative rights (an
@@ -439,6 +490,95 @@ and the URL is `http://127.0.0.1:<public>/auth/integrations/oauth_callback`.
 MCP servers that use OAuth are sent to `/auth/integrations/mcp_callback` on
 the same address; they register it themselves.
 
+## Size
+
+Installing costs by the file as much as by the byte: the Windows installer
+writes every file twice and the virus scanner reads each one, and an update
+moves the old version away first. The build therefore leaves out what the
+app never loads and packs what it can into a few files, and its last step
+refuses a bundle that is over budget:
+
+| | Budget (`build_runtime.py`, `seal`) | Windows x64 bundle |
+| --- | --- | --- |
+| Files | 23,000 | 22,530 |
+| Longest path inside the bundle | 130 characters | 124 |
+| Size | 1.6 GB | 1.51 GB |
+
+The Windows installer made from it is 555 MB.
+
+The macOS and Linux bundles keep the standard library as files and have not
+been measured; their budgets are 30,000 files and 2.3 GB until a build has
+printed their numbers. The path budget leaves room for a Windows user
+name of about 70 characters: a path over 260 cannot be installed. Every
+build prints the files and megabytes of each directory of the bundle and of
+the largest packages in `site/`, so that a budget that breaks is explained
+by the same table in the log of the last build that passed.
+
+**Left out** (`build/slim.py`, `build/backend_tests.py`,
+`build/lock_export.py`):
+
+- The backend's own tests, 853 modules: a module named like a test that no
+  module outside the tests imports. The few that are imported
+  (`backend/util/test.py`, `blocks/exa/_test.py`) stay.
+- Poetry and flake8, which the backend lists as dependencies and never
+  imports, with the 32 packages only they need, and the `pip` that came with
+  the interpreter. setuptools and pytest stay: `aioclamd` imports
+  `pkg_resources`, and backend modules that are not tests import pytest.
+- The `tests` directories of third-party packages, unless code outside one
+  imports it; typing stubs, C sources and link libraries.
+- The descriptions of every Google API but the ones the backend builds a
+  client for (five of six hundred; a call that does not name its API in so
+  many words stops the build).
+- Tcl/Tk and the modules built on it, IDLE, pywin32's editor and examples.
+- RabbitMQ's plugins other than the server and what its own `.app` files
+  say it starts (25 of 80), and its command-line tools other than
+  `rabbitmqctl`; Erlang's documentation, headers and debug builds;
+  PostgreSQL's headers.
+
+**Zipped** (`build/site_zip.py`): third-party packages that are nothing but
+Python source go into the 32 archives of `site-zip/`, beside `site/` and
+after it on the interpreter's path, each module with its bytecode (the build
+stops on an archive that has a module without it). A package goes in whole
+or not at all. Anything with a compiled extension or a data file stays in
+`site/`, as do setuptools, `pkg_resources`, Prisma's client, the Claude Agent
+SDK, pytest and all of pywin32. So does a package with a module that names
+its own file (`__file__`): it may open what is beside it by path, as
+firecrawl does for its version. Two lists in that file are the exceptions,
+each entry with what was read: eleven packages whose other files are read
+through the import system, or by nothing, with those files named, and ten
+whose uses of `__file__` open nothing. A version of one of them that has
+another file, or names its file in another module, stops the build. Every
+`*.dist-info` stays a directory. On Windows the standard library is
+`python313.zip` beside `python313.dll`. The backend itself is never zipped:
+it finds blocks, templates and documents by walking its own directories.
+
+A module from an archive differs from a file in one way that is left:
+its `__file__` ends in `.pyc`. Its code names the source's place in the
+archive (`...\site-zip\15.zip\openai\_client.py`), in tracebacks and to
+packages that tell their own frames from a caller's by file name, because
+the line that puts the archives on the interpreter's path also renames code
+as it is loaded from one. That leans on two private names of CPython; where
+they are gone the app starts all the same, and the build's `verify` step
+says so.
+
+The archives are many, and a package's archive is chosen by its name alone,
+for the sake of updates. An update downloads the parts of the installer that
+changed, and the installer compresses each file of the bundle by itself: a
+package that grows by one line moves everything behind it in its archive,
+and that archive's remainder is downloaded again. Measured on the installer:
+in one archive of everything that is 16 MB; with 32 it is between 0.3 and
+4 MB, and half a megabyte for a change to the shell or to a backend module.
+
+**Checked** (`build/bundle_gate.py`, the `verify` step, with the bundle's
+own interpreter): every backend module imports; every block loads; a time
+zone, the certificate bundle, a distribution's version and `aioclamd` are
+still reached; code from an archive names its file; and every module of
+every zipped package imports from the zip exactly as it did from files, in
+the environment a service has, compared with a record taken before zipping
+(by the kind of error and, for a failed import, the module that was
+missing). A zipped package that does not import at all fails the step: none
+of its modules would have been compared.
+
 ## Updates
 
 Releases are GitHub Releases of
@@ -703,9 +843,11 @@ names a version; the other settings are at the top of
 `build_runtime.py` is a list of independent steps; `--only frontend,assets`
 re-runs some of them. The frontend must be built on the OS it will run on.
 After a change to `backend/poetry.lock` or to the backend, on a bundle that
-is already assembled: `--only deps,backend,prisma,assets,prune,relocate,compile,seal`
-(`deps` moves the packages back to where `uv` installs them, so `relocate`
-has to follow it).
+is already assembled:
+`--only deps,backend,prisma,assets,prune,relocate,compile,zip,verify,seal`
+(`deps` unpacks `site-zip/` and moves the packages back to where `uv` installs
+them, so the steps after it have to follow it). `prune`, `zip` and `verify`
+are what [Size](#size) describes.
 
 The backend is copied into the bundle and then changed there, never in the
 repository: `build/backend_patches.py` replaces a few exact pieces of its
@@ -714,8 +856,10 @@ upstream has changed one of them.
 The last step, `seal`, removes what a run from the bundle may have left in
 it and refuses a bundle that would write into itself or fetch anything when
 installed, whose `claude-agent-sdk` is not the locked one, whose Claude Code
-CLI is not the version that SDK names, or whose backend lacks the build-time
-patches; run it again before packaging a bundle that has been run from.
+CLI is not the version that SDK names, whose backend lacks the build-time
+patches, that still holds what an older build left in it, or that is over
+one of its budgets ([Size](#size)); run it again before packaging a bundle
+that has been run from.
 `build/smoke_test.py` boots an assembled bundle (with the machine's Claude
 Code sign-in turned off, so that every machine runs the same three service
 hosts), probes it and checks that
@@ -724,7 +868,11 @@ stopping it leaves no process behind and nothing in the bundle changed
 modification time). It
 starts the bundle three times on one data directory to prove the owner
 account end to end (first sign-up is an admin; registration is closed after
-a restart; a password reset takes effect); `--quick` stops after the first:
+a restart; a password reset takes effect); `--quick` stops after the first.
+It prints how long each start took, phase by phase, and fails when a restart
+takes more than `--restart-budget` seconds to become ready (120 by default,
+five times what it takes on a quiet machine, for the machines CI runs on; on
+a quiet one, `--restart-budget 35`):
 
 ```bash
 build/runtime/python/bin/python3 build/smoke_test.py build/runtime   # python\python.exe on Windows
@@ -797,6 +945,13 @@ skipped until `npm install` has been run.
 The proxy tests cover what nginx did for the appliance: route mapping,
 unbuffered event streams, websockets, redirect rewriting.
 
+`test_start.py` holds how a start is laid out in time, with stand-ins: what
+runs beside what, that a migration is never cut short, what a host does
+while it waits. `test_bundle_size.py` holds what the build leaves out and
+zips: each rule against a small made-up tree, each list the rules lean on
+against the backend's own source and lock, and one zip made and imported
+from.
+
 ## Running without the shell
 
 The runtime is usable on its own, for example on a headless Linux box:
@@ -813,8 +968,8 @@ It prints one JSON object per line (`progress`, `ready` with the URL,
 - About 3 GB of RAM in use when idle (see [Memory](#memory)): three Python
   processes at roughly 850 MB each, because each one imports the whole
   backend, and a fourth (about 700 MB more) while AutoPilot runs on the
-  Claude Code sign-in. It was measured on Windows; macOS and Linux have yet
-  to be.
+  Claude Code sign-in. Measured idle, without the sign-in: 2.9 GB on Windows,
+  3.1 GB on macOS, 3.0 GB on Linux.
 - AutoPilot's sandboxed shell tool relies on bubblewrap and is unavailable
   outside Linux.
 - AutoPilot on a Claude Code sign-in has been run on Windows only, and there
@@ -828,16 +983,17 @@ It prints one JSON object per line (`progress`, `ready` with the URL,
   Signing, notarization, the release workflow and in-app updates are written
   and tested as far as they can be without a certificate and a release;
   none of them has been through a real release yet.
-- On Linux only the runtime inside the packages has been run; the window
-  itself has not been opened on a Linux desktop yet.
 - An update, like installing a newer build over an old one by hand, keeps
   the data directory and applies database migrations on the next start.
   There is no way back to an older version once it has: older code does not
   know the newer database.
-- An update is the whole installer again (700 to 900 MB); only the parts of
-  it that changed are downloaded where the old installer is still cached.
-- The Windows installer takes about ten minutes with Defender's real-time
-  scanning on: the bundle is 57,000 files, a third of them bytecode.
+- An update is the installer again (555 MB on Windows). Where the installer
+  the app was installed from is still in the updater's cache, only the parts
+  that changed are downloaded (see [Size](#size)); otherwise all of it.
+- How long the Windows installer takes with Defender's real-time scanning
+  on has not been measured for this bundle (22,500 files) on a clean
+  machine. The installed-app tests record it, with the first start and the
+  upgrade, in `e2e/test-results/durations.md`.
 - Quitting does not wait for an agent run in flight, and does not ask. The
   run is interrupted and picked up again at the next start if it began less
   than 24 hours ago (the interrupted step runs again); an older one is marked
@@ -846,8 +1002,3 @@ It prints one JSON object per line (`progress`, `ready` with the URL,
 - ImageMagick and a browser for AutoPilot's browsing tool are not bundled;
   the tools that need them fail without them.
 - The Memory settings page talks to FalkorDB, which is not there.
-- Running it as Administrator on Windows has not been tried on a real
-  machine. PostgreSQL is started in the way that works for such an account
-  (see above), from an ordinary account so far.
-- A Windows user name longer than 20 characters can push bundled files past
-  the 260-character path limit.

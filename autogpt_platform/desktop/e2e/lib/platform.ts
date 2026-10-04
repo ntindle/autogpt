@@ -48,9 +48,17 @@ class WindowsInstall implements Platform {
   async install(artifact: string): Promise<Notes> {
     // /S installs without starting the app afterwards. /D must come last.
     const args = installDirOverride ? ["/S", `/D=${this.dir}`] : ["/S"];
-    const started = Date.now();
-    await run(artifact, args, { timeoutMs: INSTALL_TIMEOUT_MS });
-    return { "install seconds": String(Math.round((Date.now() - started) / 1000)) };
+    // Over an install that is there, from inside it: an update starts the
+    // installer from the running app, whose working directory is the install
+    // directory when it was started from its shortcut. Windows will not
+    // rename a directory a program is standing in, which is how the old
+    // version is moved away (resources/installer.nsh). Started from anywhere
+    // else, the upgrade measured here would be one no user gets.
+    const cwd = fs.existsSync(this.dir) ? this.dir : undefined;
+    await run(artifact, args, { timeoutMs: INSTALL_TIMEOUT_MS, cwd });
+    const leftover = `${this.dir}.old-install`;
+    if (fs.existsSync(leftover)) throw new Error(`the installer left the old version behind in ${leftover}`);
+    return cwd ? { "upgrade started from": "the install directory, as an update starts it" } : {};
   }
 
   isInstalled(): boolean {
@@ -303,6 +311,8 @@ interface RunOptions {
   timeoutMs?: number;
   /** Throw on a non-zero exit code (the default). */
   check?: boolean;
+  /** The working directory; the test runner's when not given. */
+  cwd?: string;
 }
 
 interface RunResult {
@@ -312,9 +322,9 @@ interface RunResult {
 
 /** Run a tool to completion without blocking the test runner's event loop. */
 export function run(command: string, args: string[], options: RunOptions = {}): Promise<RunResult> {
-  const { timeoutMs = TOOL_TIMEOUT_MS, check = true } = options;
+  const { timeoutMs = TOOL_TIMEOUT_MS, check = true, cwd } = options;
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true, cwd });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
     child.stderr.on("data", (chunk) => (output += chunk));
