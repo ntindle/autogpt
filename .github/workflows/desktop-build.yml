@@ -1151,6 +1151,18 @@ jobs:
           AUTOGPT_E2E_FIREWALL: ${{ runner.os == 'Windows' && '1' || '0' }}
         run: npx playwright test
 
+      # The tests time the install, each start and the upgrade. On the run's
+      # summary page, so that a slower installer or start is seen without
+      # opening a log.
+      - name: How long installing and starting took
+        if: always()
+        run: |
+          if [ -f test-results/durations.md ]; then
+            { echo "### ${{ matrix.name }}"; cat test-results/durations.md; } | tee -a "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "No durations were recorded."
+          fi
+
       - name: Memory after the tests
         if: always() && runner.os == 'macOS'
         run: vm_stat
