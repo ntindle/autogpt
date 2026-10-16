@@ -1,3 +1,4 @@
+import { useOrgTeamStore } from "@/services/org-team/store";
 import { renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +22,7 @@ vi.mock("@/app/api/__generated__/endpoints/integrations/integrations", () => ({
   getGetV1ListCredentialsQueryKey: vi.fn(() => ["credentials"]),
 }));
 
+const personalRequest = { headers: { "X-Org-Id": "", "X-Team-Id": "" } };
 const toastMock = vi.fn();
 vi.mock("@/components/molecules/Toast/use-toast", () => ({
   toast: (args: unknown) => toastMock(args),
@@ -440,24 +442,37 @@ describe("useOAuthConnect — login request shape", () => {
 
   it("sends no query at all for a provider-level connect", async () => {
     // The four existing callers pass no scopes; they must be unaffected.
-    expect(await connectWith({})).toEqual(["github", undefined]);
+    expect(await connectWith({})).toEqual([
+      "github",
+      undefined,
+      personalRequest,
+    ]);
   });
 
   it("omits the query for an empty scope list", async () => {
-    expect(await connectWith({ scopes: [] })).toEqual(["github", undefined]);
+    expect(await connectWith({ scopes: [] })).toEqual([
+      "github",
+      undefined,
+      personalRequest,
+    ]);
   });
 
   it("joins scopes with commas, as the endpoint parses them", async () => {
     expect(await connectWith({ scopes: ["repo", "read:org"] })).toEqual([
       "github",
       { scopes: "repo,read:org" },
+      personalRequest,
     ]);
   });
 
   it("carries the upgrade target alongside the scopes", async () => {
     expect(
       await connectWith({ scopes: ["repo"], credentialID: "cred-old" }),
-    ).toEqual(["github", { scopes: "repo", credential_id: "cred-old" }]);
+    ).toEqual([
+      "github",
+      { scopes: "repo", credential_id: "cred-old" },
+      personalRequest,
+    ]);
   });
 
   it("does not retry a 404 that is not about the upgrade target", async () => {
@@ -518,8 +533,78 @@ describe("useOAuthConnect — login request shape", () => {
 
     // A stale id must degrade to a fresh grant, not a dead Connect button.
     expect(vi.mocked(getV1InitiateOauthFlow).mock.calls).toEqual([
-      ["github", { scopes: "repo", credential_id: "deleted-in-another-tab" }],
-      ["github", { scopes: "repo" }],
+      [
+        "github",
+        { scopes: "repo", credential_id: "deleted-in-another-tab" },
+        personalRequest,
+      ],
+      ["github", { scopes: "repo" }, personalRequest],
     ]);
   });
 });
+
+it.each([false, true])(
+  "snapshots org for stale-ID retry and exchange (explicit=%s)",
+  async (explicit) => {
+    vi.resetAllMocks();
+    useOrgTeamStore.setState({
+      activeOrgID: explicit ? "org-b" : "org-a",
+      activeTeamID: null,
+    });
+    const headers = new Headers({ "x-org-id": "org-a", "x-team-id": "" });
+    const { getV1InitiateOauthFlow, postV1ExchangeOauthCodeForTokens } =
+      await import(
+        "@/app/api/__generated__/endpoints/integrations/integrations"
+      );
+    await setupSuccessfulPopup();
+    vi.mocked(getV1InitiateOauthFlow)
+      .mockImplementationOnce(async () => {
+        useOrgTeamStore.setState({ activeOrgID: "org-c" });
+        headers.set("x-org-id", "org-c");
+        throw makeApiError(404, { detail: "Credential to upgrade not found" });
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        data: {
+          login_url: "https://example.test/oauth",
+          state_token: "state-token",
+        },
+        headers: new Headers(),
+      });
+    vi.mocked(postV1ExchangeOauthCodeForTokens).mockResolvedValue({
+      status: 200,
+      data: {
+        id: "cred-a",
+        provider: "github",
+        type: "oauth2",
+        title: null,
+        scopes: [],
+        username: null,
+      },
+      headers: new Headers(),
+    });
+    const { result } = renderHook(() =>
+      useOAuthConnect({
+        provider: "github",
+        credentialID: "stale",
+        onSuccess: vi.fn(),
+        ...(explicit ? { request: { headers } } : {}),
+      }),
+    );
+    await result.current.connect();
+    expect(vi.mocked(getV1InitiateOauthFlow).mock.calls).toHaveLength(2);
+    expect(vi.mocked(postV1ExchangeOauthCodeForTokens).mock.calls).toHaveLength(
+      1,
+    );
+    for (const call of [
+      ...vi.mocked(getV1InitiateOauthFlow).mock.calls,
+      ...vi.mocked(postV1ExchangeOauthCodeForTokens).mock.calls,
+    ]) {
+      expect(call[2]?.headers).toEqual({
+        "X-Org-Id": "org-a",
+        "X-Team-Id": "",
+      });
+    }
+    useOrgTeamStore.setState({ activeOrgID: null });
+  },
+);

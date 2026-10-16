@@ -1,10 +1,15 @@
+import { useCopilotTenantScope } from "../../CopilotTenantScopeContext";
 import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import { useGetV1ListCredentials } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import { useListExpertCredentials } from "@/services/experts/scoped-queries";
 import { connectedIntegrationsFromCredentials } from "./helpers";
 
 export function useConnectedIntegrations(expertId?: string | null) {
-  const credentialsScope = useOrgConnectionScope("credentials");
+  const tenantScope = useCopilotTenantScope();
+  const credentialsScope = useOrgConnectionScope(
+    "credentials",
+    tenantScope.organizationId,
+  );
   const credentials = useGetV1ListCredentials({
     request: credentialsScope.request,
     query: {
@@ -13,12 +18,18 @@ export function useConnectedIntegrations(expertId?: string | null) {
       select: (response) => (response.status === 200 ? response.data : []),
     },
   });
-  const grants = useListExpertCredentials(expertId ?? "", {
-    query: {
-      enabled: Boolean(expertId),
-      select: (response) => (response.status === 200 ? response.data : []),
+  const grants = useListExpertCredentials(
+    expertId ?? "",
+    {
+      request: credentialsScope.request,
+      query: {
+        enabled: Boolean(expertId),
+        select: (response) => (response.status === 200 ? response.data : []),
+      },
     },
-  });
+    undefined,
+    { organizationId: tenantScope.organizationId, teamId: tenantScope.teamId },
+  );
   if (expertId) {
     if (grants.isError) return [];
     return connectedIntegrationsFromCredentials(
