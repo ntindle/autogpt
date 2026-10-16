@@ -1,5 +1,6 @@
 import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
+  getGetV2ListSessionsQueryKey,
   useGetV2ListChatTransports,
   useGetV2ListSessions,
 } from "@/app/api/__generated__/endpoints/chat/chat";
@@ -16,6 +17,7 @@ import {
 import { latestExpertSessionParams } from "./expertSessionQuery";
 
 interface Args {
+  organizationId?: string | null;
   userId: string | null;
   expertId: string | null;
   kickoff: boolean;
@@ -33,6 +35,7 @@ interface Args {
 }
 
 export function useExpertKickoff({
+  organizationId,
   userId,
   expertId,
   kickoff,
@@ -61,10 +64,16 @@ export function useExpertKickoff({
     !!expertId &&
     getKickoffStatus(userId, expertId) === "idle";
 
+  const transportsScope = useOrgConnectionScope("transports", organizationId);
   const sessionsQuery = useGetV2ListSessions(
     latestExpertSessionParams(expertId),
     {
+      request: transportsScope.request,
       query: {
+        queryKey: [
+          ...getGetV2ListSessionsQueryKey(latestExpertSessionParams(expertId)),
+          transportsScope.request.headers,
+        ],
         enabled: wantsSession,
         refetchOnWindowFocus: false,
         refetchInterval:
@@ -77,7 +86,6 @@ export function useExpertKickoff({
       },
     },
   );
-  const transportsScope = useOrgConnectionScope("transports");
   const transportsQuery = useGetV2ListChatTransports({
     request: transportsScope.request,
     query: { queryKey: transportsScope.queryKey, enabled: wantsCreatePath },

@@ -5,6 +5,7 @@ import { ProviderLimitDialog } from "./components/ProviderLimitDialog/ProviderLi
 import { RateLimitGate } from "./components/RateLimitResetDialog/RateLimitGate";
 import { useCopilotPage } from "./useCopilotPage";
 import { ConversationOrganization } from "./components/ConversationOrganization/ConversationOrganization";
+import { CopilotTenantScopeProvider } from "./CopilotTenantScopeContext";
 import { FlaskConicalIcon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
 import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
@@ -98,7 +99,10 @@ function ChatHostBody({
   }
 
   return (
-    <>
+    <CopilotTenantScopeProvider
+      organizationId={sessionOrganizationId}
+      teamId={sessionTeamId}
+    >
       <ConversationOrganization organizationId={sessionOrganizationId} />
       {/* Only shown when the CURRENT session is confirmed dry_run via its
           immutable metadata. Never based on the global isDryRun preference
@@ -174,6 +178,6 @@ function ChatHostBody({
         sessionId={sessionId}
         onDismiss={dismissProviderLimit}
       />
-    </>
+    </CopilotTenantScopeProvider>
   );
 }
