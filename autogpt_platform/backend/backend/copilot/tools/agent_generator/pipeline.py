@@ -10,6 +10,7 @@ from backend.copilot.tools.models import (
     ErrorResponse,
     ToolResponseBase,
 )
+from backend.util.tenancy_urls import builder_path, library_agent_path
 
 from .blocks import get_blocks_as_dicts
 from .core import get_library_agents_by_ids, save_agent_to_library
@@ -24,6 +25,8 @@ MAX_AGENT_JSON_SIZE = 1_000_000  # 1 MB
 async def fetch_library_agents(
     user_id: str | None,
     library_agent_ids: list[str],
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """Fetch library agents by IDs for AgentExecutorBlock validation.
 
@@ -35,6 +38,8 @@ async def fetch_library_agents(
         agents = await get_library_agents_by_ids(
             user_id=user_id,
             agent_ids=library_agent_ids,
+            organization_id=organization_id,
+            team_id=team_id,
         )
         return cast(list[dict[str, Any]], agents)
     except Exception as e:
@@ -55,6 +60,8 @@ async def fix_validate_and_save(
     library_agents: list[dict[str, Any]] | None = None,
     folder_id: str | None = None,
     is_hidden: bool = False,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> ToolResponseBase:
     """Shared pipeline: auto-fix → validate → preview or save.
 
@@ -184,6 +191,8 @@ async def fix_validate_and_save(
             is_update=is_update,
             folder_id=folder_id,
             is_hidden=is_hidden,
+            organization_id=organization_id,
+            team_id=team_id,
         )
         return AgentSavedResponse(
             message=(
@@ -194,8 +203,17 @@ async def fix_validate_and_save(
             agent_name=created_graph.name,
             graph_version=created_graph.version,
             library_agent_id=library_agent.id,
-            library_agent_link=f"/library/agents/{library_agent.id}",
-            agent_page_link=f"/build?flowID={created_graph.id}",
+            library_agent_link=library_agent_path(
+                library_agent.id,
+                library_agent.organization_id,
+                library_agent.team_id,
+            ),
+            agent_page_link=builder_path(
+                created_graph.id,
+                created_graph.version,
+                library_agent.organization_id,
+                library_agent.team_id,
+            ),
             session_id=session_id,
         )
     except Exception as e:

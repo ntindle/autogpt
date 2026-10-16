@@ -2,7 +2,8 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
 from uuid import uuid4
@@ -13,6 +14,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.api.features.experts import experts_db
+from backend.api.live_auth import requires_live_resource_permission
 from backend.blocks.desktop._api import DesktopStream
 from backend.copilot import active_turns
 from backend.copilot import service as chat_service
@@ -47,6 +49,7 @@ from backend.copilot.model import (
     CHAT_STATUS_IDLE,
     CHAT_STATUS_RUNNING,
     AutopilotMode,
+    ChatSession,
     ChatSessionInfo,
     ChatSessionMetadata,
     create_chat_session,
@@ -167,7 +170,19 @@ from backend.copilot.transports import (
 from backend.copilot.trial_reads import sharing_trial_reads
 from backend.copilot.turn_tracing import MODEL_OUTPUT_CHUNKS
 from backend.data.credit import UsageTransactionMetadata, get_user_credit_model
+from backend.data.db_accessors import (
+    LiveResourceAccessRevoked,
+    LiveResourceLeaseGuard,
+    live_resource_lease,
+    live_resource_scopes_lease,
+    require_exact_chat_session_scope,
+)
 from backend.data.redis_client import get_redis_async
+from backend.data.tenancy import (
+    ResourceAccess,
+    get_user_team_ids,
+    has_live_resource_access,
+)
 from backend.data.understanding import get_business_understanding
 from backend.data.workspace import build_files_block
 from backend.data.workspace_folder import resolve_attachable_workspace_folders
@@ -253,9 +268,25 @@ async def enforce_platform_allowance(user_id: str) -> None:
         ) from e
 
 
+_view_resource_context = auth.requires_resource_permission(
+    auth.OrgAction.VIEW_RESOURCES,
+    auth.TeamAction.VIEW_AGENTS,
+)
+_create_resource_context = requires_live_resource_permission(
+    auth.OrgAction.CREATE_RESOURCES,
+    auth.TeamAction.CREATE_AGENTS,
+)
+_execute_resource_context = auth.requires_resource_permission(
+    auth.OrgAction.EXECUTE_RESOURCES,
+    auth.TeamAction.EXECUTE_AGENTS,
+)
+
+
 async def _validate_and_get_session(
     session_id: str,
-    user_id: str | None,
+    user_id: str,
+    ctx: auth.RequestContext | None = None,
+    access: ResourceAccess = "view",
 ) -> ChatSessionInfo:
     """Validate session exists and belongs to user.
 
@@ -266,6 +297,18 @@ async def _validate_and_get_session(
     session = await get_chat_session_metadata(session_id, user_id)
     if not session:
         raise NotFoundError(f"Session {session_id} not found.")
+    if ctx is not None:
+        if session.organization_id != ctx.org_id:
+            raise NotFoundError(f"Session {session_id} not found.")
+        if ctx.team_id is not None and session.team_id != ctx.team_id:
+            raise NotFoundError(f"Session {session_id} not found.")
+        if not await has_live_resource_access(
+            user_id,
+            ctx.org_id,
+            session.team_id,
+            access,
+        ):
+            raise NotFoundError(f"Session {session_id} not found.")
     return session
 
 
@@ -289,10 +332,99 @@ async def _validate_session_expert_writable_by_user(
 async def _validate_and_get_writable_session(
     session_id: str,
     user_id: str,
+    ctx: auth.RequestContext | None = None,
 ) -> ChatSessionInfo:
-    session = await _validate_and_get_session(session_id, user_id)
+    session = await _validate_and_get_session(
+        session_id,
+        user_id,
+        ctx,
+        access="execute",
+    )
     await _validate_session_expert_writable_by_user(session, user_id)
     return session
+
+
+@asynccontextmanager
+async def _live_chat_session_action(
+    session: ChatSessionInfo,
+    user_id: str,
+    access: Literal["view", "create", "execute", "delete"],
+) -> AsyncIterator[LiveResourceLeaseGuard]:
+    try:
+        async with live_resource_lease(
+            user_id,
+            session.organization_id,
+            session.team_id,
+            access,
+        ) as allowed:
+            if not allowed:
+                raise LiveResourceAccessRevoked("workspace_access_revoked")
+            await require_exact_chat_session_scope(
+                session.session_id,
+                user_id,
+                session.organization_id,
+                session.team_id,
+            )
+            yield allowed
+    except LiveResourceAccessRevoked as exc:
+        raise HTTPException(status_code=404, detail="Session not found") from exc
+
+
+async def _chat_session_scope_is_live(
+    session: ChatSessionInfo,
+    user_id: str,
+    access: Literal["view", "create", "execute", "delete"] = "view",
+) -> bool:
+    try:
+        async with live_resource_lease(
+            user_id,
+            session.organization_id,
+            session.team_id,
+            access,
+        ) as allowed:
+            if not allowed:
+                return False
+            await require_exact_chat_session_scope(
+                session.session_id,
+                user_id,
+                session.organization_id,
+                session.team_id,
+            )
+            return True
+    except (LiveResourceAccessRevoked, NotFoundError):
+        return False
+
+
+@asynccontextmanager
+async def _live_chat_session_delivery(
+    session: ChatSessionInfo,
+    user_id: str,
+) -> AsyncIterator[None]:
+    async with _live_chat_session_action(session, user_id, "view") as guard:
+        delivery_task = asyncio.current_task()
+        assert delivery_task is not None
+
+        async def cancel_on_lease_loss() -> None:
+            while True:
+                await asyncio.sleep(0.1)
+                try:
+                    await guard.validate()
+                except Exception:
+                    delivery_task.cancel("chat_session_lease_lost")
+                    return
+
+        loss_monitor = asyncio.create_task(cancel_on_lease_loss())
+        timeout = asyncio.get_running_loop().call_later(
+            5.0,
+            delivery_task.cancel,
+            "chat_stream_delivery_timeout",
+        )
+        try:
+            yield
+        finally:
+            timeout.cancel()
+            loss_monitor.cancel()
+            await asyncio.gather(loss_monitor, return_exceptions=True)
 
 
 # Minimum age before the orphan-reset paths (``get_session`` and
@@ -494,6 +626,8 @@ class CreateSessionResponse(BaseModel):
     user_id: str | None
     metadata: ChatSessionMetadata = ChatSessionMetadata()
     expert_id: str | None = None
+    organization_id: str | None = None
+    team_id: str | None = None
 
 
 class ActiveStreamInfo(BaseModel):
@@ -526,6 +660,8 @@ class SessionDetailResponse(BaseModel):
     total_completion_tokens: int = 0
     metadata: ChatSessionMetadata = ChatSessionMetadata()
     expert_id: str | None = None
+    organization_id: str | None = None
+    team_id: str | None = None
 
 
 class SessionSummaryResponse(BaseModel):
@@ -540,6 +676,8 @@ class SessionSummaryResponse(BaseModel):
     source_platform: str | None = None
     is_pinned: bool = False
     expert_id: str | None = None
+    organization_id: str | None = None
+    team_id: str | None = None
 
 
 class ListSessionsResponse(BaseModel):
@@ -585,7 +723,7 @@ class UpdateSessionPinnedRequest(BaseModel):
 )
 async def list_sessions(
     user_id: Annotated[str, Security(auth.get_user_id)],
-    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     expert_id: str | None = Query(default=None, min_length=1, max_length=128),
@@ -613,57 +751,70 @@ async def list_sessions(
     Returns:
         ListSessionsResponse: List of session summaries and total count.
     """
-    sessions, total_count = await get_user_sessions(
-        user_id,
-        limit,
-        offset,
-        organization_id=ctx.org_id,
-        expert_id=expert_id,
-        pinned_first=pinned_first,
+    visible_team_ids = (
+        None
+        if ctx.team_id is not None
+        else await get_user_team_ids(user_id, ctx.org_id)
     )
+    scopes: list[tuple[str, str | None]] = [(ctx.org_id, ctx.team_id)]
+    if ctx.team_id is None:
+        scopes.extend(
+            (ctx.org_id, team_id) for team_id in sorted(set(visible_team_ids or []))
+        )
+    async with live_resource_scopes_lease(user_id, scopes, "view") as authorized:
+        if set(authorized) != set(scopes):
+            raise HTTPException(status_code=404, detail="Session not found")
+        sessions, total_count = await get_user_sessions(
+            user_id,
+            limit,
+            offset,
+            organization_id=ctx.org_id,
+            team_id=ctx.team_id,
+            team_ids=visible_team_ids,
+            expert_id=expert_id,
+            pinned_first=pinned_first,
+        )
 
-    # Batch-check Redis for active stream status on each session
-    processing_set: set[str] = set()
-    if sessions:
-        try:
-            redis = await get_redis_async()
-            pipe = redis.pipeline(transaction=False)
-            for session in sessions:
-                # Use the canonical helper so the hash-tag braces match every
-                # other writer; building the key inline drops the braces and
-                # silently misses every running session on cluster mode.
-                pipe.hget(
-                    stream_registry.get_session_meta_key(session.session_id),
-                    "status",
+        processing_set: set[str] = set()
+        if sessions:
+            try:
+                redis = await get_redis_async()
+                pipe = redis.pipeline(transaction=False)
+                for session in sessions:
+                    pipe.hget(
+                        stream_registry.get_session_meta_key(session.session_id),
+                        "status",
+                    )
+                statuses = await asyncio.wait_for(pipe.execute(), timeout=5)
+                processing_set = {
+                    session.session_id
+                    for session, st in zip(sessions, statuses)
+                    if st == "running"
+                }
+            except Exception:
+                logger.warning(
+                    "Failed to fetch processing status from Redis; defaulting to empty"
                 )
-            statuses = await pipe.execute()
-            processing_set = {
-                session.session_id
-                for session, st in zip(sessions, statuses)
-                if st == "running"
-            }
-        except Exception:
-            logger.warning(
-                "Failed to fetch processing status from Redis; defaulting to empty"
-            )
 
-    return ListSessionsResponse(
-        sessions=[
-            SessionSummaryResponse(
-                id=session.session_id,
-                created_at=session.started_at.isoformat(),
-                updated_at=session.updated_at.isoformat(),
-                title=session.title,
-                chat_status=session.chat_status,
-                is_processing=session.session_id in processing_set,
-                source_platform=session.metadata.source_platform,
-                is_pinned=session.is_pinned,
-                expert_id=session.expert_id,
-            )
-            for session in sessions
-        ],
-        total=total_count,
-    )
+        return ListSessionsResponse(
+            sessions=[
+                SessionSummaryResponse(
+                    id=session.session_id,
+                    created_at=session.started_at.isoformat(),
+                    updated_at=session.updated_at.isoformat(),
+                    title=session.title,
+                    chat_status=session.chat_status,
+                    is_processing=session.session_id in processing_set,
+                    source_platform=session.metadata.source_platform,
+                    is_pinned=session.is_pinned,
+                    expert_id=session.expert_id,
+                    organization_id=session.organization_id,
+                    team_id=session.team_id,
+                )
+                for session in sessions
+            ],
+            total=total_count,
+        )
 
 
 @router.get(
@@ -850,7 +1001,7 @@ async def _resolve_new_session_llm_route(
 @router.post("/sessions")
 async def create_session(
     user_id: Annotated[str, Security(auth.get_user_id)],
-    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
+    ctx: Annotated[auth.RequestContext, _create_resource_context],
     request: CreateSessionRequest | None = None,
 ) -> CreateSessionResponse:
     """Create (or get-or-create) a chat session.
@@ -965,6 +1116,8 @@ async def create_session(
         user_id=session.user_id,
         metadata=session.metadata,
         expert_id=session.expert_id,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
     )
 
 
@@ -1047,7 +1200,7 @@ async def start_session_desktop(
 async def delete_session(
     session_id: str,
     user_id: Annotated[str, Security(auth.get_user_id)],
-    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
 ) -> Response:
     """
     Delete a chat session.
@@ -1065,7 +1218,14 @@ async def delete_session(
     Raises:
         HTTPException: 404 if session not found or not owned by user.
     """
-    deleted = await delete_chat_session(session_id, user_id, organization_id=ctx.org_id)
+    session = await _validate_and_get_session(session_id, user_id, ctx)
+    async with _live_chat_session_action(session, user_id, "view"):
+        deleted = await delete_chat_session(
+            session_id,
+            user_id,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
+        )
 
     if not deleted:
         raise HTTPException(
@@ -1096,6 +1256,7 @@ async def delete_session(
 async def disconnect_session_stream(
     session_id: str,
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
 ) -> Response:
     """Disconnect all active SSE listeners for a session.
 
@@ -1103,8 +1264,9 @@ async def disconnect_session_stream(
     backend releases XREAD listeners immediately rather than waiting for
     the 5-10 s timeout.
     """
-    await _validate_and_get_session(session_id, user_id)
-    await stream_registry.disconnect_all_listeners(session_id)
+    session = await _validate_and_get_session(session_id, user_id, ctx)
+    async with _live_chat_session_action(session, user_id, "view"):
+        await stream_registry.disconnect_all_listeners(session_id)
     return Response(status_code=204)
 
 
@@ -1250,6 +1412,7 @@ async def update_session_title_route(
     session_id: str,
     request: UpdateSessionTitleRequest,
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
 ) -> dict:
     """
     Update the title of a chat session.
@@ -1267,7 +1430,9 @@ async def update_session_title_route(
     Raises:
         HTTPException: 404 if session not found or not owned by user.
     """
-    success = await update_session_title(session_id, user_id, request.title)
+    session = await _validate_and_get_session(session_id, user_id, ctx)
+    async with _live_chat_session_action(session, user_id, "view"):
+        success = await update_session_title(session_id, user_id, request.title)
     if not success:
         raise HTTPException(
             status_code=404,
@@ -1287,6 +1452,7 @@ async def update_session_pinned_route(
     session_id: str,
     request: UpdateSessionPinnedRequest,
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
 ) -> dict:
     """
     Pin or unpin a chat session.
@@ -1305,7 +1471,9 @@ async def update_session_pinned_route(
     Raises:
         HTTPException: 404 if session not found or not owned by user.
     """
-    success = await update_session_pinned(session_id, user_id, request.is_pinned)
+    session = await _validate_and_get_session(session_id, user_id, ctx)
+    async with _live_chat_session_action(session, user_id, "view"):
+        success = await update_session_pinned(session_id, user_id, request.is_pinned)
     if not success:
         raise HTTPException(
             status_code=404,
@@ -1320,7 +1488,7 @@ async def update_session_pinned_route(
 async def get_session(
     session_id: str,
     user_id: Annotated[str, Security(auth.get_user_id)],
-    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
     limit: int = Query(default=50, ge=1, le=200),
     before_sequence: int | None = Query(default=None, ge=0),
 ) -> SessionDetailResponse:
@@ -1330,13 +1498,16 @@ async def get_session(
     Supports cursor-based pagination via ``limit`` and ``before_sequence``.
     When no pagination params are provided, returns the most recent messages.
     """
-    page = await get_chat_messages_paginated(
-        session_id,
-        limit,
-        before_sequence,
-        user_id=user_id,
-        organization_id=ctx.org_id,
-    )
+    session = await _validate_and_get_session(session_id, user_id, ctx)
+    async with _live_chat_session_action(session, user_id, "view"):
+        page = await get_chat_messages_paginated(
+            session_id,
+            limit,
+            before_sequence,
+            user_id=user_id,
+            organization_id=ctx.org_id,
+            team_id=session.team_id,
+        )
     if page is None:
         raise NotFoundError(f"Session {session_id} not found.")
 
@@ -1380,6 +1551,8 @@ async def get_session(
             total_prompt_tokens=0,
             total_completion_tokens=0,
             expert_id=page.session.expert_id,
+            organization_id=page.session.organization_id,
+            team_id=page.session.team_id,
         )
 
     total_prompt = sum(u.prompt_tokens for u in page.session.usage)
@@ -1399,6 +1572,8 @@ async def get_session(
         total_completion_tokens=total_completion,
         metadata=page.session.metadata,
         expert_id=page.session.expert_id,
+        organization_id=page.session.organization_id,
+        team_id=page.session.team_id,
     )
 
 
@@ -1645,6 +1820,7 @@ async def _clear_pending_best_effort(session_id: str) -> None:
 async def cancel_session_task(
     session_id: str,
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(_execute_resource_context)],
 ) -> CancelSessionResponse:
     """Cancel an in-flight task for a session.
 
@@ -1657,7 +1833,20 @@ async def cancel_session_task(
       to the executor via RabbitMQ FANOUT, then poll Redis until the
       task status flips out of ``running`` or a 5 s timeout is hit.
     """
-    await _validate_and_get_session(session_id, user_id)
+    session = await _validate_and_get_session(
+        session_id,
+        user_id,
+        ctx,
+        access="execute",
+    )
+    async with _live_chat_session_action(session, user_id, "execute"):
+        return await _cancel_session_task_live(session_id, user_id)
+
+
+async def _cancel_session_task_live(
+    session_id: str,
+    user_id: str,
+) -> CancelSessionResponse:
 
     # Cancelling discards any follow-ups the user queued for this turn:
     # Stop means stop.  The pending buffer only exists to feed the
@@ -1817,7 +2006,7 @@ async def stream_chat_post(
     session_id: str,
     request: StreamChatRequest,
     user_id: str = Security(auth.get_user_id),
-    ctx: auth.RequestContext = Security(auth.get_request_context),
+    ctx: auth.RequestContext = Security(_execute_resource_context),
     *,
     http_request: Request,
 ):
@@ -1854,7 +2043,7 @@ async def stream_chat_post(
         f"user={user_id}, message_len={len(request.message)}",
         extra={"json_fields": log_meta},
     )
-    session = await _validate_and_get_writable_session(session_id, user_id)
+    session = await _validate_and_get_writable_session(session_id, user_id, ctx)
     await _apply_autopilot_mode(session, user_id, request.autopilot_mode)
 
     await enforce_model_entitlement(request.model, session, user_id)
@@ -1910,15 +2099,9 @@ async def stream_chat_post(
             session_id,
         )
 
-    # The kickoff owns a server-derived id and its own replay handling.
     client_message_id = None if request.expert_kickoff else message_id
-
-    # Session-anchored tenancy: the ChatSession row is the authoritative
-    # org/team for every turn in it — a user whose active header org
-    # differs still charges/attributes turns to the session's org.
-    # Untagged legacy sessions fall back to the request context.
-    turn_org_id = session.organization_id or ctx.org_id
-    turn_team_id = session.team_id if session.organization_id else ctx.team_id
+    turn_org_id = session.organization_id
+    turn_team_id = session.team_id
 
     try:
         turn_in_flight = (
@@ -1947,6 +2130,8 @@ async def stream_chat_post(
             await queue_pending_for_http(
                 session_id=session_id,
                 user_id=user_id,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
                 message=message,
                 context=request.context,
                 file_ids=request.file_ids,
@@ -1998,9 +2183,15 @@ async def stream_chat_post(
             request.file_ids or [],
             session_id=session_id,
             expert_id=session.expert_id,
+            organization_id=turn_org_id,
+            team_id=turn_team_id,
         )
         folders = await resolve_attachable_workspace_folders(
-            user_id, request.folder_ids or [], expert_id=session.expert_id
+            user_id,
+            request.folder_ids or [],
+            expert_id=session.expert_id,
+            organization_id=turn_org_id,
+            team_id=turn_team_id,
         )
         sanitized_file_ids = [wf.id for wf in files] or None
         message += build_files_block(files, folders)
@@ -2083,6 +2274,8 @@ async def stream_chat_post(
                 user_id=user_id,
                 inflight_cap=inflight_cap,
                 session_id=session_id,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
                 message=message,
                 message_id=message_id,
                 message_metadata=message_metadata,
@@ -2106,6 +2299,9 @@ async def stream_chat_post(
                 status_code=429,
                 detail=inflight_turn_limit_message(inflight_cap),
             )
+        except LiveResourceAccessRevoked as exc:
+            await release_client_message_claim()
+            raise HTTPException(status_code=404, detail="Session not found") from exc
         except BaseException:
             # Raised inside the handler above, so the outer BaseException
             # clause never sees it.
@@ -2173,6 +2369,8 @@ async def stream_chat_post(
         first_token_yielded = False
         chunks_yielded = 0
         try:
+            if not await _chat_session_scope_is_live(session, user_id):
+                return
             # Subscribe from the position we captured before enqueuing
             # This avoids replaying old messages while catching all new ones
             subscriber_queue = await stream_registry.subscribe_to_session(
@@ -2182,7 +2380,8 @@ async def stream_chat_post(
             )
 
             if subscriber_queue is None:
-                yield StreamFinish().to_sse()
+                async with _live_chat_session_delivery(session, user_id):
+                    yield StreamFinish().to_sse()
                 return
 
             # Read from the subscriber queue and yield to SSE
@@ -2194,38 +2393,39 @@ async def stream_chat_post(
                 try:
                     entry = await asyncio.wait_for(subscriber_queue.get(), timeout=10.0)
                     _, chunk = entry
-                    chunks_yielded += 1
+                    async with _live_chat_session_delivery(session, user_id):
+                        chunks_yielded += 1
 
-                    if not first_chunk_yielded:
-                        first_chunk_yielded = True
-                        elapsed = time_module.perf_counter() - event_gen_start
-                        logger.info(
-                            f"[TIMING] FIRST CHUNK from queue at {elapsed:.2f}s, "
-                            f"type={type(chunk).__name__}",
-                            extra={
-                                "json_fields": {
-                                    **log_meta,
-                                    "chunk_type": type(chunk).__name__,
-                                    "elapsed_ms": elapsed * 1000,
-                                }
-                            },
-                        )
-                        tracing.set_timing(
-                            "copilot.stream.first_chunk_ms",
-                            (time_module.perf_counter() - stream_start_time) * 1000,
-                            span=stream_transaction,
-                        )
-                    if not first_token_yielded and isinstance(
-                        chunk, MODEL_OUTPUT_CHUNKS
-                    ):
-                        first_token_yielded = True
-                        tracing.set_timing(
-                            "copilot.stream.ttft_ms",
-                            (time_module.perf_counter() - stream_start_time) * 1000,
-                            span=stream_transaction,
-                        )
+                        if not first_chunk_yielded:
+                            first_chunk_yielded = True
+                            elapsed = time_module.perf_counter() - event_gen_start
+                            logger.info(
+                                f"[TIMING] FIRST CHUNK from queue at {elapsed:.2f}s, "
+                                f"type={type(chunk).__name__}",
+                                extra={
+                                    "json_fields": {
+                                        **log_meta,
+                                        "chunk_type": type(chunk).__name__,
+                                        "elapsed_ms": elapsed * 1000,
+                                    }
+                                },
+                            )
+                            tracing.set_timing(
+                                "copilot.stream.first_chunk_ms",
+                                (time_module.perf_counter() - stream_start_time) * 1000,
+                                span=stream_transaction,
+                            )
+                        if not first_token_yielded and isinstance(
+                            chunk, MODEL_OUTPUT_CHUNKS
+                        ):
+                            first_token_yielded = True
+                            tracing.set_timing(
+                                "copilot.stream.ttft_ms",
+                                (time_module.perf_counter() - stream_start_time) * 1000,
+                                span=stream_transaction,
+                            )
 
-                    yield stream_registry.sse_frame(entry)
+                        yield stream_registry.sse_frame(entry)
 
                     if isinstance(chunk, StreamFinish):
                         total_time = time_module.perf_counter() - event_gen_start
@@ -2243,7 +2443,8 @@ async def stream_chat_post(
                         break
 
                 except asyncio.TimeoutError:
-                    yield StreamHeartbeat().to_sse()
+                    async with _live_chat_session_delivery(session, user_id):
+                        yield StreamHeartbeat().to_sse()
 
         except GeneratorExit:
             logger.info(
@@ -2324,9 +2525,10 @@ async def queue_pending_message(
     session_id: str,
     request: QueuePendingMessageRequest,
     user_id: str = Security(auth.get_user_id),
+    ctx: auth.RequestContext = Security(_execute_resource_context),
 ):
     """Queue a follow-up message while the session has an active turn."""
-    session = await _validate_and_get_writable_session(session_id, user_id)
+    session = await _validate_and_get_writable_session(session_id, user_id, ctx)
     if session.metadata.llm_auth_provider == "codex":
         await enforce_codex_access_http(user_id)
     client_message_id = (
@@ -2358,6 +2560,8 @@ async def queue_pending_message(
     return await queue_pending_for_http(
         session_id=session_id,
         user_id=user_id,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
         message=request.message,
         context=request.context,
         file_ids=request.file_ids,
@@ -2377,6 +2581,7 @@ async def queue_pending_message(
 async def get_pending_messages(
     session_id: str,
     user_id: str = Security(auth.get_user_id),
+    ctx: auth.RequestContext = Security(_view_resource_context),
 ):
     """Peek at the pending-message buffer without consuming it.
 
@@ -2384,8 +2589,9 @@ async def get_pending_messages(
     so the frontend can restore the queued-message indicator after a page
     refresh and clear it correctly once a turn drains the buffer.
     """
-    await _validate_and_get_session(session_id, user_id)
-    pending = await peek_pending_messages(session_id)
+    session = await _validate_and_get_session(session_id, user_id, ctx)
+    async with _live_chat_session_action(session, user_id, "view"):
+        pending = await peek_pending_messages(session_id)
     return PeekPendingMessagesResponse(
         messages=[m.content for m in pending],
         count=len(pending),
@@ -2419,6 +2625,7 @@ async def resume_session_stream(
     ),
     last_chunk_id: str | None = Query(default=None, include_in_schema=False),
     user_id: str = Security(auth.get_user_id),
+    ctx: auth.RequestContext = Security(_view_resource_context),
 ):
     """
     Resume a session's stream.
@@ -2432,22 +2639,36 @@ async def resume_session_stream(
     when nothing is running: the AI SDK's parser cannot continue a block it
     did not see start.
     """
+    session = await _validate_and_get_session(session_id, user_id, ctx)
     if turn is not None:
-        try:
-            subscriber_queue = await stream_registry.subscribe_to_turn(
-                session_id, user_id, turn, after
+        async with _live_chat_session_action(session, user_id, "view"):
+            try:
+                subscriber_queue = await stream_registry.subscribe_to_turn(
+                    session_id, user_id, turn, after
+                )
+            except stream_registry.TurnStreamTrimmed as trimmed:
+                return _resume_refusal(409, "trimmed", trimmed.checkpoint)
+            except stream_registry.TurnStreamGone:
+                return _resume_refusal(410, "expired")
+            return _resume_response(
+                session_id, subscriber_queue, session, user_id, cursor=True
             )
-        except stream_registry.TurnStreamTrimmed as trimmed:
-            return _resume_refusal(409, "trimmed", trimmed.checkpoint)
-        except stream_registry.TurnStreamGone:
-            return _resume_refusal(410, "expired")
-        return _resume_response(session_id, subscriber_queue, cursor=True)
 
-    active_session, _latest_backend_id = await stream_registry.get_active_session(
-        session_id, user_id
-    )
+    async with _live_chat_session_action(session, user_id, "view"):
+        active_session, _latest_backend_id = await stream_registry.get_active_session(
+            session_id, user_id
+        )
+        subscriber_queue = (
+            await stream_registry.subscribe_to_session(
+                session_id=session_id,
+                user_id=user_id,
+                last_message_id="0-0",
+            )
+            if active_session
+            else None
+        )
 
-    if not active_session:
+    if not active_session or subscriber_queue is None:
         return Response(status_code=204)
 
     if last_chunk_id:
@@ -2456,15 +2677,9 @@ async def resume_session_stream(
             extra={"session_id": session_id, "last_chunk_id": last_chunk_id},
         )
 
-    subscriber_queue = await stream_registry.subscribe_to_session(
-        session_id=session_id,
-        user_id=user_id,
-        last_message_id="0-0",
+    return _resume_response(
+        session_id, subscriber_queue, session, user_id, cursor=False
     )
-
-    if subscriber_queue is None:
-        return Response(status_code=204)
-    return _resume_response(session_id, subscriber_queue, cursor=False)
 
 
 def _resume_refusal(
@@ -2479,6 +2694,8 @@ def _resume_refusal(
 def _resume_response(
     session_id: str,
     subscriber_queue: "asyncio.Queue[stream_registry.StreamEntry]",
+    session: ChatSession,
+    user_id: str,
     *,
     cursor: bool,
 ) -> StreamingResponse:
@@ -2489,11 +2706,14 @@ def _resume_response(
         chunk_count = 0
         first_chunk_type: str | None = None
         try:
+            if not await _chat_session_scope_is_live(session, user_id):
+                return
             while True:
                 try:
                     entry = await asyncio.wait_for(subscriber_queue.get(), timeout=10.0)
                 except asyncio.TimeoutError:
-                    yield StreamHeartbeat().to_sse()
+                    async with _live_chat_session_delivery(session, user_id):
+                        yield StreamHeartbeat().to_sse()
                     continue
                 frame_id, chunk = entry
                 if (
@@ -2510,7 +2730,8 @@ def _resume_response(
                 if not first_chunk_type:
                     first_chunk_type = str(chunk.type)
                 chunk_count += 1
-                yield stream_registry.sse_frame(entry)
+                async with _live_chat_session_delivery(session, user_id):
+                    yield stream_registry.sse_frame(entry)
 
                 if isinstance(chunk, StreamFinish):
                     break
@@ -2536,7 +2757,9 @@ def _resume_response(
                     "first_chunk_type": first_chunk_type,
                 },
             )
-            yield "data: [DONE]\n\n"
+            if not cursor:
+                async with _live_chat_session_delivery(session, user_id):
+                    yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         event_generator(),

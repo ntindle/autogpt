@@ -749,8 +749,10 @@ async def test_the_saved_skill_limit_asks_the_workspace_about_the_root(
     )
 
     assert await saved_skill_limit_reached("user-1", expert_id, "new-skill")
-    workspaces.get_workspace_file_by_path.assert_awaited_once_with("workspace-1", path)
-    room.assert_awaited_once_with("workspace-1", path, origin)
+    workspaces.get_workspace_file_by_path.assert_awaited_once_with(
+        "workspace-1", path, user_global_config=True
+    )
+    room.assert_awaited_once_with("workspace-1", path, origin, user_global_config=True)
 
 
 @pytest.mark.asyncio

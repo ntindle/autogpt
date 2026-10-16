@@ -11,6 +11,7 @@ import {
 import { getPostV2ProcessReviewActionMockHandler200 } from "@/app/api/__generated__/endpoints/executions/executions.msw";
 import { server } from "@/mocks/mock-server";
 import { useProcessReviews } from "./useProcessReviews";
+import { getTeamScopedQueryKey } from "@/components/contextual/TeamPicker/helpers";
 
 function setup() {
   const queryClient = new QueryClient({
@@ -36,6 +37,12 @@ const item = {
   approved: true,
   auto_approve_future: false,
 };
+const reviewScope = {
+  node_exec_id: item.node_exec_id,
+  graph_exec_id: "run-1",
+  organization_id: "org-1",
+  team_id: "team-1",
+};
 
 // Dual-key invalidation is what makes the home count and the thread's list
 // reconcile after either surface acts on a review; without it one of them
@@ -50,12 +57,15 @@ test("invalidates both the user-wide and the per-execution review queries", asyn
   );
   const { result, invalidatedKeys } = setup();
 
-  const run = { graph_exec_id: "run-1" };
-  await result.current.processReviews([item], [run, run]);
+  await result.current.processReviews([item], [reviewScope, reviewScope]);
 
   const keys = invalidatedKeys();
   expect(keys).toContainEqual(getGetV2GetPendingReviewsQueryKey());
-  const perExecution = getGetV2GetPendingReviewsForExecutionQueryKey("run-1");
+  const perExecution = getTeamScopedQueryKey(
+    getGetV2GetPendingReviewsForExecutionQueryKey("run-1"),
+    "org-1",
+    "team-1",
+  );
   expect(keys).toContainEqual(perExecution);
   // Deduped: the same execution id twice must not fan out twice.
   expect(
@@ -75,12 +85,22 @@ test("a chat review invalidates its session's queue, not an execution's", async 
 
   await result.current.processReviews(
     [item],
-    [{ graph_exec_id: null, session_id: "chat-1" }],
+    [
+      {
+        node_exec_id: item.node_exec_id,
+        graph_exec_id: null,
+        session_id: "chat-1",
+      },
+    ],
   );
 
   const keys = invalidatedKeys();
   expect(keys).toContainEqual(
-    getGetV2GetPendingReviewsForChatSessionQueryKey("chat-1"),
+    getTeamScopedQueryKey(
+      getGetV2GetPendingReviewsForChatSessionQueryKey("chat-1"),
+      null,
+      null,
+    ),
   );
   expect(keys).toHaveLength(2);
 });
@@ -92,7 +112,7 @@ test("still invalidates when the mutation rejects", async () => {
   const { result, invalidatedKeys } = setup();
 
   await expect(
-    result.current.processReviews([item], [{ graph_exec_id: "run-1" }]),
+    result.current.processReviews([item], [reviewScope]),
   ).rejects.toBeDefined();
 
   expect(invalidatedKeys()).toContainEqual(getGetV2GetPendingReviewsQueryKey());

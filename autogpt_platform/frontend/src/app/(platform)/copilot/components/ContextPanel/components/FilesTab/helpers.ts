@@ -1,6 +1,7 @@
 import JSZip from "jszip";
 import { getGetWorkspaceDownloadFileByIdUrl } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
+import { fetchArtifactResource } from "../../../ArtifactPanel/artifactRequest";
 import type { ArtifactRef } from "../../../../store";
 
 export function fileDownloadUrl(fileId: string): string {
@@ -32,6 +33,8 @@ export function fileItemToArtifactRef(item: WorkspaceFileItem): ArtifactRef {
     sourceUrl: fileDownloadUrl(item.id),
     origin: isUploadedFile(item) ? "user-upload" : "agent",
     sizeBytes: item.size_bytes ?? undefined,
+    organizationId: item.organization_id ?? null,
+    teamId: item.team_id ?? null,
   };
 }
 
@@ -63,6 +66,8 @@ export function formatFileTimestamp(iso: string): string {
 interface ZipEntry {
   id: string;
   name: string;
+  organizationId?: string | null;
+  teamId?: string | null;
 }
 
 interface DownloadZipDeps {
@@ -85,13 +90,23 @@ export async function downloadFilesAsZip(
   entries: ZipEntry[],
   deps: DownloadZipDeps = {},
 ): Promise<void> {
-  const fetchImpl = deps.fetchImpl ?? ((url: string) => fetch(url));
   const save = deps.save ?? triggerDownload;
   const zip = new JSZip();
   const used = new Set<string>();
   let added = 0;
   for (const entry of entries) {
-    const res = await fetchImpl(fileDownloadUrl(entry.id));
+    const sourceUrl = fileDownloadUrl(entry.id);
+    const res = deps.fetchImpl
+      ? await deps.fetchImpl(sourceUrl)
+      : await fetchArtifactResource({
+          id: entry.id,
+          title: entry.name,
+          mimeType: null,
+          sourceUrl,
+          origin: "agent",
+          organizationId: entry.organizationId ?? null,
+          teamId: entry.teamId ?? null,
+        });
     if (!res.ok) continue;
     let name = entry.name || entry.id;
     while (used.has(name)) name = `${entry.id.slice(0, 8)}-${name}`;

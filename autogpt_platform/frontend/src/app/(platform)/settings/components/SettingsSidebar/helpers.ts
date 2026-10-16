@@ -1,5 +1,6 @@
 import {
   BrainIcon,
+  BuildingIcon,
   ChartIncreaseIcon,
   CreditCardIcon,
   Key01Icon,
@@ -32,6 +33,12 @@ export const settingsNavItems: SettingsNavItem[] = [
     flag: Flag.GRAPHITI_MEMORY,
   },
   { label: "Billing", href: "/settings/billing", Icon: CreditCardIcon },
+  {
+    label: "Organization",
+    href: "/settings/organization",
+    Icon: BuildingIcon,
+    flag: Flag.SHOW_ORG_SETTINGS,
+  },
   {
     label: "Integrations",
     href: "/settings/integrations",

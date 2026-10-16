@@ -1,17 +1,35 @@
 "use client";
 
-import { useGetWorkspaceStorageUsage } from "@/app/api/__generated__/endpoints/workspace/workspace";
+import {
+  getGetWorkspaceStorageUsageQueryKey,
+  useGetWorkspaceStorageUsage,
+} from "@/app/api/__generated__/endpoints/workspace/workspace";
 import { Progress } from "@/components/atoms/Progress/Progress";
 import { Skeleton } from "@/components/atoms/Skeleton/Skeleton";
 import { Text } from "@/components/atoms/Text/Text";
 import { cn } from "@/lib/utils";
 import { formatFileSize } from "../ArtifactsList/helpers";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
+import { useOrgTeamStore } from "@/services/org-team/store";
 
 export function StorageUsage() {
+  const activeOrgID = useOrgTeamStore((s) => s.activeOrgID);
+  const activeTeamID = useOrgTeamStore((s) => s.activeTeamID);
+  const isTenantReady = useOrgTeamStore((s) => s.isLoaded);
   const { data, isLoading, isError } = useGetWorkspaceStorageUsage({
     query: {
+      enabled: isTenantReady,
+      queryKey: getTeamScopedQueryKey(
+        getGetWorkspaceStorageUsageQueryKey(),
+        activeOrgID,
+        activeTeamID,
+      ),
       select: (res) => (res.status === 200 ? res.data : null),
     },
+    request: getTenantRequestInit(activeOrgID, activeTeamID, isTenantReady),
   });
 
   if (isLoading) {

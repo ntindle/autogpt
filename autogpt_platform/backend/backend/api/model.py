@@ -34,6 +34,8 @@ class WSSubscribeGraphExecutionRequest(pydantic.BaseModel):
 
 class WSSubscribeGraphExecutionsRequest(pydantic.BaseModel):
     graph_id: str
+    organization_id: str | None
+    team_id: str | None
 
 
 GraphCreationSource = Literal["builder", "upload"]
@@ -43,6 +45,14 @@ GraphExecutionSource = Literal["builder", "library", "onboarding"]
 class CreateGraph(pydantic.BaseModel):
     graph: Graph
     source: GraphCreationSource | None = None
+    team_id: Optional[str] = pydantic.Field(
+        default=None,
+        description=(
+            "Team to create the agent under. Must be a team in the caller's "
+            "org that the caller is an active member of. Omit to use the "
+            "active team from the request context, falling back to org-home."
+        ),
+    )
 
 
 class SetGraphActiveVersion(pydantic.BaseModel):

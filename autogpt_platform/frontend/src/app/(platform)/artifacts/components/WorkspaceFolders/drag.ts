@@ -1,5 +1,35 @@
 /** DataTransfer MIME type used when dragging file cards/rows onto a folder. */
 export const FILE_DRAG_MIME = "application/workspace-file-id";
+export const FILE_TENANT_MIME = "application/workspace-file-tenant+json";
+
+export interface DraggedFileTenant {
+  organizationId: string | null;
+  teamId: string | null;
+}
+
+export function serializeDraggedFileTenant(scope: DraggedFileTenant): string {
+  return JSON.stringify(scope);
+}
+
+export function parseDraggedFileTenant(
+  value: string,
+): DraggedFileTenant | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object") return null;
+    const organizationId = Reflect.get(parsed, "organizationId");
+    const teamId = Reflect.get(parsed, "teamId");
+    if (
+      (organizationId !== null && typeof organizationId !== "string") ||
+      (teamId !== null && typeof teamId !== "string")
+    ) {
+      return null;
+    }
+    return { organizationId, teamId };
+  } catch {
+    return null;
+  }
+}
 
 // File ids are UUIDs, so a comma can't appear inside one.
 const ID_SEPARATOR = ",";

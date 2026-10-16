@@ -4,7 +4,12 @@ from backend.data.execution import ExecutionStatus, GraphExecutionMeta
 from backend.data.execution_cost_summary import UserExecutionCostSummary
 from backend.executor.scheduler import CopilotTurnJobInfo, GraphExecutionJobInfo
 
-from .helpers import UNKNOWN_AGENT, AgentRef, parse_datetime, to_home_expert
+from .helpers import (
+    AgentScopeMap,
+    agent_ref_for_execution,
+    parse_datetime,
+    to_home_expert,
+)
 from .models import HomeActiveTask, HomeDailyActivity, HomeUpcomingTask, HomeWeekSummary
 
 _MAX_ACTIVE = 3
@@ -14,7 +19,7 @@ _MAX_UPCOMING = 4
 def compose_active_tasks(
     executions: list[GraphExecutionMeta],
     expert_by_id: dict[str, Expert],
-    agent_by_graph: dict[str, AgentRef],
+    agent_by_graph: AgentScopeMap,
     expert_by_graph: dict[str, Expert] | None = None,
 ) -> list[HomeActiveTask]:
     active = [
@@ -31,15 +36,20 @@ def compose_active_tasks(
 def _active_task(
     execution: GraphExecutionMeta,
     expert_by_id: dict[str, Expert],
-    agent_by_graph: dict[str, AgentRef],
+    agent_by_graph: AgentScopeMap,
     expert_by_graph: dict[str, Expert],
 ) -> HomeActiveTask:
-    agent = agent_by_graph.get(execution.graph_id, UNKNOWN_AGENT)
+    agent = agent_ref_for_execution(agent_by_graph, execution)
     # A run started by hand from the library carries no expert stamp, so the
     # expert that owns the workflow stands in for it.
     expert = expert_by_id.get(execution.expert_id or "") or expert_by_graph.get(
         execution.graph_id
     )
+    if expert and (expert.organization_id, expert.team_id) != (
+        execution.organization_id,
+        execution.team_id,
+    ):
+        expert = None
     return HomeActiveTask(
         id=execution.id,
         title=agent.name,
@@ -47,14 +57,19 @@ def _active_task(
         expert=to_home_expert(expert) if expert else None,
         image_url=agent.image_url,
         started_at=as_utc_or_none(execution.started_at),
-        link=run_link(agent.library_agent_id, execution.id),
+        link=run_link(
+            agent.library_agent_id,
+            execution.id,
+            execution.organization_id,
+            execution.team_id,
+        ),
     )
 
 
 def compose_upcoming_tasks(
     schedules: list[GraphExecutionJobInfo | CopilotTurnJobInfo],
     expert_by_schedule: dict[str, Expert],
-    agent_by_graph: dict[str, AgentRef] | None = None,
+    agent_by_graph: AgentScopeMap | None = None,
 ) -> list[HomeUpcomingTask]:
     upcoming = []
     for schedule in schedules:
@@ -63,7 +78,10 @@ def compose_upcoming_tasks(
             continue
         if isinstance(schedule, GraphExecutionJobInfo):
             expert = expert_by_schedule.get(schedule.id)
-            agent = (agent_by_graph or {}).get(schedule.graph_id)
+            agent = (agent_by_graph or {}).get(
+                (schedule.graph_id, schedule.organization_id, schedule.team_id),
+                (agent_by_graph or {}).get(schedule.graph_id),
+            )
             upcoming.append(
                 HomeUpcomingTask(
                     id=schedule.id,

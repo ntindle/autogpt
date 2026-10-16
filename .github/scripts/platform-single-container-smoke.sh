@@ -1068,8 +1068,12 @@ result = graph.query(
 assert int(result.result_set[0][0]) == 1, result.result_set
 
 from backend.copilot.graphiti.config import is_enabled_for_user
+from backend.util.feature_flag import Flag, is_feature_enabled
 
 assert asyncio.run(is_enabled_for_user("single-container-smoke")) is True
+assert asyncio.run(
+    is_feature_enabled(Flag.HIRE_EXPERTS, "single-container-smoke", default=False)
+) is True
 
 if action == "cleanup":
     redis.execute_command("GRAPH.DELETE", graph.name)

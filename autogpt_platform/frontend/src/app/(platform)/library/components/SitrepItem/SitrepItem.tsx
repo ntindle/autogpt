@@ -22,6 +22,10 @@ import {
 } from "@hugeicons/core-free-icons";
 import type { IconSvgElement } from "@hugeicons/react";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import {
+  getCopilotStartHref,
+  getLibraryAgentHref,
+} from "@/services/org-team/builder";
 import { useImageFallback } from "@/hooks/useImageFallback";
 
 interface Props {
@@ -86,8 +90,7 @@ export function SitrepItem({ item }: Props) {
 
   function handleAskAutoPilot() {
     const prompt = buildAutoPilotPrompt(item);
-    const encoded = encodeURIComponent(prompt);
-    router.push(`/home?autosubmit=true#prompt=${encoded}`);
+    router.push(getCopilotStartHref(item.organizationId, item.teamId, prompt));
   }
 
   return (
@@ -141,7 +144,12 @@ export function SitrepItem({ item }: Props) {
       <div className="flex flex-shrink-0 flex-wrap items-center justify-center gap-1.5 sm:flex-nowrap sm:justify-end">
         {item.priority === "success" || item.priority === "warning" ? (
           <NextLink
-            href={`/library/agents/${item.agentID}${item.executionID ? `?activeItem=${item.executionID}` : ""}`}
+            href={getLibraryAgentHref(
+              item.agentID,
+              item.organizationId,
+              item.teamId,
+              item.executionID,
+            )}
             className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-800"
           >
             <Icon icon={EyeIcon} size={14} className="shrink-0" />
@@ -152,6 +160,8 @@ export function SitrepItem({ item }: Props) {
             status={item.status}
             agentID={item.agentID}
             executionID={item.executionID}
+            organizationID={item.organizationId}
+            teamID={item.teamId}
           />
         )}
         <button

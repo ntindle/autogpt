@@ -1,5 +1,12 @@
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
 import { useEffect, useState } from "react";
-import { useGetV1GetExecutionDetails } from "@/app/api/__generated__/endpoints/graphs/graphs";
+import {
+  getGetV1GetExecutionDetailsQueryKey,
+  useGetV1GetExecutionDetails,
+} from "@/app/api/__generated__/endpoints/graphs/graphs";
 import { AgentExecutionStatus } from "@/app/api/__generated__/models/agentExecutionStatus";
 import { okData } from "@/app/api/helpers";
 import {
@@ -9,6 +16,8 @@ import {
 
 // A run the chat started, or the chat's own queue.
 interface Args {
+  organizationId: string | null;
+  teamId: string | null;
   graphExecId?: string;
   graphId?: string;
   chatSessionId?: string;
@@ -28,6 +37,8 @@ export function useCopilotPendingReviews({
   chatSessionId = "",
   pollWhileEmpty = true,
   refetchKey,
+  organizationId,
+  teamId,
 }: Args) {
   const [hasRows, setHasRows] = useState(false);
   const isRun = !!graphId;
@@ -38,31 +49,47 @@ export function useCopilotPendingReviews({
     {
       query: {
         enabled: isRun,
+        queryKey: getTeamScopedQueryKey(
+          getGetV1GetExecutionDetailsQueryKey(graphId ?? "", graphExecId),
+          organizationId,
+          teamId,
+        ),
         select: okData,
         refetchInterval: (q) =>
           q.state.status === "error"
             ? PRE_REVIEW_POLL_MS
             : pollInterval(readStatus(q.state.data)),
       },
+      request: getTenantRequestInit(organizationId, teamId),
     },
   );
   const status = execution?.status;
   // Without the run's status, the reviews themselves are the only signal.
   const statusUnavailable = isRun && isFetched && !status;
 
-  const forChat = usePendingReviewsForChatSession(chatSessionId, {
-    enabled: !!chatSessionId,
-    refetchInterval: pollWhileEmpty || hasRows ? POLL_MS : false,
-  });
-  const forRun = usePendingReviewsForExecution(graphExecId, {
-    enabled: !!graphExecId && (!isRun || !!status || statusUnavailable),
-    refetchInterval:
-      !isRun || status === AgentExecutionStatus.REVIEW
-        ? POLL_MS
-        : statusUnavailable
-          ? PRE_REVIEW_POLL_MS
-          : false,
-  });
+  const forChat = usePendingReviewsForChatSession(
+    chatSessionId,
+    organizationId,
+    teamId,
+    {
+      enabled: !!chatSessionId,
+      refetchInterval: pollWhileEmpty || hasRows ? POLL_MS : false,
+    },
+  );
+  const forRun = usePendingReviewsForExecution(
+    graphExecId,
+    organizationId,
+    teamId,
+    {
+      enabled: !!graphExecId && (!isRun || !!status || statusUnavailable),
+      refetchInterval:
+        !isRun || status === AgentExecutionStatus.REVIEW
+          ? POLL_MS
+          : statusUnavailable
+            ? PRE_REVIEW_POLL_MS
+            : false,
+    },
+  );
   const { pendingReviews, refetch } = chatSessionId ? forChat : forRun;
 
   useEffect(() => {

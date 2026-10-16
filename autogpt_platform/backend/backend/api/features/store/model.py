@@ -51,6 +51,8 @@ class MyUnpublishedAgent(pydantic.BaseModel):
     description: str
     last_edited: datetime.datetime
     recommended_schedule_cron: str | None = None
+    organization_id: str | None = None
+    team_id: str | None = None
 
 
 class MyUnpublishedAgentsResponse(pydantic.BaseModel):
@@ -238,6 +240,10 @@ class StoreSubmission(pydantic.BaseModel):
     review_count: int = 0
     review_avg_rating: float = 0.0
 
+    # Exact source tenancy used by creator row actions.
+    organization_id: str | None = None
+    team_id: str | None = None
+
     @classmethod
     def from_db(cls, _sub: "prisma.models.StoreSubmission") -> Self:
         """Construct from the StoreSubmission Prisma view."""
@@ -266,6 +272,8 @@ class StoreSubmission(pydantic.BaseModel):
             run_count=_sub.run_count,
             review_count=_sub.review_count,
             review_avg_rating=_sub.review_avg_rating,
+            organization_id=_sub.organization_id,
+            team_id=_sub.team_id,
         )
 
     @classmethod
@@ -298,6 +306,8 @@ class StoreSubmission(pydantic.BaseModel):
             reviewed_at=_lv.reviewedAt,
             reviewer_id=_lv.reviewerId,
             review_comments=_lv.reviewComments,
+            organization_id=_lv.organizationId,
+            team_id=_lv.teamId,
         )
 
 

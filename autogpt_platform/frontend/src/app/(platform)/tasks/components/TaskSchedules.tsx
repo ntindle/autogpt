@@ -101,7 +101,7 @@ function ScheduleRow({ schedule }: { schedule: TaskScheduleInfo }) {
       {schedule.session_id ? (
         <Link
           className="text-xs underline"
-          href={`/copilot?sessionId=${encodeURIComponent(schedule.session_id)}`}
+          href={`/tasks/chat/${encodeURIComponent(schedule.session_id)}`}
         >
           Open chat
         </Link>

@@ -5,7 +5,7 @@ from typing import Protocol
 import pydantic
 import uvicorn
 from autogpt_libs.auth.jwt_utils import parse_jwt_token_async
-from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from starlette.middleware.cors import CORSMiddleware
 
 from backend.api.conn_manager import ConnectionManager
@@ -150,6 +150,8 @@ async def handle_subscribe(
         channel_key = await connection_manager.subscribe_graph_execs(
             user_id=user_id,
             graph_id=sub_req.graph_id,
+            organization_id=sub_req.organization_id,
+            team_id=sub_req.team_id,
             websocket=websocket,
         )
 
@@ -280,6 +282,21 @@ async def websocket_router(
                         method=WSMethod.ERROR,
                         success=False,
                         error="Invalid message data. Refer to the API schema",
+                    ).model_dump_json()
+                )
+                continue
+            except HTTPException as e:
+                logger.warning(
+                    "Subscription rejected for user #%s on '%s' (status %s)",
+                    user_id,
+                    message.method.value,
+                    e.status_code,
+                )
+                await websocket.send_text(
+                    WSMessage(
+                        method=WSMethod.ERROR,
+                        success=False,
+                        error="Subscription not available for this account",
                     ).model_dump_json()
                 )
                 continue

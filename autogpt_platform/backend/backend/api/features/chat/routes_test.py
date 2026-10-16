@@ -1,6 +1,7 @@
 """Tests for chat API routes: session title update, file attachment validation, usage, and rate limiting."""
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import get_args
@@ -11,7 +12,9 @@ import fastapi.testclient
 import httpx
 import pytest
 import pytest_mock
+from autogpt_libs.auth.dependencies import get_request_context
 from autogpt_libs.auth.jwt_utils import get_jwt_payload
+from autogpt_libs.auth.models import RequestContext
 from pydantic import SecretStr
 from sentry_sdk.integrations.asgi import SentryAsgiMiddleware
 
@@ -92,6 +95,48 @@ def setup_app_auth(mock_jwt_user, mocker: pytest_mock.MockerFixture):
     mocker.patch.object(
         chat_routes,
         "enforce_codex_access_http",
+        new=AsyncMock(),
+    )
+    mocker.patch.object(
+        chat_routes,
+        "get_chat_session_metadata",
+        new=AsyncMock(
+            return_value=MagicMock(
+                organization_id="test-org",
+                team_id="test-team",
+                expert_id=None,
+            )
+        ),
+    )
+    mocker.patch.object(
+        chat_routes,
+        "has_live_resource_access",
+        new=AsyncMock(return_value=True),
+    )
+
+    @asynccontextmanager
+    async def allowed_lease(*_args, **_kwargs):
+        yield True
+
+    @asynccontextmanager
+    async def allowed_scopes_lease(_user_id, scopes, _access):
+        yield scopes
+
+    mocker.patch.object(chat_routes, "live_resource_lease", allowed_lease)
+    mocker.patch.object(chat_routes, "live_resource_scopes_lease", allowed_scopes_lease)
+    mocker.patch(
+        "backend.copilot.pending_message_helpers.live_resource_lease", allowed_lease
+    )
+    mocker.patch(
+        "backend.api.live_auth.live_resource_permission_barrier", allowed_lease
+    )
+    mocker.patch.object(
+        chat_routes,
+        "require_exact_chat_session_scope",
+        new=AsyncMock(),
+    )
+    mocker.patch(
+        "backend.copilot.pending_message_helpers.require_exact_chat_session_scope",
         new=AsyncMock(),
     )
     mocker.patch.object(
@@ -369,6 +414,11 @@ def _mock_stream_internals(
         new_callable=AsyncMock,
         return_value=None,
     )
+    mocker.patch.object(
+        chat_routes.stream_registry,
+        "publish_chunk",
+        new_callable=AsyncMock,
+    )
     # A sent message cancels the chat's pending resume at the budget reset;
     # keep that off the scheduler.
     mock_cancel_resume = mocker.patch(
@@ -455,6 +505,52 @@ def test_stream_chat_accepts_20_file_ids(mocker: pytest_mock.MockerFixture):
     )
     # Should get past validation — 200 streaming response expected
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stream_chat_pins_turn_and_files_to_persisted_session_scope(
+    mocker: pytest_mock.MockerFixture,
+) -> None:
+    mocks = _mock_stream_internals(mocker)
+    mocks.session.organization_id = "org-1"
+    mocks.session.team_id = "team-a"
+    resolve_files = mocker.patch.object(
+        chat_routes,
+        "resolve_workspace_files",
+        new_callable=AsyncMock,
+        return_value=[],
+    )
+    ctx = RequestContext(
+        user_id=TEST_USER_ID,
+        org_id="org-1",
+        team_id=None,
+        is_org_owner=True,
+        is_org_admin=False,
+        is_org_billing_manager=False,
+        is_team_admin=False,
+        is_team_billing_manager=False,
+        seat_status="ACTIVE",
+    )
+    file_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    await chat_routes.stream_chat_post(
+        session_id="sess-1",
+        request=chat_routes.StreamChatRequest(
+            message="hello",
+            file_ids=[file_id],
+        ),
+        user_id=TEST_USER_ID,
+        ctx=ctx,
+    )
+
+    resolve_files.assert_awaited_once_with(
+        TEST_USER_ID,
+        [file_id],
+        "org-1",
+        "team-a",
+    )
+    assert mocks.enqueue.await_args.kwargs["organization_id"] == "org-1"
+    assert mocks.enqueue.await_args.kwargs["team_id"] == "team-a"
 
 
 def _mock_rate_limits_for_an_unseeded_user(mocker: pytest_mock.MockerFixture) -> None:
@@ -2037,6 +2133,75 @@ def test_list_chat_transports_self_hosted_deployment_stays_default_with_codex(
     }
 
 
+@pytest.mark.parametrize(
+    ("context", "scope", "view_action", "create_action", "execute_action"),
+    [
+        (
+            RequestContext(
+                user_id=TEST_USER_ID,
+                org_id="test-org",
+                team_id=None,
+                is_org_owner=False,
+                is_org_admin=False,
+                is_org_billing_manager=True,
+                is_team_admin=False,
+                is_team_billing_manager=False,
+                seat_status="ACTIVE",
+            ),
+            "org",
+            "VIEW_RESOURCES",
+            "CREATE_RESOURCES",
+            "EXECUTE_RESOURCES",
+        ),
+        (
+            RequestContext(
+                user_id=TEST_USER_ID,
+                org_id="test-org",
+                team_id="test-team",
+                is_org_owner=False,
+                is_org_admin=False,
+                is_org_billing_manager=False,
+                is_team_admin=False,
+                is_team_billing_manager=True,
+                seat_status="ACTIVE",
+            ),
+            "workspace",
+            "VIEW_AGENTS",
+            "CREATE_AGENTS",
+            "EXECUTE_AGENTS",
+        ),
+    ],
+)
+def test_billing_only_roles_cannot_use_copilot_resources(
+    context: RequestContext,
+    scope: str,
+    view_action: str,
+    create_action: str,
+    execute_action: str,
+) -> None:
+    app.dependency_overrides[get_request_context] = lambda: context
+
+    list_response = client.get("/sessions")
+    create_response = client.post("/sessions")
+    execute_response = client.post(
+        "/sessions/sess-1/stream",
+        json={"message": "create a folder"},
+    )
+
+    assert list_response.status_code == 403
+    assert list_response.json()["detail"] == (
+        f"Missing {scope} permission: {view_action}"
+    )
+    assert create_response.status_code == 403
+    assert create_response.json()["detail"] == (
+        f"Missing {scope} permission: {create_action}"
+    )
+    assert execute_response.status_code == 403
+    assert execute_response.json()["detail"] == (
+        f"Missing {scope} permission: {execute_action}"
+    )
+
+
 # ─── the default connection for new chats ──────────────────────────────
 
 
@@ -3315,6 +3480,8 @@ def _make_session_info(
     source_platform: str | None = None,
     is_pinned: bool = False,
     expert_id: str | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ):
     """Build a minimal ChatSessionInfo-like mock."""
     from backend.copilot.model import ChatSessionInfo, ChatSessionMetadata
@@ -3329,6 +3496,8 @@ def _make_session_info(
         metadata=ChatSessionMetadata(source_platform=source_platform),
         is_pinned=is_pinned,
         expert_id=expert_id,
+        organization_id=organization_id,
+        team_id=team_id,
     )
 
 
@@ -3386,6 +3555,35 @@ def test_list_sessions_returns_source_platform(
 
     assert response.status_code == 200
     assert response.json()["sessions"][0]["source_platform"] == "discord"
+
+
+def test_list_sessions_includes_team_tenancy(
+    mocker: pytest_mock.MockerFixture,
+) -> None:
+    """Session rows surface team_id/organization_id for list badges (SECRT-2488)."""
+    session = _make_session_info("sess-team", organization_id="org-1", team_id="team-7")
+    mocker.patch(
+        "backend.api.features.chat.routes.get_user_sessions",
+        new_callable=AsyncMock,
+        return_value=([session], 1),
+    )
+    mock_redis = MagicMock()
+    mock_pipe = MagicMock()
+    mock_pipe.hget = MagicMock(return_value=None)
+    mock_pipe.execute = AsyncMock(return_value=["done"])
+    mock_redis.pipeline = MagicMock(return_value=mock_pipe)
+    mocker.patch(
+        "backend.api.features.chat.routes.get_redis_async",
+        new_callable=AsyncMock,
+        return_value=mock_redis,
+    )
+
+    response = client.get("/sessions")
+
+    assert response.status_code == 200
+    row = response.json()["sessions"][0]
+    assert row["team_id"] == "team-7"
+    assert row["organization_id"] == "org-1"
 
 
 def test_list_sessions_returns_is_pinned(
@@ -3586,6 +3784,10 @@ def _mock_validate_session(
         new_callable=AsyncMock,
         return_value=dummy,
     )
+    mocker.patch(
+        "backend.api.features.chat.routes.clear_pending_messages_unsafe",
+        new_callable=AsyncMock,
+    )
 
 
 def test_cancel_session_no_active_task(mocker: pytest_mock.MockerFixture) -> None:
@@ -3657,6 +3859,8 @@ def test_cancel_session_releases_orphan_running(
                 updated_at=stale,
                 metadata=ChatSessionMetadata(),
                 chat_status="running",
+                organization_id="test-org",
+                team_id="test-team",
             )
         ),
     )
@@ -4362,7 +4566,7 @@ def test_disconnect_stream_returns_204_and_awaits_registry(
     mocker: pytest_mock.MockerFixture,
     test_user_id: str,
 ) -> None:
-    mock_session = MagicMock()
+    mock_session = MagicMock(organization_id="test-org", team_id="test-team")
     mocker.patch(
         "backend.api.features.chat.routes.get_chat_session_metadata",
         new_callable=AsyncMock,
@@ -4514,6 +4718,8 @@ def test_get_session_releases_orphan_when_redis_empty_and_db_running(
                 updated_at=stale,
                 metadata=ChatSessionMetadata(),
                 chat_status="running",
+                organization_id="test-org",
+                team_id="test-team",
             )
         ),
     )

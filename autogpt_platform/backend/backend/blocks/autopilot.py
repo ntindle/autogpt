@@ -36,6 +36,7 @@ from backend.copilot.permissions import (
     all_known_tool_names,
     validate_block_identifiers,
 )
+from backend.data.db_accessors import credit_db, live_resource_lease
 from backend.data.model import CredentialsField, CredentialsMetaInput, SchemaField
 from backend.integrations.providers import ProviderName
 from backend.util.exceptions import BlockExecutionError
@@ -384,24 +385,45 @@ class AutoPilotBlock(Block):
         dry_run: bool,
         organization_id: str | None = None,
         team_id: str | None = None,
+        expert_id: str | None = None,
         llm_auth_provider: Literal["platform", "codex"] = "platform",
         llm_credential_id: str | None = None,
     ) -> str:
         """Create a new chat session and return its ID (mockable for tests)."""
         from backend.copilot.model import create_chat_session  # avoid circular import
 
-        session = await create_chat_session(
-            user_id,
-            dry_run=dry_run,
-            organization_id=organization_id,
-            team_id=team_id,
-            # The prompt of a graph run is machine-authored and may quote
-            # untrusted upstream data, so this session must not reach the
-            # tools that restaff the user's team.
-            origin="automation",
-            llm_auth_provider=llm_auth_provider,
-            llm_credential_id=llm_credential_id,
-        )
+        async with live_resource_lease(
+            user_id, organization_id, team_id, "create"
+        ) as allowed:
+            if not allowed:
+                raise BlockExecutionError(
+                    "The selected workspace is no longer available.",
+                    "AutoPilotBlock",
+                    AUTOPILOT_BLOCK_ID,
+                )
+            action = create_chat_session(
+                user_id,
+                dry_run=dry_run,
+                organization_id=organization_id,
+                team_id=team_id,
+                expert_id=expert_id,
+                origin="automation",
+                llm_auth_provider=llm_auth_provider,
+                llm_credential_id=llm_credential_id,
+            )
+            session = (
+                await allowed.run(action) if hasattr(allowed, "run") else await action
+            )
+        if (session.organization_id, session.team_id, session.expert_id) != (
+            organization_id,
+            team_id,
+            expert_id,
+        ):
+            raise BlockExecutionError(
+                "The AutoPilot session was created outside the requested scope.",
+                "AutoPilotBlock",
+                AUTOPILOT_BLOCK_ID,
+            )
         return session.session_id
 
     async def execute_copilot(
@@ -591,9 +613,12 @@ class AutoPilotBlock(Block):
             if codex_connection is None:
                 # Falling back to platform here would bill a different account
                 # than the one the user asked for, without saying so.
-                yield "error", (
-                    "The ChatGPT transport needs a connected ChatGPT account. "
-                    "Connect one, or switch this step to platform credits."
+                yield (
+                    "error",
+                    (
+                        "The ChatGPT transport needs a connected ChatGPT account. "
+                        "Connect one, or switch this step to platform credits."
+                    ),
                 )
                 return
             use_codex = True
@@ -612,6 +637,7 @@ class AutoPilotBlock(Block):
                 dry_run=input_data.dry_run or execution_context.dry_run,
                 organization_id=execution_context.organization_id,
                 team_id=execution_context.team_id,
+                expert_id=execution_context.expert_id,
                 llm_auth_provider=("codex" if use_codex else "platform"),
                 llm_credential_id=(codex_connection.id if use_codex else None),
             )
@@ -628,9 +654,31 @@ class AutoPilotBlock(Block):
             )
             if existing_session is None:
                 yield "session_id", sid
-                yield "error", (
-                    "The AutoPilot session was not found. Start a new session "
-                    "or check that the session ID belongs to this account."
+                yield (
+                    "error",
+                    (
+                        "The AutoPilot session was not found. Start a new session "
+                        "or check that the session ID belongs to this account."
+                    ),
+                )
+                return
+
+            if (
+                existing_session.organization_id,
+                existing_session.team_id,
+                existing_session.expert_id,
+            ) != (
+                execution_context.organization_id,
+                execution_context.team_id,
+                execution_context.expert_id,
+            ):
+                yield "session_id", sid
+                yield (
+                    "error",
+                    (
+                        "The AutoPilot session belongs to a different workspace. "
+                        "Start a new session for this graph run."
+                    ),
                 )
                 return
 
@@ -648,9 +696,12 @@ class AutoPilotBlock(Block):
             # an unknown origin fails closed instead.
             if existing_session.metadata.origin == "interactive":
                 yield "session_id", sid
-                yield "error", (
-                    "That AutoPilot session was started by a person, not by an "
-                    "automation. Start a new session for this graph run."
+                yield (
+                    "error",
+                    (
+                        "That AutoPilot session was started by a person, not by an "
+                        "automation. Start a new session for this graph run."
+                    ),
                 )
                 return
 
@@ -661,11 +712,24 @@ class AutoPilotBlock(Block):
                 or existing_session.metadata.llm_credential_id != expected_credential
             ):
                 yield "session_id", sid
-                yield "error", (
-                    "The AutoPilot session uses a different transport or connection. "
-                    "Start a new session for this selection."
+                yield (
+                    "error",
+                    (
+                        "The AutoPilot session uses a different transport or connection. "
+                        "Start a new session for this selection."
+                    ),
                 )
                 return
+
+        if not await credit_db().has_live_resource_access(
+            execution_context.user_id,
+            execution_context.organization_id,
+            execution_context.team_id,
+            "execute",
+        ):
+            yield "session_id", sid
+            yield "error", "The selected workspace is no longer available."
+            return
 
         # NOTE: No asyncio.timeout() here — the SDK manages its own
         # heartbeat-based timeouts internally.  Wrapping with asyncio.timeout
@@ -713,6 +777,9 @@ class AutoPilotBlock(Block):
                     execution_context.user_id,
                     effective_prompt,
                     input_data.dry_run or execution_context.dry_run,
+                    execution_context.organization_id,
+                    execution_context.team_id,
+                    execution_context.expert_id,
                 )
             except asyncio.CancelledError:
                 # Task cancelled during recovery — still yield the error
@@ -888,6 +955,9 @@ async def _enqueue_for_recovery(
     user_id: str,
     message: str,
     dry_run: bool,
+    organization_id: str | None,
+    team_id: str | None,
+    expert_id: str | None,
 ) -> None:
     """Re-enqueue an orphaned sub-agent session so a fresh executor picks it up.
 
@@ -911,7 +981,11 @@ async def _enqueue_for_recovery(
         from backend.copilot.tree import root_envelope
 
         session = await get_chat_session(session_id, user_id)
-        if session is None:
+        if session is None or (
+            session.organization_id,
+            session.team_id,
+            session.expert_id,
+        ) != (organization_id, team_id, expert_id):
             logger.warning(
                 "AutoPilot session %s: copilot_session_not_found",
                 session_id[:12],
@@ -919,28 +993,35 @@ async def _enqueue_for_recovery(
             return
 
         recovery_turn_id = str(uuid.uuid4())
-        await asyncio.wait_for(
-            enqueue_copilot_turn(
-                session_id=session_id,
-                user_id=user_id,
-                message=message,
-                turn_id=recovery_turn_id,
-                llm_auth_provider=session.metadata.llm_auth_provider,
-                llm_credential_id=session.metadata.llm_credential_id,
-                # The orphaned turn's envelope died with its worker and is not
-                # recoverable, so this re-dispatch roots a fresh tree — which
-                # is what an AutoPilotBlock turn already gets, the graph
-                # executor being a separate process.
-                # TODO(#14244-f5): revisit together with run_agent's tree reset.
-                envelope=root_envelope(recovery_turn_id, session_id=session_id),
-                # Still the block's turn: it may run on credits as the first did,
-                # paid from the same tenancy.
-                tool_name=_AUTOPILOT_TOOL_NAME,
-                organization_id=session.organization_id,
-                team_id=session.team_id,
-            ),
-            timeout=10,
-        )
+        async with live_resource_lease(
+            user_id, organization_id, team_id, "execute"
+        ) as allowed:
+            if not allowed:
+                logger.warning(
+                    "AutoPilot session %s: workspace access revoked",
+                    session_id[:12],
+                )
+                return
+
+            action = asyncio.wait_for(
+                enqueue_copilot_turn(
+                    session_id=session_id,
+                    user_id=user_id,
+                    message=message,
+                    turn_id=recovery_turn_id,
+                    envelope=root_envelope(recovery_turn_id, session_id=session_id),
+                    tool_name=_AUTOPILOT_TOOL_NAME,
+                    organization_id=organization_id,
+                    team_id=team_id,
+                    llm_auth_provider=session.metadata.llm_auth_provider,
+                    llm_credential_id=session.metadata.llm_credential_id,
+                ),
+                timeout=10,
+            )
+            if hasattr(allowed, "run"):
+                await allowed.run(action)
+            else:
+                await action
         logger.info("AutoPilot session %s enqueued for recovery", session_id[:12])
     except Exception:
         logger.warning(

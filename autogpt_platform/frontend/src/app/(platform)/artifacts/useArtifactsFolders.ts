@@ -1,3 +1,8 @@
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
+import { useOrgTeamStore } from "@/services/org-team/store";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   getListWorkspaceFoldersQueryKey,
@@ -12,12 +17,35 @@ import { ApiError } from "@/lib/autogpt-server-api/helpers";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { ARTIFACTS_LIST_QUERY_KEY } from "./useArtifactsPage";
 
-export function useArtifactsFolders() {
+interface TenantScope {
+  organizationId: string | null;
+  teamId: string | null;
+}
+
+export function useArtifactsFolders(requestedScope?: TenantScope) {
+  const activeOrgID = useOrgTeamStore((state) => state.activeOrgID);
+  const activeTeamID = useOrgTeamStore((state) => state.activeTeamID);
+  const isTenantReady = useOrgTeamStore((state) => state.isLoaded);
+  const organizationId = requestedScope
+    ? requestedScope.organizationId
+    : activeOrgID;
+  const teamId = requestedScope ? requestedScope.teamId : activeTeamID;
+  const request = getTenantRequestInit(organizationId, teamId, isTenantReady);
+
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   const foldersQuery = useListWorkspaceFolders({
-    query: { select: okData },
+    query: {
+      select: okData,
+      enabled: isTenantReady,
+      queryKey: getTeamScopedQueryKey(
+        getListWorkspaceFoldersQueryKey(),
+        organizationId,
+        teamId,
+      ),
+    },
+    request,
   });
 
   function invalidate() {
@@ -28,6 +56,7 @@ export function useArtifactsFolders() {
   }
 
   const createMutation = useCreateWorkspaceFolder({
+    request,
     mutation: {
       onSuccess: () => {
         invalidate();
@@ -44,6 +73,7 @@ export function useArtifactsFolders() {
   });
 
   const updateMutation = useUpdateWorkspaceFolder({
+    request,
     mutation: {
       onSuccess: () => {
         invalidate();
@@ -61,6 +91,7 @@ export function useArtifactsFolders() {
   // Its own instance of the same endpoint: a move reports differently from a
   // rename, and the 409/400 the destination can raise have no rename analogue.
   const moveFolderMutation = useUpdateWorkspaceFolder({
+    request,
     mutation: {
       onSuccess: () => {
         invalidate();
@@ -70,6 +101,7 @@ export function useArtifactsFolders() {
   });
 
   const deleteMutation = useDeleteWorkspaceFolder({
+    request,
     mutation: {
       onSuccess: () => {
         invalidate();
@@ -85,6 +117,7 @@ export function useArtifactsFolders() {
   });
 
   const moveMutation = useBulkMoveWorkspaceFiles({
+    request,
     mutation: {
       onSuccess: (_, variables) => {
         invalidate();

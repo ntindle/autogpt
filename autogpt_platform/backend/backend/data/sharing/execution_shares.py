@@ -30,15 +30,27 @@ def live_execution_share(share_token: str) -> AgentGraphExecutionWhereInput:
     }
 
 
-async def soft_delete_and_unshare_execution(execution_id: str, user_id: str) -> int:
+async def soft_delete_and_unshare_execution(
+    execution_id: str,
+    user_id: str,
+    *,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    exact_scope: bool = False
+) -> int:
     """Mark the user's run deleted and end its share.
 
     Returns how many runs were deleted: 0 when *execution_id* is not the
     user's, in which case nothing else is touched.
     """
+    where: AgentGraphExecutionWhereInput = {"id": execution_id, "userId": user_id}
+    if exact_scope or organization_id is not None:
+        where["organizationId"] = organization_id
+        if exact_scope or team_id is not None:
+            where["teamId"] = team_id
     async with transaction() as tx:
         deleted = await AgentGraphExecution.prisma(tx).update_many(
-            where={"id": execution_id, "userId": user_id},
+            where=where,
             data={
                 "isDeleted": True,
                 "isShared": False,

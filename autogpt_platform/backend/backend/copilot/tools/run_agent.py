@@ -25,10 +25,10 @@ from backend.copilot.tool_display import emit_tool_display_name
 from backend.copilot.tracking import track_chat_outcome
 from backend.copilot.tree import charge_credits
 from backend.data.db_accessors import (
+    agent_graph_attachment_lease,
     execution_db,
     graph_db,
     library_db,
-    orgs_db,
     user_db,
 )
 from backend.data.execution import (
@@ -38,6 +38,7 @@ from backend.data.execution import (
 )
 from backend.data.graph import GraphModel
 from backend.data.model import CredentialsMetaInput
+from backend.data.tenancy import ResourceAccess
 from backend.executor import utils as execution_utils
 from backend.executor.utils import is_credential_validation_error_message
 from backend.util.clients import get_database_manager_async_client, get_scheduler_client
@@ -48,6 +49,7 @@ from backend.util.exceptions import (
     MissingConfigError,
     NotFoundError,
 )
+from backend.util.tenancy_urls import library_agent_path
 from backend.util.timezone_utils import (
     convert_utc_time_to_user_timezone,
     get_user_timezone_or_utc,
@@ -100,7 +102,13 @@ config = ChatConfig()
 
 # The graph the gate resolved for this call, so ``_execute`` fetches it only once.
 _GATE_RESOLVED: ContextVar[
-    tuple[tuple[str, str, str], str, GraphModel | None, LibraryAgent | None] | None
+    tuple[
+        tuple[str, str, str, str, str | None, str | None],
+        str,
+        GraphModel | None,
+        LibraryAgent | None,
+    ]
+    | None
 ] = ContextVar("run_agent_gate_resolved", default=None)
 
 
@@ -215,11 +223,11 @@ class RunAgentTool(BaseTool):
             if preset is None:
                 return NO_OP
         else:
-            key = _call_key(user_id, params)
+            key = _call_key(user_id, session, params)
             await _bind_builder_graph(user_id, session, params)
             if not _names_an_agent(params):
                 return NO_OP
-            graph, library_agent = await _agent_graph(user_id, params)
+            graph, library_agent = await _agent_graph(user_id, session, params)
             _GATE_RESOLVED.set((key, params.library_agent_id, graph, library_agent))
         if graph is None:
             # A miss must not run ungated; the tool's own effect asks.
@@ -322,6 +330,15 @@ class RunAgentTool(BaseTool):
         """All operations require authentication."""
         return True
 
+    def additional_resource_accesses(self, **kwargs) -> tuple[ResourceAccess, ...]:
+        if (
+            kwargs.get("schedule_name")
+            or kwargs.get("cron")
+            or kwargs.get("save_as_preset")
+        ):
+            return ("create",)
+        return ()
+
     async def _execute(
         self,
         user_id: str | None,
@@ -350,7 +367,7 @@ class RunAgentTool(BaseTool):
 
         resolved = _GATE_RESOLVED.get()
         _GATE_RESOLVED.set(None)
-        if resolved is None or resolved[0] != _call_key(user_id or "", params):
+        if resolved is None or resolved[0] != _call_key(user_id or "", session, params):
             resolved = None
             if user_id:
                 await _bind_builder_graph(user_id, session, params)
@@ -393,7 +410,9 @@ class RunAgentTool(BaseTool):
         try:
             # Step 1: Fetch agent details
             graph, library_agent = (
-                resolved[2:] if resolved else await _agent_graph(user_id, params)
+                resolved[2:]
+                if resolved
+                else await _agent_graph(user_id, session, params)
             )
             if has_library_id and library_agent is None:
                 return ErrorResponse(
@@ -502,10 +521,15 @@ class RunAgentTool(BaseTool):
                     graph=graph,
                     graph_credentials=graph_credentials,
                     params=params,
-                    expert_id=session.expert_id,
+                    session=session,
                 )
                 if saved_preset_id:
                     result.saved_preset_id = saved_preset_id
+                elif params.save_as_preset:
+                    result.message += (
+                        " The run started, but the preset was not saved because "
+                        "your workspace access changed."
+                    )
             return result
 
         except ExpertNotFoundError:
@@ -957,7 +981,7 @@ class RunAgentTool(BaseTool):
         graph: GraphModel,
         graph_credentials: dict[str, CredentialsMetaInput],
         params: RunAgentInput,
-        expert_id: str | None,
+        session: ChatSession,
     ) -> str | None:
         """Persist the validated run config as a reusable preset when requested.
 
@@ -976,7 +1000,10 @@ class RunAgentTool(BaseTool):
                 credentials=graph_credentials,
                 is_active=True,
             ),
-            expert_id=expert_id,
+            expert_id=session.expert_id,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
+            enforce_scope=True,
         )
         return created.id
 
@@ -1009,8 +1036,26 @@ class RunAgentTool(BaseTool):
                 session_id=session_id,
             ).from_outside()
 
-        # Get or create library agent
-        library_agent = await get_or_create_library_agent(graph, user_id)
+        library_agent = await library_db().get_library_agent_by_graph_id(
+            user_id,
+            graph.id,
+            graph.version,
+            organization_id=session.organization_id,
+            team_id_restriction=session.team_id,
+            exact_scope=True,
+        )
+        if library_agent and (
+            library_agent.organization_id,
+            library_agent.team_id,
+        ) != (session.organization_id, session.team_id):
+            library_agent = None
+        if library_agent is None:
+            library_agent = await get_or_create_library_agent(
+                graph,
+                user_id,
+                session.organization_id,
+                session.team_id,
+            )
         emit_tool_display_name(library_agent.name)
 
         # Execute — ``add_graph_execution`` ultimately calls
@@ -1022,12 +1067,7 @@ class RunAgentTool(BaseTool):
         # setup card.
         # The chat session is the tenancy anchor: an agent launched from an
         # org's copilot chat attributes/bills to that org, not to whatever
-        # the user's default org happens to be. Default-team resolution is
-        # only the fallback for sessions predating org tagging.
-        org_id, team_id = session.organization_id, session.team_id
-        if org_id is None:
-            org_id, team_id = await orgs_db().get_user_default_team(user_id)
-
+        # the user's default org happens to be.
         try:
             execution = await execution_utils.add_graph_execution(
                 graph_id=library_agent.graph_id,
@@ -1035,8 +1075,8 @@ class RunAgentTool(BaseTool):
                 inputs=inputs,
                 graph_credentials_inputs=graph_credentials,
                 dry_run=dry_run,
-                organization_id=org_id,
-                team_id=team_id,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
                 preset_id=preset_id,
                 expert_id=session.expert_id,
                 trigger=ExecutionTrigger.COPILOT,
@@ -1058,7 +1098,9 @@ class RunAgentTool(BaseTool):
                 inputs=inputs,
             )
 
-        library_agent_link = f"/library/agents/{library_agent.id}"
+        library_agent_link = library_agent_path(
+            library_agent.id, library_agent.organization_id, library_agent.team_id
+        )
         if execution.status == ExecutionStatus.REVIEW:
             # Parked for spend approval (SECRT-2599): it runs once the user
             # approves it on Home or the run page. Not a successful run yet.
@@ -1103,6 +1145,8 @@ class RunAgentTool(BaseTool):
                 graph_id=library_agent.graph_id,
                 execution_id=execution.id,
                 timeout_seconds=wait_for_result,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
             )
 
             if completed and completed.status == ExecutionStatus.COMPLETED:
@@ -1121,6 +1165,8 @@ class RunAgentTool(BaseTool):
                         user_id=user_id,
                         execution_id=execution.id,
                         include_node_executions=True,
+                        organization_id=session.organization_id,
+                        team_id_restriction=session.team_id,
                     )
                     if isinstance(detailed, GraphExecutionWithNodes):
                         node_failures = summarize_node_failures(
@@ -1339,10 +1385,6 @@ class RunAgentTool(BaseTool):
             user = await user_db().get_user_by_id(user_id)
             user_timezone = get_user_timezone_or_utc(user.timezone)
 
-        # Get or create library agent
-        library_agent = await get_or_create_library_agent(graph, user_id)
-        emit_tool_display_name(library_agent.name)
-
         # Create schedule — the scheduler re-validates credentials via
         # ``validate_and_construct_node_execution_input`` and will raise
         # ``GraphValidationError`` if any required credential is missing
@@ -1358,24 +1400,35 @@ class RunAgentTool(BaseTool):
         # expert-scoped chat belongs to that expert, so it surfaces on her
         # Team card / expert page, counts toward her weekly credit budget,
         # and is cleaned up when she is archived.
-        org_id, team_id = session.organization_id, session.team_id
-        if org_id is None:
-            org_id, team_id = await orgs_db().get_user_default_team(user_id)
-
         try:
-            result = await get_scheduler_client().add_execution_schedule(
-                user_id=user_id,
-                graph_id=library_agent.graph_id,
-                graph_version=library_agent.graph_version,
-                name=schedule_name,
-                cron=cron,
-                input_data=inputs,
-                input_credentials=graph_credentials,
-                user_timezone=user_timezone,
-                organization_id=org_id,
-                team_id=team_id,
-                expert_id=session.expert_id,
-            )
+
+            async def attach_and_schedule():
+                library_agent = await get_or_create_library_agent(
+                    graph,
+                    user_id,
+                    session.organization_id,
+                    session.team_id,
+                )
+                result = await get_scheduler_client().add_execution_schedule(
+                    user_id=user_id,
+                    graph_id=library_agent.graph_id,
+                    graph_version=library_agent.graph_version,
+                    name=schedule_name,
+                    cron=cron,
+                    input_data=inputs,
+                    input_credentials=graph_credentials,
+                    user_timezone=user_timezone,
+                    organization_id=session.organization_id,
+                    team_id=session.team_id,
+                    expert_id=session.expert_id,
+                )
+                emit_tool_display_name(library_agent.name)
+                return library_agent, result
+
+            async with agent_graph_attachment_lease([graph.id]) as attachment_guard:
+                library_agent, result = await attachment_guard.run(
+                    attach_and_schedule()
+                )
         except GraphValidationError as e:
             return await self._handle_graph_validation_race(
                 error=e,
@@ -1408,7 +1461,11 @@ class RunAgentTool(BaseTool):
             library_agent_id=library_agent.id,
         )
 
-        library_agent_link = f"/library/agents/{library_agent.id}"
+        library_agent_link = library_agent_path(
+            library_agent.id,
+            library_agent.organization_id,
+            library_agent.team_id,
+        )
         return ExecutionStartedResponse(
             message=(
                 f"Workflow '{library_agent.name}' scheduled successfully as '{schedule_name}'. "
@@ -1428,12 +1485,15 @@ class RunAgentTool(BaseTool):
 # One lookup for the run and for the gate: were they two, a drift between
 # them would gate one graph and run another.
 async def _agent_graph(
-    user_id: str, params: RunAgentInput
+    user_id: str, session: ChatSession, params: RunAgentInput
 ) -> tuple[GraphModel | None, LibraryAgent | None]:
     if params.library_agent_id:
         try:
             library_agent = await library_db().get_library_agent(
-                params.library_agent_id, user_id
+                params.library_agent_id,
+                user_id,
+                organization_id=session.organization_id,
+                team_id_restriction=session.team_id,
             )
         except NotFoundError:
             # get_library_agent raises rather than returning None, so the
@@ -1441,10 +1501,17 @@ async def _agent_graph(
             library_agent = None
         library_agent = library_agent or (
             await library_db().get_library_agent_by_graph_id(
-                user_id, params.library_agent_id
+                user_id,
+                params.library_agent_id,
+                organization_id=session.organization_id,
+                team_id_restriction=session.team_id,
+                exact_scope=True,
             )
         )
-        if library_agent is None:
+        if library_agent is None or (
+            library_agent.organization_id,
+            library_agent.team_id,
+        ) != (session.organization_id, session.team_id):
             return None, None
         # Sub-graphs are needed to aggregate the full set of required credentials.
         graph = await graph_db().get_graph(
@@ -1452,6 +1519,8 @@ async def _agent_graph(
             library_agent.graph_version,
             user_id=user_id,
             include_subgraphs=True,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
         )
         return graph, library_agent
     username, agent_name = params.username_agent_slug.split("/", 1)
@@ -1462,14 +1531,26 @@ async def _agent_graph(
 async def _preset_graph(
     user_id: str, session: ChatSession, preset_id: str
 ) -> tuple[LibraryAgentPreset | None, GraphModel | None]:
-    preset = await library_db().get_preset(user_id=user_id, preset_id=preset_id)
-    if preset is None or preset.expert_id != session.expert_id:
+    preset = await library_db().get_preset(
+        user_id=user_id,
+        preset_id=preset_id,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
+        enforce_team_scope=True,
+    )
+    if preset is None or (preset.organization_id, preset.team_id, preset.expert_id) != (
+        session.organization_id,
+        session.team_id,
+        session.expert_id,
+    ):
         return None, None
     graph = await graph_db().get_graph(
         preset.graph_id,
         preset.graph_version,
         user_id=user_id,
-        include_subgraphs=True,  # needed for full credentials aggregation
+        include_subgraphs=True,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
     )
     return preset, graph
 
@@ -1483,14 +1564,30 @@ async def _bind_builder_graph(
     if not builder_graph_id or _names_an_agent(params):
         return
     library_agent = await library_db().get_library_agent_by_graph_id(
-        user_id, builder_graph_id
+        user_id,
+        builder_graph_id,
+        organization_id=session.organization_id,
+        team_id_restriction=session.team_id,
+        exact_scope=True,
     )
-    if library_agent:
+    if library_agent and (library_agent.organization_id, library_agent.team_id) == (
+        session.organization_id,
+        session.team_id,
+    ):
         params.library_agent_id = library_agent.id
 
 
-def _call_key(user_id: str, params: RunAgentInput) -> tuple[str, str, str]:
-    return (user_id, params.library_agent_id or "", params.username_agent_slug)
+def _call_key(
+    user_id: str, session: ChatSession, params: RunAgentInput
+) -> tuple[str, str, str, str, str | None, str | None]:
+    return (
+        user_id,
+        params.library_agent_id or "",
+        params.username_agent_slug,
+        session.session_id,
+        session.organization_id,
+        session.team_id,
+    )
 
 
 def _names_an_agent(params: RunAgentInput) -> bool:

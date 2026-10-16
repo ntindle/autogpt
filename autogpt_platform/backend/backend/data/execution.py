@@ -1,6 +1,7 @@
 import logging
 import queue
 from collections import defaultdict
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from enum import Enum, StrEnum
 from typing import (
@@ -10,6 +11,7 @@ from typing import (
     Generator,
     Generic,
     Literal,
+    LiteralString,
     Mapping,
     Optional,
     TypeVar,
@@ -25,6 +27,7 @@ from prisma.models import (
     AgentNodeExecution,
     AgentNodeExecutionInputOutput,
     AgentNodeExecutionKeyValueData,
+    AgentPreset,
     Expert,
     LibraryAgent,
     SharedExecutionFile,
@@ -47,17 +50,26 @@ from pydantic.fields import Field
 
 from backend.blocks import get_block, get_io_block_ids, get_webhook_block_ids
 from backend.blocks._base import BlockType
+from backend.data.alerts import resolve_alert_conditions_for_source_execution
 from backend.data.expert_run_output import reconstruct_run_outputs
 from backend.data.sharing.execution_shares import (
     live_execution_share,
     soft_delete_and_unshare_execution,
 )
-from backend.data.tenancy import get_user_team_ids, visibility_filter
+from backend.data.tenancy import (
+    agent_graph_attachment_barrier,
+    agent_graph_attachment_mutation_barrier,
+    get_user_team_ids,
+    live_resource_access_barrier,
+    visibility_filter,
+)
+from backend.data.workspace import WorkspaceFile as WorkspaceFileModel
 from backend.notifications.scoring import score_completed_run
 from backend.util import type as type_utils
 from backend.util.exceptions import (
     DatabaseError,
     ExecutionFailureReason,
+    NotAuthorizedError,
     NotFoundError,
     get_execution_failure_reason,
 )
@@ -68,7 +80,7 @@ from backend.util.settings import Config
 from backend.util.truncate import truncate
 
 from .block import BlockInput, CompletedBlockOutput
-from .db import BaseDbModel, query_raw_with_schema
+from .db import BaseDbModel, get_database_schema, query_raw_with_schema, transaction
 from .event_bus import AsyncRedisEventBus, RedisEventBus
 from .includes import (
     EXECUTION_RESULT_INCLUDE,
@@ -130,6 +142,16 @@ class ExecutionContext(BaseModel):
     # Expert attribution: carried at runtime so billing can meter per-expert
     # spend and the executor can post run results into the expert's thread.
     expert_id: Optional[str] = None
+
+    # When set, this run executes a graph the consumer only reaches via an
+    # OWNER-mode team grant: the graph's own stored credential references
+    # resolve against THIS user's credential store (the graph owner), never
+    # the executing consumer's. Only ever the graph owner's id, resolved once
+    # at execution-start (see ``resolve_execution_credentials_owner``); the
+    # consumer never sees the secret. ``None`` for all normal runs (owner
+    # running own graph, CONSUMER-mode grants, marketplace/library, sub-graphs).
+    credentials_owner_id: Optional[str] = None
+    credentials_grant_id: Optional[str] = None
 
 
 # -------------------------- Models -------------------------- #
@@ -238,6 +260,7 @@ class GraphExecutionMeta(BaseDbModel):
     # paths where the caller doesn't re-supply them.
     organization_id: Optional[str] = None
     team_id: Optional[str] = None
+    parent_execution_id: Optional[str] = None
 
     # Expert attribution, surfaced from the DB row for the same
     # resume/requeue recovery reason as org/team above.
@@ -402,6 +425,7 @@ class GraphExecutionMeta(BaseDbModel):
             is_dry_run=stats.is_dry_run if stats else False,
             organization_id=_graph_exec.organizationId,
             team_id=_graph_exec.teamId,
+            parent_execution_id=_graph_exec.parentGraphExecutionId,
             expert_id=_graph_exec.expertId,
             trigger_source=_graph_exec.triggerSource,
             trigger_ref=_graph_exec.triggerRef,
@@ -631,9 +655,11 @@ async def get_graph_executions(
     started_time_lte: Optional[datetime] = None,
     limit: Optional[int] = None,
     team_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
     offset: Optional[int] = None,
     order_by: Literal["createdAt", "startedAt", "updatedAt"] = "createdAt",
     order_direction: Literal["asc", "desc"] = "desc",
+    personal_only: bool = False,
     expert_id: Optional[str] = None,
 ) -> list[GraphExecutionMeta]:
     """
@@ -662,6 +688,13 @@ async def get_graph_executions(
         where_filter["userId"] = user_id
     if team_id:
         where_filter["teamId"] = team_id
+    if organization_id is not None:
+        where_filter["organizationId"] = organization_id
+    if personal_only:
+        if organization_id is not None or team_id is not None:
+            raise ValueError("personal_only cannot be combined with org/team filters")
+        where_filter["organizationId"] = None
+        where_filter["teamId"] = None
     if graph_id:
         where_filter["agentGraphId"] = graph_id
     if graph_version is not None:
@@ -806,6 +839,7 @@ async def get_graph_executions_paginated(
     created_time_gte: Optional[datetime] = None,
     created_time_lte: Optional[datetime] = None,
     organization_id: Optional[str] = None,
+    team_id_restriction: str | None = None,
 ) -> GraphExecutionsPaginated:
     """Get paginated graph executions for a specific graph.
 
@@ -817,10 +851,14 @@ async def get_graph_executions_paginated(
         "isDeleted": False,
     }
     if organization_id is not None:
-        team_ids = await get_user_team_ids(user_id, organization_id)
-        where_filter["AND"] = _execution_visibility_filters(
-            user_id, organization_id, team_ids
-        )
+        if team_id_restriction is not None:
+            where_filter["organizationId"] = organization_id
+            where_filter["teamId"] = team_id_restriction
+        else:
+            team_ids = await get_user_team_ids(user_id, organization_id)
+            where_filter["AND"] = _execution_visibility_filters(
+                user_id, organization_id, team_ids
+            )
     else:
         where_filter["userId"] = user_id
 
@@ -860,11 +898,18 @@ async def get_graph_execution_meta(
     user_id: str,
     execution_id: str,
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> GraphExecutionMeta | None:
     where: AgentGraphExecutionWhereInput = {"id": execution_id, "isDeleted": False}
     if organization_id is not None:
-        team_ids = await get_user_team_ids(user_id, organization_id)
-        where["AND"] = _execution_visibility_filters(user_id, organization_id, team_ids)
+        if team_id_restriction is not None:
+            where["organizationId"] = organization_id
+            where["teamId"] = team_id_restriction
+        else:
+            team_ids = await get_user_team_ids(user_id, organization_id)
+            where["AND"] = _execution_visibility_filters(
+                user_id, organization_id, team_ids
+            )
     else:
         where["userId"] = user_id
     execution = await AgentGraphExecution.prisma().find_first(where=where)
@@ -877,6 +922,7 @@ async def get_graph_execution(
     execution_id: str,
     include_node_executions: Literal[True],
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> GraphExecutionWithNodes | None: ...
 
 
@@ -886,6 +932,7 @@ async def get_graph_execution(
     execution_id: str,
     include_node_executions: Literal[False] = False,
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> GraphExecution | None: ...
 
 
@@ -895,6 +942,7 @@ async def get_graph_execution(
     execution_id: str,
     include_node_executions: bool = False,
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> GraphExecution | GraphExecutionWithNodes | None: ...
 
 
@@ -903,11 +951,18 @@ async def get_graph_execution(
     execution_id: str,
     include_node_executions: bool = False,
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> GraphExecution | GraphExecutionWithNodes | None:
     where: AgentGraphExecutionWhereInput = {"id": execution_id, "isDeleted": False}
     if organization_id is not None:
-        team_ids = await get_user_team_ids(user_id, organization_id)
-        where["AND"] = _execution_visibility_filters(user_id, organization_id, team_ids)
+        if team_id_restriction is not None:
+            where["organizationId"] = organization_id
+            where["teamId"] = team_id_restriction
+        else:
+            team_ids = await get_user_team_ids(user_id, organization_id)
+            where["AND"] = _execution_visibility_filters(
+                user_id, organization_id, team_ids
+            )
     else:
         where["userId"] = user_id
     execution = await AgentGraphExecution.prisma().find_first(
@@ -928,6 +983,45 @@ async def get_graph_execution(
         if include_node_executions
         else GraphExecution.from_db(execution)
     )
+
+
+async def get_graph_execution_exact_scope(
+    user_id: str,
+    execution_id: str,
+    organization_id: str | None,
+    team_id: str | None,
+) -> GraphExecution | None:
+    execution = await AgentGraphExecution.prisma().find_first(
+        where={
+            "id": execution_id,
+            "userId": user_id,
+            "organizationId": organization_id,
+            "teamId": team_id,
+            "isDeleted": False,
+        },
+        include=graph_execution_include(
+            [*get_io_block_ids(), *get_webhook_block_ids()]
+        ),
+    )
+    return GraphExecution.from_db(execution) if execution else None
+
+
+async def has_exact_graph_execution_scope(
+    user_id: str,
+    execution_id: str,
+    organization_id: str | None,
+    team_id: str | None,
+) -> bool:
+    execution = await AgentGraphExecution.prisma().find_first(
+        where={
+            "id": execution_id,
+            "userId": user_id,
+            "organizationId": organization_id,
+            "teamId": team_id,
+            "isDeleted": False,
+        },
+    )
+    return execution is not None
 
 
 async def get_child_graph_executions(
@@ -968,11 +1062,82 @@ async def create_graph_execution(
     schedule_id: Optional[str] = None,
     webhook_id: Optional[str] = None,
 ) -> GraphExecutionWithNodes:
+    async with live_resource_access_barrier(
+        user_id, organization_id, team_id, "execute"
+    ) as allowed:
+        if not allowed:
+            raise NotAuthorizedError("Execution access was revoked")
+        async with agent_graph_attachment_barrier(graph_id):
+            from backend.data import graph as graph_db
+
+            await graph_db.validate_graph_execution_permissions(
+                user_id=user_id,
+                graph_id=graph_id,
+                graph_version=graph_version,
+                is_sub_graph=parent_graph_exec_id is not None,
+                organization_id=organization_id,
+                team_id_restriction=team_id,
+            )
+            return await _create_graph_execution_locked(
+                graph_id=graph_id,
+                graph_version=graph_version,
+                starting_nodes_input=starting_nodes_input,
+                inputs=inputs,
+                user_id=user_id,
+                preset_id=preset_id,
+                credential_inputs=credential_inputs,
+                nodes_input_masks=nodes_input_masks,
+                parent_graph_exec_id=parent_graph_exec_id,
+                is_dry_run=is_dry_run,
+                organization_id=organization_id,
+                team_id=team_id,
+                expert_id=expert_id,
+                trigger_source=trigger_source,
+                trigger_ref=trigger_ref,
+                schedule_id=schedule_id,
+                webhook_id=webhook_id,
+            )
+
+
+async def _create_graph_execution_locked(
+    graph_id: str,
+    graph_version: int,
+    starting_nodes_input: list[tuple[str, BlockInput]],
+    inputs: Mapping[str, JsonValue],
+    user_id: str,
+    preset_id: Optional[str] = None,
+    credential_inputs: Optional[Mapping[str, CredentialsMetaInput]] = None,
+    nodes_input_masks: Optional[NodesInputMasks] = None,
+    parent_graph_exec_id: Optional[str] = None,
+    is_dry_run: bool = False,
+    organization_id: Optional[str] = None,
+    team_id: Optional[str] = None,
+    expert_id: Optional[str] = None,
+    trigger_source: Optional[ExecutionTrigger] = None,
+    trigger_ref: Optional[str] = None,
+    schedule_id: Optional[str] = None,
+    webhook_id: Optional[str] = None,
+) -> GraphExecutionWithNodes:
     """
     Create a new AgentGraphExecution record.
     Returns:
         The id of the AgentGraphExecution and the list of ExecutionResult for each node.
     """
+    if preset_id:
+        preset = await AgentPreset.prisma().find_first(
+            where={
+                "id": preset_id,
+                "userId": user_id,
+                "agentGraphId": graph_id,
+                "agentGraphVersion": graph_version,
+                "organizationId": organization_id,
+                "teamId": team_id,
+                "isDeleted": False,
+            }
+        )
+        if preset is None:
+            raise ValueError(f"Preset #{preset_id} is unavailable for this execution")
+
     # Defense in depth: attribution must never cross users, even if a
     # caller forgets its ownership check. Only costs a query on the rare
     # expert-attributed path.
@@ -1040,7 +1205,10 @@ async def create_graph_execution(
         await LibraryAgent.prisma().update_many(
             where={
                 "agentGraphId": graph_id,
+                "agentGraphVersion": graph_version,
                 "userId": user_id,
+                "organizationId": organization_id,
+                "teamId": team_id,
                 "OR": [
                     {"lastRunAt": None},
                     {"lastRunAt": {"lt": run_time}},
@@ -1177,12 +1345,23 @@ async def get_execution_outputs_by_node_exec_id(
 async def update_graph_execution_start_time(
     graph_exec_id: str,
 ) -> GraphExecution | None:
-    res = await AgentGraphExecution.prisma().update(
-        where={"id": graph_exec_id},
+    client = AgentGraphExecution.prisma()
+    updated = await client.update_many(
+        where={
+            "id": graph_exec_id,
+            "executionStatus": {
+                "in": [ExecutionStatus.QUEUED, ExecutionStatus.INCOMPLETE]
+            },
+        },
         data={
             "executionStatus": ExecutionStatus.RUNNING,
             "startedAt": datetime.now(tz=timezone.utc),
         },
+    )
+    if updated != 1:
+        return None
+    res = await client.find_unique(
+        where={"id": graph_exec_id},
         include=graph_execution_include(
             [*get_io_block_ids(), *get_webhook_block_ids()]
         ),
@@ -1265,11 +1444,11 @@ async def update_graph_execution_stats(
                 f"This status can only be set at creation or is not a valid target status."
             )
 
-    updated = await AgentGraphExecution.prisma().update_many(
+    updated_count = await AgentGraphExecution.prisma().update_many(
         where=where_clause,
         data=update_data,
     )
-    if status is not None and updated == 0:
+    if status is not None and updated_count == 0:
         # The row exists but is not in a state this status may be reached
         # from (VALID_STATUS_TRANSITIONS), e.g. a second terminal write after
         # the run already finished. Nothing changed, so do not score it,
@@ -1403,17 +1582,41 @@ def _get_update_status_data(
 
 
 async def delete_graph_execution(
-    graph_exec_id: str, user_id: str, soft_delete: bool = True
+    graph_exec_id: str,
+    user_id: str,
+    soft_delete: bool = True,
+    organization_id: str | None = None,
+    team_id_restriction: str | None = None,
+    exact_scope: bool = False,
 ) -> None:
-    if soft_delete:
-        deleted_count = await soft_delete_and_unshare_execution(
-            execution_id=graph_exec_id, user_id=user_id
+    where: AgentGraphExecutionWhereInput = {
+        "id": graph_exec_id,
+        "userId": user_id,
+    }
+    if exact_scope:
+        where["organizationId"] = organization_id
+        where["teamId"] = team_id_restriction
+    elif organization_id is not None:
+        where["organizationId"] = organization_id
+        if team_id_restriction is not None:
+            where["teamId"] = team_id_restriction
+    candidate = await AgentGraphExecution.prisma().find_first(where=where)
+    if candidate is None:
+        raise DatabaseError(
+            f"Could not delete graph execution #{graph_exec_id}: not found"
         )
-    else:
-        # The schema cascades the share's file allowlist and chat links.
-        deleted_count = await AgentGraphExecution.prisma().delete_many(
-            where={"id": graph_exec_id, "userId": user_id}
-        )
+    async with agent_graph_attachment_mutation_barrier(candidate.agentGraphId):
+        await resolve_alert_conditions_for_source_execution(graph_exec_id)
+        if soft_delete:
+            deleted_count = await soft_delete_and_unshare_execution(
+                execution_id=graph_exec_id,
+                user_id=user_id,
+                organization_id=organization_id,
+                team_id=team_id_restriction,
+                exact_scope=exact_scope,
+            )
+        else:
+            deleted_count = await AgentGraphExecution.prisma().delete_many(where=where)
     if deleted_count < 1:
         raise DatabaseError(
             f"Could not delete graph execution #{graph_exec_id}: not found"
@@ -1861,6 +2064,9 @@ async def update_graph_execution_share_status(
     share_token: str | None,
     shared_at: datetime | None,
     shared_via: SharedVia | None = None,
+    organization_id: str | None = None,
+    team_id_restriction: str | None = None,
+    exact_scope: bool = False,
 ) -> None:
     """Update the sharing status of a graph execution.
 
@@ -1872,8 +2078,19 @@ async def update_graph_execution_share_status(
     if is_shared and shared_via is None:
         shared_via = SharedVia.USER
 
+    where: AgentGraphExecutionWhereInput = {
+        "id": execution_id,
+        "userId": user_id,
+    }
+    if exact_scope:
+        where["organizationId"] = organization_id
+        where["teamId"] = team_id_restriction
+    elif organization_id is not None:
+        where["organizationId"] = organization_id
+        if team_id_restriction is not None:
+            where["teamId"] = team_id_restriction
     updated = await AgentGraphExecution.prisma().update_many(
-        where={"id": execution_id, "userId": user_id},
+        where=where,
         data={
             "isShared": is_shared,
             "shareToken": share_token,
@@ -1984,11 +2201,20 @@ async def create_shared_execution_files(
     workspace = await UserWorkspace.prisma().find_unique(where={"userId": user_id})
     if not workspace:
         return 0
+    execution = await AgentGraphExecution.prisma().find_first(
+        where={"id": execution_id, "userId": user_id, "isDeleted": False}
+    )
+    if execution is None:
+        return 0
 
     owned_files = await UserWorkspaceFile.prisma().find_many(
         where={
             "id": {"in": list(file_ids)},
             "workspaceId": workspace.id,
+            "organizationId": execution.organizationId,
+            "teamId": execution.teamId,
+            "scopeResolved": True,
+            "isUserGlobalConfig": False,
             "isDeleted": False,
         }
     )
@@ -2016,6 +2242,100 @@ async def create_shared_execution_files(
     return created
 
 
+async def replace_execution_share(
+    execution_id: str,
+    user_id: str,
+    organization_id: str | None,
+    team_id: str | None,
+    *,
+    is_shared: bool,
+    share_token: str | None,
+    shared_at: datetime | None,
+    outputs: CompletedBlockOutput,
+) -> None:
+    if is_shared != (share_token is not None):
+        raise ValueError("A shared execution requires a token")
+
+    schema = get_database_schema()
+    schema_prefix = f'"{schema}".' if schema != "public" else ""
+    lock_query = cast(
+        LiteralString,
+        (
+            f'SELECT "id" FROM {schema_prefix}"AgentGraphExecution" '
+            'WHERE "id" = $1 AND "userId" = $2 '
+            'AND "organizationId" IS NOT DISTINCT FROM $3 '
+            'AND "teamId" IS NOT DISTINCT FROM $4 '
+            'AND "isDeleted" = false FOR UPDATE'
+        ),
+    )
+
+    async with transaction() as tx:
+        locked = await tx.query_raw(
+            lock_query,
+            execution_id,
+            user_id,
+            organization_id,
+            team_id,
+        )
+        if not locked:
+            raise NotFoundError(
+                f"Execution {execution_id} not found for user {user_id}"
+            )
+
+        await SharedExecutionFile.prisma(tx).delete_many(
+            where={"executionId": execution_id}
+        )
+        updated = await AgentGraphExecution.prisma(tx).update_many(
+            where={
+                "id": execution_id,
+                "userId": user_id,
+                "organizationId": organization_id,
+                "teamId": team_id,
+                "isDeleted": False,
+            },
+            data={
+                "isShared": is_shared,
+                "shareToken": share_token,
+                "sharedAt": shared_at,
+                "sharedVia": SharedVia.USER if is_shared else None,
+            },
+        )
+        if updated != 1:
+            raise NotFoundError(
+                f"Execution {execution_id} not found for user {user_id}"
+            )
+        if not is_shared:
+            return
+
+        file_ids = extract_workspace_file_ids(outputs)
+        if not file_ids:
+            return
+        workspace = await UserWorkspace.prisma(tx).find_unique(
+            where={"userId": user_id}
+        )
+        if not workspace:
+            return
+        owned_files = await UserWorkspaceFile.prisma(tx).find_many(
+            where={
+                "id": {"in": list(file_ids)},
+                "workspaceId": workspace.id,
+                "organizationId": organization_id,
+                "teamId": team_id,
+                "scopeResolved": True,
+                "isUserGlobalConfig": False,
+                "isDeleted": False,
+            }
+        )
+        for file in owned_files:
+            await SharedExecutionFile.prisma(tx).create(
+                data={
+                    "executionId": execution_id,
+                    "fileId": file.id,
+                    "shareToken": share_token,
+                }
+            )
+
+
 async def delete_shared_execution_files(execution_id: str) -> int:
     """Delete all shared file records for an execution.
 
@@ -2027,25 +2347,38 @@ async def delete_shared_execution_files(execution_id: str) -> int:
     return result
 
 
-async def get_shared_execution_file(
-    share_token: str,
-    file_id: str,
-) -> str | None:
-    """Look up a file ID in the shared execution file allowlist.
-
-    Returns the execution ID if the file is in the allowlist and the run's
-    share is still live (see :func:`live_execution_share`), None otherwise.
-    Uses a single query and returns a uniform None for all failure modes
-    to prevent timing-based enumeration attacks.
-    """
-    record = await SharedExecutionFile.prisma().find_first(
-        where={
-            "shareToken": share_token,
-            "fileId": file_id,
-            "Execution": {"is": live_execution_share(share_token)},
-        }
+@asynccontextmanager
+async def shared_execution_file_access(share_token: str, file_id: str):
+    """Hold the execution share row stable until download preparation completes."""
+    schema = get_database_schema()
+    schema_prefix = f'"{schema}".' if schema != "public" else ""
+    lock_query = cast(
+        LiteralString,
+        f'SELECT "id" FROM {schema_prefix}"AgentGraphExecution" '
+        'WHERE "shareToken" = $1 AND "isShared" = true '
+        'AND "isDeleted" = false FOR SHARE',
     )
-    return record.executionId if record else None
+    async with transaction() as tx:
+        locked = await tx.query_raw(lock_query, share_token)
+        if not locked:
+            yield None
+            return
+        execution_id = locked[0]["id"]
+        record = await SharedExecutionFile.prisma(tx).find_first(
+            where={
+                "executionId": execution_id,
+                "shareToken": share_token,
+                "fileId": file_id,
+                "Execution": {"is": live_execution_share(share_token)},
+            }
+        )
+        if record is None:
+            yield None
+            return
+        file = await UserWorkspaceFile.prisma(tx).find_first(
+            where={"id": file_id, "isDeleted": False}
+        )
+        yield WorkspaceFileModel.from_db(file) if file is not None else None
 
 
 async def get_frequently_executed_graphs(

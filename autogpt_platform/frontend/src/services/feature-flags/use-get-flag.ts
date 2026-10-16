@@ -43,6 +43,7 @@ const defaultFlags = {
   [Flag.GRAPHITI_COMMUNITIES_ENABLED]: false,
   [Flag.DREAM_PASS_ENABLED]: false,
   [Flag.DREAM_PASS_INVALIDATE_ENTITY]: false,
+  [Flag.SHOW_ORG_SETTINGS]: false,
   [Flag.DREAM_SKILL_LEARNING_ENABLED]: false,
   [Flag.COPILOT_BOT_PLATFORMS]: {} as Record<string, boolean>,
   [Flag.COPILOT_VOICE_MODE]: false,
@@ -60,6 +61,12 @@ type FlagValues = typeof defaultFlags;
  * with ``-`` → ``_``, upper-cased) to bypass LaunchDarkly for that flag
  * in local dev.  Returns ``undefined`` when no override is configured so
  * the caller falls through to LaunchDarkly / ``defaultFlags``.
+ *
+ * That transform is a naming *convention*, not code: the mapping below is
+ * an explicit switch, so the env var name is whatever each ``case`` spells
+ * out. For every flag it happens to equal the enum member name — including
+ * ``SHOW_ORG_SETTINGS``, whose value is already upper-snake and so
+ * transforms to itself.
  *
  * Note: ``NEXT_PUBLIC_*`` env vars are baked into the bundle at build
  * time, so the frontend image must be rebuilt after changing them.
@@ -110,6 +117,8 @@ function readEnvOverride(flag: Flag): string | undefined {
       return process.env.NEXT_PUBLIC_FORCE_FLAG_DREAM_PASS_ENABLED;
     case Flag.DREAM_PASS_INVALIDATE_ENTITY:
       return process.env.NEXT_PUBLIC_FORCE_FLAG_DREAM_PASS_INVALIDATE_ENTITY;
+    case Flag.SHOW_ORG_SETTINGS:
+      return process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS;
     case Flag.DREAM_SKILL_LEARNING_ENABLED:
       return process.env.NEXT_PUBLIC_FORCE_FLAG_DREAM_SKILL_LEARNING_ENABLED;
     case Flag.COPILOT_VOICE_MODE:

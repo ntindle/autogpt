@@ -123,6 +123,266 @@ async def test_upload_media_success(mock_settings, mock_storage_client):
     mock_storage_client.upload.assert_called_once()
 
 
+async def test_upload_media_org_scoped_storage_path(mock_settings, mock_storage_client):
+    """With organization_id set, files land under orgs/{org_id}/ instead of
+    users/{user_id}/ — the org avatar upload path."""
+    test_file = fastapi.UploadFile(
+        filename="logo.png",
+        file=io.BytesIO(b"\x89PNG\r\n\x1a\n"),
+        headers=starlette.datastructures.Headers({"content-type": "image/png"}),
+    )
+
+    result = await store_media.upload_media(
+        "test-user", test_file, organization_id="org-123"
+    )
+
+    assert result.startswith(
+        "https://storage.googleapis.com/test-bucket/orgs/org-123/images/"
+    )
+    assert result.endswith(".png")
+    assert "users/test-user" not in result
+    mock_storage_client.upload.assert_called_once()
+
+
+async def test_upload_media_org_scoped_local_storage(tmp_path, monkeypatch, mocker):
+    settings = Settings()
+    settings.config.media_gcs_bucket_name = ""
+    settings.config.media_storage_dir = str(tmp_path)
+    monkeypatch.setattr("backend.api.features.store.media.Settings", lambda: settings)
+    mocker.patch(
+        "backend.api.features.store.media.scan_content_safe", new_callable=AsyncMock
+    )
+    test_file = fastapi.UploadFile(
+        filename="logo.png",
+        file=io.BytesIO(b"\x89PNG\r\n\x1a\n"),
+        headers=starlette.datastructures.Headers({"content-type": "image/png"}),
+    )
+
+    result = await store_media.upload_media(
+        "test-user", test_file, organization_id="org-123"
+    )
+
+    filename = result.rsplit("/", 1)[-1]
+    assert result == f"/api/orgs/org-123/avatar/{filename}"
+    assert (tmp_path / "orgs" / "org-123" / "images" / filename).read_bytes() == (
+        b"\x89PNG\r\n\x1a\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("platform_base_url", "team_id", "expected_url", "expected_parts"),
+    [
+        (
+            "",
+            None,
+            "/api/store/media/orgs/org-123/images/listing.png",
+            ("store", "orgs", "org-123", "home", "images", "listing.png"),
+        ),
+        (
+            "https://autogpt.example/_agpt",
+            "team-456",
+            "/_agpt/api/store/media/orgs/org-123/teams/team-456/images/listing.png",
+            (
+                "store",
+                "orgs",
+                "org-123",
+                "teams",
+                "team-456",
+                "images",
+                "listing.png",
+            ),
+        ),
+        (
+            "https://autogpt.example",
+            None,
+            "/api/store/media/orgs/org-123/images/listing.png",
+            ("store", "orgs", "org-123", "home", "images", "listing.png"),
+        ),
+        (
+            "https://autogpt.example//attacker.example\\_agpt/../safe",
+            None,
+            "/attacker.example/safe/api/store/media/orgs/org-123/images/listing.png",
+            ("store", "orgs", "org-123", "home", "images", "listing.png"),
+        ),
+    ],
+)
+async def test_upload_store_media_uses_tenant_scoped_local_storage(
+    tmp_path,
+    monkeypatch,
+    mocker,
+    platform_base_url,
+    team_id,
+    expected_url,
+    expected_parts,
+):
+    settings = Settings()
+    settings.config.media_gcs_bucket_name = ""
+    settings.config.media_storage_dir = str(tmp_path)
+    settings.config.platform_base_url = platform_base_url
+    monkeypatch.setattr("backend.api.features.store.media.Settings", lambda: settings)
+    mocker.patch(
+        "backend.api.features.store.media.scan_content_safe", new_callable=AsyncMock
+    )
+    test_file = fastapi.UploadFile(
+        filename="listing.png",
+        file=io.BytesIO(b"\x89PNG\r\n\x1a\n"),
+        headers=starlette.datastructures.Headers({"content-type": "image/png"}),
+    )
+
+    result = await store_media.upload_media(
+        "test-user",
+        test_file,
+        use_file_name=True,
+        organization_id="org-123",
+        team_id=team_id,
+        local_store_media=True,
+    )
+
+    assert result == expected_url
+    assert tmp_path.joinpath(*expected_parts).read_bytes() == b"\x89PNG\r\n\x1a\n"
+    assert (
+        await store_media.check_media_exists(
+            "test-user",
+            "listing.png",
+            organization_id="org-123",
+            team_id=team_id,
+            local_store_media=True,
+        )
+        == expected_url
+    )
+
+
+def test_local_store_media_url_encodes_dynamic_path_segments(monkeypatch):
+    settings = Settings()
+    settings.config.platform_base_url = (
+        "https://autogpt.example/_agpt?next=//bad#fragment"
+    )
+    monkeypatch.setattr("backend.api.features.store.media.Settings", lambda: settings)
+
+    result = store_media.get_local_store_media_url(
+        "org?admin=true", "team#other", "images", "listing name%.png"
+    )
+
+    assert result == (
+        "/_agpt/api/store/media/orgs/org%3Fadmin%3Dtrue/teams/team%23other/"
+        "images/listing%20name%25.png"
+    )
+
+
+async def test_local_store_media_does_not_cross_team_scopes(
+    tmp_path, monkeypatch, mocker
+):
+    settings = Settings()
+    settings.config.media_gcs_bucket_name = ""
+    settings.config.media_storage_dir = str(tmp_path)
+    monkeypatch.setattr("backend.api.features.store.media.Settings", lambda: settings)
+    mocker.patch(
+        "backend.api.features.store.media.scan_content_safe", new_callable=AsyncMock
+    )
+    for team_id, content in (("team-a", b"A"), ("team-b", b"B")):
+        test_file = fastapi.UploadFile(
+            filename="listing.png",
+            file=io.BytesIO(b"\x89PNG\r\n\x1a\n" + content),
+            headers=starlette.datastructures.Headers({"content-type": "image/png"}),
+        )
+        await store_media.upload_media(
+            "test-user",
+            test_file,
+            use_file_name=True,
+            organization_id="org-123",
+            team_id=team_id,
+            local_store_media=True,
+        )
+
+    team_a = store_media.get_local_store_media_path(
+        "org-123", "team-a", "images", "listing.png"
+    )
+    team_b = store_media.get_local_store_media_path(
+        "org-123", "team-b", "images", "listing.png"
+    )
+    assert team_a != team_b
+    assert team_a.read_bytes().endswith(b"A")
+    assert team_b.read_bytes().endswith(b"B")
+
+
+async def test_gcs_store_media_preserves_hosted_org_path(
+    mock_settings, mock_storage_client
+):
+    test_file = fastapi.UploadFile(
+        filename="listing.png",
+        file=io.BytesIO(b"\x89PNG\r\n\x1a\n"),
+        headers=starlette.datastructures.Headers({"content-type": "image/png"}),
+    )
+
+    result = await store_media.upload_media(
+        "test-user",
+        test_file,
+        use_file_name=True,
+        organization_id="org-123",
+        team_id="team-456",
+        local_store_media=True,
+    )
+
+    assert result == (
+        "https://storage.googleapis.com/test-bucket/orgs/org-123/images/listing.png"
+    )
+    upload = mock_storage_client.upload.await_args
+    assert upload.args[:2] == ("test-bucket", "orgs/org-123/images/listing.png")
+
+
+async def test_upload_media_rejects_filename_scope_escape(
+    mock_settings, mock_storage_client
+):
+    test_file = fastapi.UploadFile(
+        filename="../../other-org/images/avatar.png",
+        file=io.BytesIO(b"\x89PNG\r\n\x1a\n"),
+        headers=starlette.datastructures.Headers({"content-type": "image/png"}),
+    )
+
+    with pytest.raises(
+        store_exceptions.InvalidFileTypeError, match="Invalid file name"
+    ):
+        await store_media.upload_media(
+            "test-user",
+            test_file,
+            use_file_name=True,
+            organization_id="org-123",
+        )
+
+    mock_storage_client.upload.assert_not_called()
+
+
+def test_local_media_path_rejects_escape(tmp_path, monkeypatch):
+    settings = Settings()
+    settings.config.media_storage_dir = str(tmp_path)
+    monkeypatch.setattr("backend.api.features.store.media.Settings", lambda: settings)
+
+    with pytest.raises(ValueError, match="Invalid media path"):
+        store_media.get_local_media_path("../outside.png")
+
+    sibling = tmp_path.parent / f"{tmp_path.name}-outside" / "avatar.png"
+    with pytest.raises(ValueError, match="Invalid media path"):
+        store_media.get_local_media_path(str(sibling))
+
+
+@pytest.mark.parametrize(
+    ("organization_id", "team_id", "media_type", "filename"),
+    [
+        ("../other-org", None, "images", "listing.png"),
+        ("org-123", "../other-team", "images", "listing.png"),
+        ("org-123", None, "../videos", "listing.png"),
+        ("org-123", None, "images", "../listing.png"),
+    ],
+)
+def test_local_store_media_rejects_scope_escape(
+    organization_id, team_id, media_type, filename
+):
+    with pytest.raises(ValueError, match="Invalid media path"):
+        store_media.get_local_store_media_path(
+            organization_id, team_id, media_type, filename
+        )
+
+
 async def test_upload_media_invalid_type(mock_settings, mock_storage_client):
     test_file = fastapi.UploadFile(
         filename="test.txt",

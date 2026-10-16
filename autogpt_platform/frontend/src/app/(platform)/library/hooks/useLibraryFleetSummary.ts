@@ -2,6 +2,7 @@
 
 import {
   getGetV1ListAllExecutionsQueryKey,
+  getGetV1UserCostSummaryQueryKey,
   useGetV1ListAllExecutions,
   useGetV1UserCostSummary,
 } from "@/app/api/__generated__/endpoints/graphs/graphs";
@@ -20,6 +21,12 @@ import {
   isFailed,
   SEVENTY_TWO_HOURS_MS,
 } from "./executionHelpers";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
+import { getTenantEntityKey } from "@/services/org-team/identity";
+import { useOrgTeamStore } from "@/services/org-team/store";
 
 function isRecentFailure(
   status: string,
@@ -47,10 +54,22 @@ export function useLibraryFleetSummary(
   agents: LibraryAgent[],
 ): FleetSummary | undefined {
   const queryClient = useQueryClient();
+  const activeOrgID = useOrgTeamStore((s) => s.activeOrgID);
+  const activeTeamID = useOrgTeamStore((s) => s.activeTeamID);
+  const isTenantReady = useOrgTeamStore((s) => s.isLoaded);
   const isBillingEnabled = useIsBillingEnabled();
 
   const { data: executions, isSuccess } = useGetV1ListAllExecutions({
-    query: { select: okData },
+    query: {
+      enabled: isTenantReady,
+      queryKey: getTeamScopedQueryKey(
+        getGetV1ListAllExecutionsQueryKey(),
+        activeOrgID,
+        activeTeamID,
+      ),
+      select: okData,
+    },
+    request: getTenantRequestInit(activeOrgID, activeTeamID, isTenantReady),
   });
 
   // Authoritative monthly total comes from the server-side aggregator so it
@@ -58,13 +77,27 @@ export function useLibraryFleetSummary(
   // shows spend, so there is nothing to fetch.
   const { data: costSummary } = useGetV1UserCostSummary(undefined, {
     query: {
+      enabled: isTenantReady && isBillingEnabled,
+      queryKey: getTeamScopedQueryKey(
+        getGetV1UserCostSummaryQueryKey(),
+        activeOrgID,
+        activeTeamID,
+      ),
       select: (res) => res.data as UserExecutionCostSummary,
       staleTime: 60_000,
-      enabled: isBillingEnabled,
     },
+    request: getTenantRequestInit(activeOrgID, activeTeamID, isTenantReady),
   });
 
-  const graphIDs = useMemo(() => agents.map((a) => a.graph_id), [agents]);
+  const graphScopes = useMemo(
+    () =>
+      agents.map((agent) => ({
+        graphId: agent.graph_id,
+        organizationId: agent.organization_id ?? null,
+        teamId: agent.team_id ?? null,
+      })),
+    [agents],
+  );
 
   const handleExecutionUpdate = useCallback(() => {
     queryClient.invalidateQueries({
@@ -73,8 +106,8 @@ export function useLibraryFleetSummary(
   }, [queryClient]);
 
   useExecutionEvents({
-    graphIds: graphIDs.length > 0 ? graphIDs : undefined,
-    enabled: graphIDs.length > 0,
+    graphScopes: graphScopes.length > 0 ? graphScopes : undefined,
+    enabled: graphScopes.length > 0,
     onExecutionUpdate: handleExecutionUpdate,
   });
 
@@ -86,14 +119,19 @@ export function useLibraryFleetSummary(
     const agentsWithRecentCompletion = new Set<string>();
 
     for (const exec of executions) {
+      const executionKey = getTenantEntityKey(
+        exec.graph_id,
+        exec.organization_id,
+        exec.team_id,
+      );
       if (isActive(exec.status)) {
-        agentsWithActiveExecution.add(exec.graph_id);
+        agentsWithActiveExecution.add(executionKey);
       }
       if (isRecentFailure(exec.status, exec.ended_at)) {
-        agentsWithRecentFailure.add(exec.graph_id);
+        agentsWithRecentFailure.add(executionKey);
       }
       if (isRecentCompletion(exec.status, exec.ended_at)) {
-        agentsWithRecentCompletion.add(exec.graph_id);
+        agentsWithRecentCompletion.add(executionKey);
       }
     }
 
@@ -114,9 +152,14 @@ export function useLibraryFleetSummary(
     };
 
     for (const agent of agents) {
-      if (agentsWithActiveExecution.has(agent.graph_id)) {
+      const agentKey = getTenantEntityKey(
+        agent.graph_id,
+        agent.organization_id,
+        agent.team_id,
+      );
+      if (agentsWithActiveExecution.has(agentKey)) {
         summary.running += 1;
-      } else if (agentsWithRecentFailure.has(agent.graph_id)) {
+      } else if (agentsWithRecentFailure.has(agentKey)) {
         summary.error += 1;
       } else if (agent.has_external_trigger) {
         summary.listening += 1;
@@ -129,9 +172,9 @@ export function useLibraryFleetSummary(
       // the sitrep priority order used by the "Recently completed" tab list)
       // but orthogonal to listening/scheduled/idle.
       if (
-        !agentsWithActiveExecution.has(agent.graph_id) &&
-        !agentsWithRecentFailure.has(agent.graph_id) &&
-        agentsWithRecentCompletion.has(agent.graph_id)
+        !agentsWithActiveExecution.has(agentKey) &&
+        !agentsWithRecentFailure.has(agentKey) &&
+        agentsWithRecentCompletion.has(agentKey)
       ) {
         summary.completed += 1;
       }

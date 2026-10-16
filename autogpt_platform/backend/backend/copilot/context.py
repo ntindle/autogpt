@@ -11,7 +11,8 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING
 
 from backend.copilot.model import ChatSession
-from backend.data.db_accessors import workspace_db
+from backend.data.db_accessors import chat_db, workspace_db
+from backend.data.tenancy import ResourceAccess
 from backend.data.workspace_scope import WorkspaceAccessDeniedError, WorkspaceScope
 from backend.util.workspace import WorkspaceManager
 
@@ -415,7 +416,12 @@ async def current_workspace_scope(
     return scope.with_session(session.session_id)
 
 
-async def get_workspace_manager(user_id: str, session_id: str) -> WorkspaceManager:
+async def get_workspace_manager(
+    user_id: str,
+    session_id: str,
+    *,
+    access: ResourceAccess = "execute",
+) -> WorkspaceManager:
     """Create a session-scoped :class:`WorkspaceManager`.
 
     Placed here (rather than in ``tools/workspace_files``) so that modules
@@ -425,7 +431,18 @@ async def get_workspace_manager(user_id: str, session_id: str) -> WorkspaceManag
     """
     workspace = await workspace_db().get_or_create_workspace(user_id)
     scope = await current_workspace_scope(user_id, session_id)
-    return WorkspaceManager(user_id, workspace.id, session_id, scope=scope)
+    session = await chat_db().get_chat_session_metadata(session_id)
+    if session is None or session.user_id != user_id:
+        raise ValueError("Chat session not found")
+    return WorkspaceManager(
+        user_id,
+        workspace.id,
+        session_id,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
+        access=access,
+        scope=scope,
+    )
 
 
 def is_allowed_local_path(path: str, sdk_cwd: str | None = None) -> bool:

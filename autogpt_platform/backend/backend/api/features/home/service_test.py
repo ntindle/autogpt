@@ -48,6 +48,14 @@ def _cost_summary() -> UserExecutionCostSummary:
 @pytest.fixture
 def home_dependencies(mocker: MockerFixture):
     mocker.patch(
+        "backend.api.features.home.service.get_user_team_ids",
+        AsyncMock(return_value=["team-1"]),
+    )
+    mocker.patch(
+        "backend.api.features.home.service.get_personal_org_owner",
+        AsyncMock(return_value="user-1"),
+    )
+    mocker.patch(
         "backend.api.features.home.service.experts_db.list_experts",
         AsyncMock(return_value=[]),
     )
@@ -358,7 +366,7 @@ async def test_activity_summary_hidden_when_flag_disabled(
 
 
 @pytest.mark.asyncio
-async def test_schedules_stay_owner_scoped_inside_an_organization(
+async def test_schedules_receive_the_selected_organization_scope(
     mocker: MockerFixture, home_dependencies
 ) -> None:
     mocker.patch(
@@ -379,10 +387,69 @@ async def test_schedules_stay_owner_scoped_inside_an_organization(
 
     await build_home_dashboard(user_id="user-1", ctx=_org_ctx(is_org_owner=True))
 
-    # Executions, reviews and cost totals are personal, so a teammate's schedule
-    # would show an upcoming run whose outcome never lands anywhere else.
-    scheduler.get_execution_schedules.assert_awaited_once_with(user_id="user-1")
+    scheduler.get_execution_schedules.assert_awaited_once_with(
+        user_id="user-1",
+        organization_id="org-1",
+        team_ids=["team-1"],
+    )
     get_credit_model.assert_awaited_once_with("user-1", "org-1")
+
+
+@pytest.mark.asyncio
+async def test_team_organization_never_reads_a_personal_stored_briefing(
+    mocker: MockerFixture, home_dependencies
+) -> None:
+    owner = mocker.patch(
+        "backend.api.features.home.service.get_personal_org_owner",
+        AsyncMock(return_value="another-user"),
+    )
+    briefing = mocker.patch(
+        "backend.api.features.home.service.briefing_db.get_briefing_for_date",
+        AsyncMock(return_value=MagicMock(content=_stored_briefing())),
+    )
+
+    dashboard = await build_home_dashboard(
+        user_id="user-1", organization_id="org-1", team_id="team-1"
+    )
+
+    owner.assert_awaited_once_with("org-1")
+    briefing.assert_not_awaited()
+    assert dashboard.briefing.source == "live"
+
+
+@pytest.mark.asyncio
+async def test_home_passes_exact_workspace_scope_to_roster_and_library(
+    mocker: MockerFixture, home_dependencies
+) -> None:
+    mocker.patch(
+        "backend.api.features.home.service.get_personal_org_owner",
+        AsyncMock(return_value="another-user"),
+    )
+    experts = mocker.patch(
+        "backend.api.features.home.service.experts_db.list_experts",
+        AsyncMock(return_value=[]),
+    )
+    refs = mocker.patch(
+        "backend.api.features.home.service.library_db.get_library_agent_refs_by_graph_ids",
+        AsyncMock(return_value=[]),
+    )
+
+    await build_home_dashboard(
+        user_id="user-1", organization_id="org-1", team_id="team-1"
+    )
+
+    experts.assert_awaited_once_with(
+        "user-1",
+        organization_id="org-1",
+        team_id_restriction="team-1",
+        team_ids=["team-1"],
+    )
+    refs.assert_awaited_once_with(
+        "user-1",
+        ["graph-1"],
+        organization_id="org-1",
+        team_id_restriction="team-1",
+    )
 
 
 @pytest.mark.asyncio
@@ -430,7 +497,9 @@ class TestPendingQuestionsFlagGate:
             AsyncMock(return_value=["should never be reached"]),
         )
 
-        result = await _get_pending_questions(user_id="user-1")
+        result = await _get_pending_questions(
+            user_id="user-1", organization_id="org-1", team_ids=["team-1"]
+        )
 
         assert result == []
         get_sessions.assert_not_awaited()
@@ -449,10 +518,14 @@ class TestPendingQuestionsFlagGate:
             AsyncMock(return_value=["session-info"]),
         )
 
-        result = await _get_pending_questions(user_id="user-1")
+        result = await _get_pending_questions(
+            user_id="user-1", organization_id="org-1", team_ids=["team-1"]
+        )
 
         assert result == ["session-info"]
-        get_sessions.assert_awaited_once_with("user-1")
+        get_sessions.assert_awaited_once_with(
+            "user-1", organization_id="org-1", team_ids=["team-1"]
+        )
 
 
 def _org_ctx(

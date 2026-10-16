@@ -125,6 +125,7 @@ async def ensure_task_session(task: WorkspaceTask):
             else None
         ),
         organization_id=task.organization_id,
+        team_id=task.team_id,
         origin="interactive",
         llm_auth_provider=provider,
         llm_credential_id=credential,

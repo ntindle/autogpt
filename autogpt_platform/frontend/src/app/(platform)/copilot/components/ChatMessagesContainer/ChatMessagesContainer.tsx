@@ -80,6 +80,7 @@ import {
 } from "../../helpers/workspaceAttachments";
 import { Clock01Icon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { getWorkspaceDownloadHref } from "@/services/org-team/workspace";
 import { ChatErrorBanner } from "./components/ChatErrorBanner/ChatErrorBanner";
 
 interface Props {
@@ -94,6 +95,8 @@ interface Props {
    *  zero on every fresh mount. */
   activeStreamStartedAt?: string | null;
   sessionID?: string | null;
+  organizationId?: string | null;
+  teamId?: string | null;
   /** Session-level lifecycle: ``"idle" | "queued" | "running"``.
    *  The Queued badge anchors on the latest user message iff this is
    *  ``"queued"``. */
@@ -290,6 +293,8 @@ export function ChatMessagesContainer({
   restoreStatusMessage,
   activeStreamStartedAt,
   sessionID,
+  organizationId,
+  teamId,
   sessionChatStatus,
   hasMoreMessages,
   isLoadingMore,
@@ -309,6 +314,10 @@ export function ChatMessagesContainer({
   variant = "default",
   showThreadHeader = true,
 }: Props) {
+  const scopedFileUrlBuilder =
+    fileUrlBuilder ??
+    ((fileId: string) =>
+      getWorkspaceDownloadHref(fileId, organizationId ?? null, teamId ?? null));
   const isCompact = variant === "compact";
   const messages = useMemo(
     () => hideKickoffMessages(allMessages),
@@ -672,7 +681,7 @@ export function ChatMessagesContainer({
                       messageID={message.id}
                       isCurrentlyStreaming={isCurrentlyStreaming}
                       onRetry={isLastAssistant ? onRetry : undefined}
-                      fileUrlBuilder={fileUrlBuilder}
+                      fileUrlBuilder={scopedFileUrlBuilder}
                       readOnly={readOnly}
                       compactionPhase={compactionPhase}
                       liveCompactionCallId={liveCompactionCallId}
@@ -690,7 +699,7 @@ export function ChatMessagesContainer({
                           part={part}
                           messageID={message.id}
                           partIndex={i}
-                          fileUrlBuilder={fileUrlBuilder}
+                          fileUrlBuilder={scopedFileUrlBuilder}
                           readOnly={readOnly}
                           compactionPhase={compactionPhase}
                           liveCompactionCallId={liveCompactionCallId}
@@ -757,6 +766,9 @@ export function ChatMessagesContainer({
                     folders={folderParts}
                     isUser={message.role === "user"}
                     filePattern={filePattern}
+                    fileUrlBuilder={scopedFileUrlBuilder}
+                    organizationId={organizationId ?? null}
+                    teamId={teamId ?? null}
                     readOnly={readOnly}
                   />
                 )}
@@ -829,11 +841,15 @@ export function ChatMessagesContainer({
             <CopilotPendingReviews
               graphExecId={reviewTarget.graphExecId}
               graphId={reviewTarget.graphId}
+              organizationId={organizationId ?? null}
+              teamId={teamId ?? null}
             />
           )}
           {!readOnly && sessionID && (
             <CopilotPendingReviews
               chatSessionId={sessionID}
+              organizationId={organizationId ?? null}
+              teamId={teamId ?? null}
               pollWhileEmpty={reviewTarget?.kind === "chat"}
               refetchKey={countHeldCalls(messages)}
               expertName={expertIdentity?.name ?? null}

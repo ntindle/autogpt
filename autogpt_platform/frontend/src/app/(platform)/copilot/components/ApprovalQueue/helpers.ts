@@ -33,7 +33,14 @@ export type RuleScope = "chat" | "expert" | "team";
 export interface ApprovalItem {
   reviewId: string;
   // Which list the answer refreshes: a chat's queue, or a run's.
-  scope: Pick<PendingHumanReviewModel, "graph_exec_id" | "session_id">;
+  scope: Pick<
+    PendingHumanReviewModel,
+    | "node_exec_id"
+    | "graph_exec_id"
+    | "session_id"
+    | "organization_id"
+    | "team_id"
+  >;
   toolName: string;
   toolCallId: string;
   args: Record<string, unknown>;
@@ -76,6 +83,9 @@ export function toApprovalItem(review: PendingHumanReviewModel): ApprovalItem {
   return {
     reviewId: review.node_exec_id,
     scope: {
+      node_exec_id: review.node_exec_id,
+      organization_id: review.organization_id,
+      team_id: review.team_id,
       graph_exec_id: review.graph_exec_id,
       session_id: review.session_id,
     },

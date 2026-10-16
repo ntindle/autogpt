@@ -6,6 +6,8 @@ import type { WorkspaceFolder } from "@/app/api/__generated__/models/workspaceFo
 import { isHiddenWorkspaceFile } from "@/lib/workspace-files";
 import { type InfiniteData, useInfiniteQuery } from "@tanstack/react-query";
 import { ancestorsOf } from "./components/WorkspaceFolders/folderTree";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+import { useOrgTeamStore } from "@/services/org-team/store";
 
 export type OriginFilter = "all" | "uploaded" | "generated";
 export type ArtifactsView = "list" | "grid";
@@ -48,6 +50,9 @@ export function useArtifactsPage({
     !isFoldersError &&
     !folders.some((folder) => folder.id === folderParam);
   const selectedFolderId = isStaleFolder ? null : folderParam;
+  const organizationId = useOrgTeamStore((state) => state.activeOrgID);
+  const teamId = useOrgTeamStore((state) => state.activeTeamID);
+  const isTenantReady = useOrgTeamStore((state) => state.isLoaded);
 
   // Remembered while the folder is live, so deleting it (or an ancestor) can
   // land the user one level up instead of back at the root.
@@ -96,18 +101,25 @@ export function useArtifactsPage({
         folderId: folderId ?? null,
         rootOnly,
         expertId: expertId ?? null,
+        organizationId,
+        teamId,
+        isTenantReady,
       },
     ] as const,
     queryFn: ({ pageParam }) =>
-      listWorkspaceFiles({
-        limit: ARTIFACTS_PAGE_SIZE,
-        offset: pageParam,
-        q,
-        origin,
-        folder_id: folderId,
-        root_only: rootOnly,
-        expert_id: expertId,
-      }),
+      listWorkspaceFiles(
+        {
+          limit: ARTIFACTS_PAGE_SIZE,
+          offset: pageParam,
+          q,
+          origin,
+          folder_id: folderId,
+          root_only: rootOnly,
+          expert_id: expertId,
+        },
+        getTenantRequestInit(organizationId, teamId, isTenantReady),
+      ),
+    enabled: isTenantReady,
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
       if (lastPage.status !== 200) return undefined;

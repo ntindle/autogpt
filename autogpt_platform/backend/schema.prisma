@@ -580,6 +580,14 @@ model UserWorkspaceFile {
 
   metadata Json @default("{}")
 
+  organizationId     String?
+  teamId             String?
+  sessionId          String?
+  executionId        String?
+  scopeKey           String  @default("__scope__")
+  scopeResolved      Boolean @default(true)
+  isUserGlobalConfig Boolean @default(false)
+
   // User-level organization. Null = root. The folder API soft-deletes
   // folders and reparents files to root; SetNull is a hard-delete safety net.
   folderId String?
@@ -593,6 +601,9 @@ model UserWorkspaceFile {
   // ("UserWorkspaceFile_workspaceId_path_live_key"). A soft-deleted row keeps
   // the path it was deleted at.
   @@index([workspaceId, isDeleted])
+  @@index([workspaceId, organizationId, teamId, isDeleted])
+  @@index([sessionId])
+  @@index([executionId])
   @@index([folderId])
 }
 
@@ -609,6 +620,11 @@ model UserWorkspaceFolder {
   name String
   icon String?
 
+  organizationId String?
+  teamId         String?
+  scopeKey       String  @default("__scope__")
+  scopeResolved  Boolean @default(true)
+
   // Null = a folder at the workspace root.
   parentId String?
   Parent   UserWorkspaceFolder?  @relation("WorkspaceFolderHierarchy", fields: [parentId], references: [id], onDelete: Cascade)
@@ -622,6 +638,7 @@ model UserWorkspaceFolder {
   // rules are partial unique indexes created in migrations
   // ("..._workspaceId_parentId_name_live_key" and "..._workspaceId_name_root_key").
   @@index([workspaceId, isDeleted])
+  @@index([workspaceId, organizationId, teamId, isDeleted])
 }
 
 // Tracks which workspace files are exposed via a shared execution.
@@ -658,8 +675,10 @@ model BuilderSearchHistory {
 
   // Tenancy
   organizationId String?
+  teamId         String?
 
   @@index([organizationId])
+  @@index([organizationId, teamId])
 }
 
 ////////////////////////////////////////////////////////////
@@ -724,7 +743,7 @@ model ChatSession {
   organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
   // When true, the session is pinned to the top of the user's sidebar
   // list, surfacing ahead of unpinned sessions regardless of recency.
@@ -912,12 +931,13 @@ model AgentGraph {
   Presets              AgentPreset[]
   LibraryAgents        LibraryAgent[]
   StoreListingVersions StoreListingVersion[]
+  Grants               AgentGraphGrant[]
 
   // Tenancy columns (nullable until cutover migration backfills existing data)
   organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
   @@id(name: "graphVersionId", [id, version])
   @@index([userId, isActive, id, version])
@@ -979,7 +999,7 @@ model AgentPreset {
   organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
   @@index([userId])
   @@index([agentGraphId, agentGraphVersion])
@@ -1054,6 +1074,13 @@ model AlertCondition {
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Immutable authorization provenance for resource-derived alerts. Personal
+  // account alerts leave these null.
+  organizationId         String?
+  teamId                 String?
+  sourceGraphExecutionId String?
+  SourceGraphExecution   AgentGraphExecution? @relation(fields: [sourceGraphExecutionId], references: [id], onDelete: Cascade)
+
   cause    AlertCause
   // Stable identity of the underlying problem (e.g. "auth_expired:gmail:<graph
   // id>"), so re-raising the same condition updates one row instead of piling
@@ -1071,6 +1098,8 @@ model AlertCondition {
   @@unique([userId, causeKey])
   @@index([status, createdAt])
   @@index([userId, status])
+  @@index([userId, organizationId, teamId, status])
+  @@index([sourceGraphExecutionId])
 }
 
 model NotificationEvent {
@@ -1171,10 +1200,11 @@ model LibraryAgent {
   // Tenancy
   organizationId String?
   teamId         String?
+  scopeKey       String             @default("__scope__")
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
-  @@unique([userId, agentGraphId, agentGraphVersion])
+  @@unique([userId, agentGraphId, agentGraphVersion, scopeKey])
   @@index([agentGraphId, agentGraphVersion])
   @@index([creatorId])
   @@index([folderId])
@@ -1206,7 +1236,7 @@ model LibraryFolder {
   organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
   @@unique([userId, parentId, name]) // Name unique per parent per user
   @@index([organizationId])
@@ -1300,7 +1330,7 @@ model Expert {
   organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
   // Hire idempotency: one hired copy per (user, template). Postgres allows
   // multiple NULL ownerUserId rows, so templates are unaffected.
@@ -1945,12 +1975,13 @@ model AgentGraphExecution {
   sharedVia            SharedVia?
   SharedExecutionFiles SharedExecutionFile[]
   ChatLinkedShares     ChatLinkedShare[]
+  AlertConditions      AlertCondition[]
 
   // Tenancy (nullable until cutover migration backfills existing data)
   organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
   @@index([agentGraphId, agentGraphVersion])
   @@index([userId, isDeleted, createdAt])
@@ -2100,7 +2131,7 @@ model IntegrationWebhook {
   organizationId String?
   teamId         String?
   visibility     ResourceVisibility @default(PRIVATE)
-  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: SetNull)
+  Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
   @@index([organizationId])
 }
@@ -2227,6 +2258,26 @@ enum CredentialOwnerType {
   USER
   TEAM
   ORG
+}
+
+// Polymorphic on purpose: v1 enforcement accepts TEAM only and raises on
+// anything else; USER (and later PERSONA) are reserved so enabling them is an
+// enum value + code path, not a table migration.
+enum GrantPrincipalType {
+  TEAM
+  USER
+}
+
+// EXECUTE implies VIEW.
+enum GrantCapability {
+  VIEW
+  EXECUTE
+}
+
+// Whose credentials a granted agent runs with; room for a RESTRICTED mode.
+enum GrantCredentialMode {
+  CONSUMER
+  OWNER
 }
 
 model CreditTransaction {
@@ -2456,6 +2507,7 @@ view StoreSubmission {
   review_avg_rating Float
 
   organization_id String?
+  team_id         String?
 }
 
 // StoreCreator view — like Creator but with org_name for org-owned listings
@@ -2615,6 +2667,7 @@ model StoreListingVersion {
 
   // Tenancy
   organizationId String?
+  teamId         String?
 
   @@unique([storeListingId, version])
   @@index([storeListingId, submissionStatus, isAvailable])
@@ -2622,6 +2675,7 @@ model StoreListingVersion {
   @@index([reviewerId])
   @@index([agentGraphId, agentGraphVersion]) // Non-unique index for efficient lookups
   @@index([organizationId])
+  @@index([teamId])
 }
 
 // A marketplace listing for a knowledge skill: instructions and examples the
@@ -3073,6 +3127,7 @@ model Organization {
   TransfersFrom      TransferRequest[]            @relation("TransferSource")
   TransfersTo        TransferRequest[]            @relation("TransferTarget")
   AuditLogs          AuditLog[]
+  AgentGraphGrants   AgentGraphGrant[]
   // slug already has @unique which creates an index — no separate @@index needed
   // Partial unique index "Organization_one_personal_per_user" on (bootstrapUserId)
   // WHERE isPersonal AND deletedAt IS NULL AND bootstrapUserId IS NOT NULL enforces
@@ -3228,6 +3283,43 @@ model TeamInvite {
   @@index([email])
   @@index([token])
   @@index([teamId])
+}
+
+// A share of an AgentGraph with a principal (v1: teams within the same org).
+// Share = reference pinned to a version — never a copy; followLatest opts a
+// grant into tracking the newest active version instead of the pin.
+// principalId is polymorphic (see GrantPrincipalType) so it carries no FK;
+// integrity is enforced in code, and a deleted team's grants become inert
+// because access resolution joins through TeamMember. Revoke = hard delete
+// (a soft revoke would collide with the unique constraint on re-share).
+model AgentGraphGrant {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  agentGraphId      String
+  agentGraphVersion Int
+  AgentGraph        AgentGraph @relation(fields: [agentGraphId, agentGraphVersion], references: [id, version], onDelete: Restrict)
+  followLatest      Boolean    @default(false)
+
+  principalType GrantPrincipalType
+  principalId   String
+
+  capability     GrantCapability     @default(EXECUTE)
+  credentialMode GrantCredentialMode @default(CONSUMER)
+
+  // Same org as the graph — asserted at creation; no cross-org sharing in v1.
+  organizationId String
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdByUserId String
+
+  // One grant per (graph, principal) across versions — re-sharing a newer
+  // version updates the pin on the existing row.
+  @@unique([agentGraphId, principalType, principalId])
+  @@index([principalType, principalId])
+  @@index([organizationId])
+  @@index([agentGraphId, agentGraphVersion])
 }
 
 model OrganizationSubscription {

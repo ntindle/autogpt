@@ -6,6 +6,8 @@ import { ORIGINAL_TITLE, parseSessionIDs } from "./helpers";
 export interface DeleteTarget {
   id: string;
   title: string | null | undefined;
+  organizationId: string | null;
+  teamId: string | null;
 }
 
 /**
@@ -56,6 +58,13 @@ export interface ArtifactRef {
   sizeBytes?: number;
   /** Set when the ref is an expert rather than a workspace file. */
   expert?: ExpertArtifact;
+  organizationId?: string | null;
+  teamId?: string | null;
+}
+
+interface ArtifactTenantScope {
+  organizationId: string | null;
+  teamId: string | null;
 }
 
 /** The live desktop behind a chat, as `start_desktop` reports it. */
@@ -220,6 +229,8 @@ interface CopilotUIState {
   setShowNotificationDialog: (show: boolean) => void;
 
   // Artifact panel
+  artifactTenantScope: ArtifactTenantScope | null;
+  setArtifactTenantScope: (scope: ArtifactTenantScope | null) => void;
   artifactPanel: ArtifactPanelState;
   // `persist: false` skips the localStorage write — used by the public
   // /tour demo so a scripted open/close never leaks into the panel state
@@ -290,6 +301,18 @@ let _autoOpenUserClosed = false;
 // Whether the computer face was opened over a closed panel, so leaving it
 // closes the panel again instead of revealing a tab nobody had open.
 let _computerOverClosedPanel = false;
+
+function withArtifactScope(
+  ref: ArtifactRef,
+  scope: ArtifactTenantScope | null,
+): ArtifactRef {
+  if ("organizationId" in ref || "teamId" in ref || scope === null) return ref;
+  return {
+    ...ref,
+    organizationId: scope.organizationId,
+    teamId: scope.teamId,
+  };
+}
 
 export const useCopilotUIStore = create<CopilotUIState>((set, get) => ({
   initialPrompt: null,
@@ -372,6 +395,25 @@ export const useCopilotUIStore = create<CopilotUIState>((set, get) => ({
   setShowNotificationDialog: (show) => set({ showNotificationDialog: show }),
 
   // Artifact panel
+  artifactTenantScope: null,
+  setArtifactTenantScope: (scope) =>
+    set((state) => {
+      if (
+        state.artifactTenantScope?.organizationId === scope?.organizationId &&
+        state.artifactTenantScope?.teamId === scope?.teamId
+      ) {
+        return state;
+      }
+      return {
+        artifactTenantScope: scope,
+        artifactPanel: {
+          ...state.artifactPanel,
+          activeArtifact: null,
+          history: [],
+          lastArtifact: null,
+        },
+      };
+    }),
   artifactPanel: {
     isOpen: getPersistedOpen(),
     activeArtifact: null,
@@ -384,11 +426,12 @@ export const useCopilotUIStore = create<CopilotUIState>((set, get) => ({
   },
   openArtifact: (ref, opts) =>
     set((state) => {
+      const scopedRef = withArtifactScope(ref, state.artifactTenantScope);
       const { activeArtifact, history: prevHistory } = state.artifactPanel;
       const topOfHistory = prevHistory[prevHistory.length - 1];
-      const isReturningToTop = topOfHistory?.id === ref.id;
+      const isReturningToTop = topOfHistory?.id === scopedRef.id;
       const shouldPushHistory =
-        activeArtifact != null && activeArtifact.id !== ref.id;
+        activeArtifact != null && activeArtifact.id !== scopedRef.id;
       const MAX_HISTORY = 25;
       const history = isReturningToTop
         ? prevHistory.slice(0, -1)
@@ -401,7 +444,7 @@ export const useCopilotUIStore = create<CopilotUIState>((set, get) => ({
         artifactPanel: {
           ...state.artifactPanel,
           isOpen: true,
-          activeArtifact: ref,
+          activeArtifact: scopedRef,
           history,
           mode: "artifact",
           // A document opened over the computer face takes the panel; the
@@ -670,7 +713,10 @@ export const useCopilotUIStore = create<CopilotUIState>((set, get) => ({
       const active = get().artifactPanel.activeArtifact;
       if (active?.id === ref.id && !active.mimeType && ref.mimeType) {
         set((state) => ({
-          artifactPanel: { ...state.artifactPanel, activeArtifact: ref },
+          artifactPanel: {
+            ...state.artifactPanel,
+            activeArtifact: withArtifactScope(ref, state.artifactTenantScope),
+          },
         }));
       }
       return;

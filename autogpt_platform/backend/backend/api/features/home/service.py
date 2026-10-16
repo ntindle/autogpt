@@ -29,6 +29,8 @@ from backend.data.execution_cost_summary import (
     UserExecutionCostSummary,
     get_user_cost_summary,
 )
+from backend.data.org_credit import get_personal_org_owner
+from backend.data.tenancy import get_user_team_ids
 from backend.executor.scheduler import CopilotTurnJobInfo, GraphExecutionJobInfo
 from backend.util.clients import get_scheduler_client
 from backend.util.feature_flag import Flag, is_feature_enabled
@@ -65,12 +67,16 @@ class HomeSourceData(BaseModel):
 async def build_home_dashboard(
     *,
     user_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
     ctx: RequestContext | None = None,
 ) -> HomeDashboardResponse:
     now = datetime.now(timezone.utc)
     week_start = now - timedelta(days=7)
     data = await _load_home_source_data(
         user_id=user_id,
+        organization_id=organization_id,
+        team_id=team_id,
         ctx=ctx,
         now=now,
         week_start=week_start,
@@ -87,9 +93,18 @@ async def build_home_dashboard(
     library_refs, persisted_briefing, session_titles = await asyncio.gather(
         # Removed agents keep naming their past runs on the Recent work card.
         library_db.get_library_agent_refs_by_graph_ids(
-            user_id, graph_ids, include_deleted=True
+            user_id,
+            graph_ids,
+            include_deleted=True,
+            organization_id=organization_id,
+            team_id_restriction=team_id,
         ),
-        _persisted_briefing(user_id=user_id, timezone_name=data.timezone_name, now=now),
+        _persisted_briefing(
+            user_id=user_id,
+            organization_id=organization_id,
+            timezone_name=data.timezone_name,
+            now=now,
+        ),
         _get_session_titles(user_id=user_id, session_ids=work_session_ids),
     )
 
@@ -111,7 +126,11 @@ async def build_home_dashboard(
 
 
 async def _persisted_briefing(
-    *, user_id: str, timezone_name: str, now: datetime
+    *,
+    user_id: str,
+    organization_id: str | None,
+    timezone_name: str,
+    now: datetime,
 ) -> BriefingContent | None:
     """Today's stored briefing, or None when home should compute live instead.
 
@@ -132,6 +151,16 @@ async def _persisted_briefing(
     card would then look up tomorrow's row for a dashboard composed against
     yesterday.
     """
+    if organization_id is not None:
+        try:
+            if await get_personal_org_owner(organization_id) != user_id:
+                return None
+        except Exception:
+            logger.warning(
+                "Home could not verify briefing scope for user %s",
+                user_id[:_LOG_ID_CHARS],
+            )
+            return None
     briefing_date = now.astimezone(ZoneInfo(timezone_name)).date()
     try:
         record = await briefing_db.get_briefing_for_date(user_id, briefing_date)
@@ -159,21 +188,48 @@ async def _persisted_briefing(
 async def _load_home_source_data(
     *,
     user_id: str,
+    organization_id: str | None,
+    team_id: str | None,
     ctx: RequestContext | None,
     now: datetime,
     week_start: datetime,
 ) -> HomeSourceData:
-    experts_task = asyncio.create_task(experts_db.list_experts(user_id))
+    team_ids = (
+        [team_id]
+        if team_id is not None
+        else (
+            await get_user_team_ids(user_id, organization_id)
+            if organization_id is not None
+            else []
+        )
+    )
+    experts_task = asyncio.create_task(
+        experts_db.list_experts(
+            user_id,
+            organization_id=organization_id,
+            team_id_restriction=team_id,
+            team_ids=team_ids,
+        )
+    )
     executions_task = asyncio.create_task(
         execution_db.get_graph_executions(
             user_id=user_id,
+            organization_id=organization_id,
+            team_id=team_id,
             created_time_gte=week_start,
             created_time_lte=now,
             limit=_EXECUTION_LIMIT,
         )
     )
     reviews_task = asyncio.create_task(
-        review_db.get_pending_reviews_for_user(user_id, page=1, page_size=_REVIEW_LIMIT)
+        review_db.get_pending_reviews_for_user(
+            user_id,
+            page=1,
+            page_size=_REVIEW_LIMIT,
+            organization_id=organization_id,
+            team_id_restriction=team_id,
+            team_ids=team_ids,
+        )
     )
     cost_summary_task = asyncio.create_task(
         get_user_cost_summary(
@@ -181,13 +237,29 @@ async def _load_home_source_data(
             since=week_start,
             until=now,
             include_by_expert=True,
+            organization_id=organization_id,
+            team_id_restriction=team_id,
         )
     )
-    schedules_task = asyncio.create_task(_get_schedules(user_id=user_id))
+    schedules_task = asyncio.create_task(
+        _get_schedules(
+            user_id=user_id,
+            organization_id=organization_id,
+            team_ids=team_ids,
+        )
+    )
     credits_task = asyncio.create_task(_get_credits(user_id=user_id, ctx=ctx))
-    questions_task = asyncio.create_task(_get_pending_questions(user_id=user_id))
+    questions_task = asyncio.create_task(
+        _get_pending_questions(
+            user_id=user_id,
+            organization_id=organization_id,
+            team_ids=team_ids,
+        )
+    )
     work_events_task = asyncio.create_task(
-        _get_work_events(user_id=user_id, since=week_start)
+        _get_work_events(
+            user_id=user_id, since=week_start, organization_id=organization_id
+        )
     )
     user_task = asyncio.create_task(user_db.get_user_by_id(user_id))
     # Gather rather than awaiting one by one: a failure in the first task would
@@ -223,6 +295,8 @@ async def _load_home_source_data(
 async def _get_schedules(
     *,
     user_id: str,
+    organization_id: str | None,
+    team_ids: list[str],
 ) -> list[GraphExecutionJobInfo | CopilotTurnJobInfo]:
     # Deliberately owner-scoped: executions, reviews and cost totals on this page
     # are all personal, so org/team schedules would surface upcoming runs whose
@@ -231,7 +305,9 @@ async def _get_schedules(
     # upcoming-runs rows, not the whole dashboard.
     try:
         return await asyncio.wait_for(
-            get_scheduler_client().get_execution_schedules(user_id=user_id),
+            get_scheduler_client().get_execution_schedules(
+                user_id=user_id, organization_id=organization_id, team_ids=team_ids
+            ),
             timeout=settings.config.schedule_read_timeout_seconds,
         )
     except Exception:
@@ -241,7 +317,12 @@ async def _get_schedules(
         return []
 
 
-async def _get_pending_questions(*, user_id: str) -> list[ChatSessionInfo]:
+async def _get_pending_questions(
+    *,
+    user_id: str,
+    organization_id: str | None,
+    team_ids: list[str],
+) -> list[ChatSessionInfo]:
     # Fail-soft like schedules and credits: a chat that was deleted or whose
     # metadata no longer parses must cost the user one row, not the page.
     try:
@@ -249,7 +330,11 @@ async def _get_pending_questions(*, user_id: str) -> list[ChatSessionInfo]:
         # the Home page stays exactly what it was.
         if not await is_feature_enabled(Flag.HIRE_EXPERTS, user_id, default=False):
             return []
-        return await chat_db.get_sessions_with_pending_question(user_id)
+        return await chat_db.get_sessions_with_pending_question(
+            user_id,
+            organization_id=organization_id,
+            team_ids=team_ids,
+        )
     except Exception:
         logger.warning(
             "Home could not load pending questions for user %s",
@@ -259,13 +344,18 @@ async def _get_pending_questions(*, user_id: str) -> list[ChatSessionInfo]:
 
 
 async def _get_work_events(
-    *, user_id: str, since: datetime
+    *, user_id: str, since: datetime, organization_id: str | None = None
 ) -> list[activity_db.ActivityEvent]:
     # Fail-soft like schedules and credits: a broken audit read costs the
     # Recent work card, not the page. Ships with the expert-team surface,
     # so it is gated exactly like pending questions.
     try:
         if not await is_feature_enabled(Flag.HIRE_EXPERTS, user_id, default=False):
+            return []
+        if (
+            organization_id is not None
+            and await get_personal_org_owner(organization_id) != user_id
+        ):
             return []
         return await activity_db.list_activity_events(
             user_id,

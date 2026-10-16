@@ -1,4 +1,5 @@
-"use client";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+("use client");
 
 import { getGetV1ListGraphExecutionsQueryKey } from "@/app/api/__generated__/endpoints/graphs/graphs";
 import { usePatchV1UpdateExecutionSchedule } from "@/app/api/__generated__/endpoints/schedules/schedules";
@@ -49,6 +50,10 @@ export function useEditScheduleModal(
 
   const { mutate: updateSchedule, isPending } =
     usePatchV1UpdateExecutionSchedule({
+      request: getTenantRequestInit(
+        schedule.organization_id ?? null,
+        schedule.team_id ?? null,
+      ),
       mutation: {
         onSuccess: async () => {
           invalidateAllScheduleQueries(queryClient, graphId);

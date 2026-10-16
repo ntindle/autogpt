@@ -56,6 +56,7 @@ EXPERIMENT_FLAGS = frozenset({"subscription-pricing-page-initial-state"})
 
 
 class Flag(str, Enum):
+    SHOW_ORG_SETTINGS = "SHOW_ORG_SETTINGS"
     """
     Centralized enum for all feature flags.
 
@@ -876,7 +877,7 @@ def _env_flag_override(flag_key: Flag | str) -> bool | None:
     suffix = key_value.upper().replace("-", "_")
     for prefix in ("FORCE_FLAG_", "NEXT_PUBLIC_FORCE_FLAG_"):
         raw = os.environ.get(prefix + suffix)
-        if raw is not None:
+        if raw is not None and raw.strip():
             return raw.strip().lower() in _TRUTHY
     if _force_all_flags_enabled() and key_value not in _NON_BOOLEAN_FLAG_VALUES:
         return True

@@ -1198,8 +1198,8 @@ async def test_credential_lookup_normalizes_trailing_slash():
                 )
             # Credential lookup should use the normalized URL (no trailing slash),
             # and a personal session narrows by nothing.
-            mock_lookup.assert_called_once_with(
-                _USER_ID, "https://mcp.example.com/mcp", allowed_ids=None
+            mock_lookup.assert_awaited_once_with(
+                _USER_ID, "https://mcp.example.com/mcp", [], allowed_ids=None
             )
 
 

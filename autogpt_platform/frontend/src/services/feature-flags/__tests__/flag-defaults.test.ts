@@ -76,3 +76,59 @@ describe("onboarding flag defaults fail closed", () => {
     expect(result.current).toBe(true);
   });
 });
+
+// If LaunchDarkly does not answer — outage, init lag, or a key mismatch —
+// this is the only path, and it must resolve false or merging ships the
+// half-built org management UI to everyone.
+describe("org settings flag default fails closed", () => {
+  beforeEach(() => {
+    Object.keys(process.env)
+      .filter((k) => k.startsWith("NEXT_PUBLIC_FORCE_FLAG_"))
+      .forEach((k) => delete process.env[k]);
+  });
+
+  // The LD key was created as literal `SHOW_ORG_SETTINGS` and cannot be
+  // renamed. The client runs with `useCamelCaseFlagKeys: false`, so the
+  // enum *value* is what gets looked up — normalising it to the repo's
+  // usual kebab-case would resolve nothing and pin the flag off forever.
+  it("keeps the enum value pinned to the pre-existing LaunchDarkly key", () => {
+    expect(Flag.SHOW_ORG_SETTINGS).toBe("SHOW_ORG_SETTINGS");
+  });
+
+  it("resolves SHOW_ORG_SETTINGS to false when LaunchDarkly has not answered", () => {
+    const { result } = renderHook(() => useGetFlag(Flag.SHOW_ORG_SETTINGS));
+    expect(result.current).toBe(false);
+  });
+
+  it("lets local dev / Playwright force the org UI on via the env override", () => {
+    process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS = "true";
+    const { result } = renderHook(() => useGetFlag(Flag.SHOW_ORG_SETTINGS));
+    expect(result.current).toBe(true);
+  });
+
+  it("still honours an explicit `false` override", () => {
+    process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS = "false";
+    const { result } = renderHook(() => useGetFlag(Flag.SHOW_ORG_SETTINGS));
+    expect(result.current).toBe(false);
+  });
+});
+
+describe("single-container org feature overrides", () => {
+  beforeEach(() => {
+    Object.keys(process.env)
+      .filter((k) => k.startsWith("NEXT_PUBLIC_FORCE_FLAG_"))
+      .forEach((k) => delete process.env[k]);
+  });
+
+  it.each([
+    [Flag.HIRE_EXPERTS, "NEXT_PUBLIC_FORCE_FLAG_HIRE_EXPERTS"],
+    [Flag.GRAPHITI_MEMORY, "NEXT_PUBLIC_FORCE_FLAG_GRAPHITI_MEMORY"],
+  ] as const)(
+    "resolves %s from its build override when LaunchDarkly has not answered",
+    (flag, environmentKey) => {
+      process.env[environmentKey] = "true";
+      const { result } = renderHook(() => useGetFlag(flag));
+      expect(result.current).toBe(true);
+    },
+  );
+});

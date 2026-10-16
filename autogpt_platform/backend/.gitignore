@@ -22,4 +22,5 @@ migrations/*/rollback*.sql
 
 # Workspace files
 workspaces/
+media/
 store-media/

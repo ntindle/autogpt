@@ -1,3 +1,4 @@
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
 import { useRenameWorkspaceFile } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
 import { useToast } from "@/components/molecules/Toast/use-toast";
@@ -14,6 +15,7 @@ export function useRenameFileDialog(
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { mutateAsync: rename, isPending } = useRenameWorkspaceFile({
+    request: getTenantRequestInit(file.organization_id, file.team_id),
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ARTIFACTS_LIST_QUERY_KEY });

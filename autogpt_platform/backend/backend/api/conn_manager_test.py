@@ -3,10 +3,12 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from autogpt_libs.auth.permissions import TeamAction
 from fastapi import WebSocket
 
 from backend.api.conn_manager import (
     ConnectionManager,
+    _ExecutionSubscriptionScope,
     _graph_execs_channel_key,
     _notification_bus_channel,
     _Subscription,
@@ -18,8 +20,11 @@ from backend.data.execution import GraphExecutionMeta
 
 
 @pytest.fixture
-def connection_manager() -> ConnectionManager:
-    return ConnectionManager()
+def connection_manager(monkeypatch) -> ConnectionManager:
+    monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "true")
+    manager = ConnectionManager()
+    manager._execution_scope_is_live = AsyncMock(return_value=True)
+    return manager
 
 
 @pytest.fixture
@@ -34,6 +39,8 @@ def _meta(graph_id: str = "test_graph") -> MagicMock:
     meta.id = "graph-exec-1"
     meta.user_id = "user-1"
     meta.graph_id = graph_id
+    meta.organization_id = "org-1"
+    meta.team_id = "team-1"
     return meta
 
 
@@ -132,7 +139,15 @@ def test_graph_exec_channel_key_shape() -> None:
 
 
 def test_graph_execs_channel_key_shape() -> None:
-    assert _graph_execs_channel_key("u", graph_id="g") == "u|graph#g|executions"
+    assert (
+        _graph_execs_channel_key(
+            "u",
+            graph_id="g",
+            organization_id="org-1",
+            team_id="team-1",
+        )
+        == "u|org#org-1|team#team-1|graph#g|executions"
+    )
 
 
 # ---------- _Subscription lifecycle ----------
@@ -647,13 +662,18 @@ async def test_subscribe_graph_execs_opens_aggregate_channel(
         await connection_manager.subscribe_graph_execs(
             user_id="user-1",
             graph_id="graph-1",
+            organization_id="org-1",
+            team_id="team-1",
             websocket=mock_websocket,
         )
 
     assert captured, "must construct a Subscription"
     # Aggregate channel uses {user_id/graph_id} hash tag + /all suffix.
     assert captured[0].endswith("{user-1/graph-1}/all")
-    assert "user-1|graph#graph-1|executions" in connection_manager.subscriptions
+    assert (
+        "user-1|org#org-1|team#team-1|graph#graph-1|executions"
+        in connection_manager.subscriptions
+    )
 
 
 @pytest.mark.asyncio
@@ -661,7 +681,7 @@ async def test_unsubscribe_graph_execs_tears_down(
     connection_manager: ConnectionManager, mock_websocket: AsyncMock
 ) -> None:
     """unsubscribe_graph_execs must drop bookkeeping and stop the subscription."""
-    channel_key = "user-1|graph#graph-1|executions"
+    channel_key = "user-1|org#org-1|team#team-1|graph#graph-1|executions"
     fake_sub = MagicMock()
     fake_sub.stop = AsyncMock()
     connection_manager.subscriptions[channel_key] = {mock_websocket}
@@ -670,6 +690,8 @@ async def test_unsubscribe_graph_execs_tears_down(
     await connection_manager.unsubscribe_graph_execs(
         user_id="user-1",
         graph_id="graph-1",
+        organization_id="org-1",
+        team_id="team-1",
         websocket=mock_websocket,
     )
 
@@ -762,6 +784,38 @@ async def test_two_connections_get_independent_subscriptions(
     assert ws_a in subs and ws_b in subs
 
 
+@pytest.mark.asyncio
+async def test_subscription_closes_before_forwarding_after_scope_revocation(
+    connection_manager: ConnectionManager,
+    mock_websocket: AsyncMock,
+) -> None:
+    fake_sub = MagicMock()
+    fake_sub.start = AsyncMock()
+    fake_sub.stop = AsyncMock()
+    connection_manager._execution_scope_is_live.side_effect = [True, False]
+    with (
+        patch(
+            "backend.api.conn_manager.get_graph_execution_meta",
+            AsyncMock(return_value=_meta()),
+        ),
+        patch("backend.api.conn_manager._Subscription", return_value=fake_sub),
+    ):
+        await connection_manager.subscribe_graph_exec(
+            user_id="user-1",
+            graph_exec_id="graph-exec-1",
+            websocket=mock_websocket,
+        )
+
+    on_message = fake_sub.start.call_args.args[0]
+    await on_message(b'{"payload":{"event_type":"graph_execution_update"}}')
+
+    mock_websocket.close.assert_awaited_once_with(
+        code=4003,
+        reason="Execution subscription access was revoked",
+    )
+    mock_websocket.send_text.assert_not_awaited()
+
+
 # ---------- _forward_exec_event ----------
 
 
@@ -811,6 +865,81 @@ async def test_forward_exec_event_accepts_str_payload(
     wrapper = json.dumps({"payload": inner})
     await connection_manager._forward_exec_event(mock_websocket, "chan", wrapper)
     mock_websocket.send_text.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_forward_aggregate_event_drops_execution_from_other_team(
+    connection_manager: ConnectionManager, mock_websocket: AsyncMock
+) -> None:
+    scope = _ExecutionSubscriptionScope(
+        user_id="user-1",
+        organization_id="org-1",
+        team_id="team-a",
+        graph_id="g",
+        execution_id=None,
+        team_action=TeamAction.VIEW_AGENTS,
+    )
+    wrapper = json.dumps(
+        {
+            "payload": {
+                "event_type": "graph_execution_update",
+                "id": "exec-team-b",
+                "graph_id": "g",
+            }
+        }
+    )
+    exact_lookup = AsyncMock(return_value=None)
+
+    with patch(
+        "backend.api.conn_manager.get_graph_execution_exact_scope",
+        exact_lookup,
+    ):
+        await connection_manager._forward_exec_event(
+            mock_websocket,
+            "tenant-scoped-channel",
+            wrapper,
+            required_scope=scope,
+        )
+
+    exact_lookup.assert_awaited_once_with("user-1", "exec-team-b", "org-1", "team-a")
+    mock_websocket.send_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_forward_aggregate_event_sends_execution_from_exact_team(
+    connection_manager: ConnectionManager, mock_websocket: AsyncMock
+) -> None:
+    scope = _ExecutionSubscriptionScope(
+        user_id="user-1",
+        organization_id="org-1",
+        team_id="team-a",
+        graph_id="g",
+        execution_id=None,
+        team_action=TeamAction.VIEW_AGENTS,
+    )
+    wrapper = json.dumps(
+        {
+            "payload": {
+                "event_type": "graph_execution_update",
+                "id": "graph-exec-1",
+                "graph_id": "g",
+            }
+        }
+    )
+    exact_execution = _meta("g")
+
+    with patch(
+        "backend.api.conn_manager.get_graph_execution_exact_scope",
+        AsyncMock(return_value=exact_execution),
+    ):
+        await connection_manager._forward_exec_event(
+            mock_websocket,
+            "tenant-scoped-channel",
+            wrapper,
+            required_scope=scope,
+        )
+
+    mock_websocket.send_text.assert_awaited_once()
 
 
 @pytest.mark.asyncio

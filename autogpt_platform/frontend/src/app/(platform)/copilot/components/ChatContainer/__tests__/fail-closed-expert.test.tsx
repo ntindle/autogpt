@@ -49,6 +49,10 @@ vi.mock(
 );
 
 const baseProps = {
+  createTeamId: null,
+  onCreateTeamChange: vi.fn(),
+  isTeamContextReady: true,
+  canSelectCreateTeam: false,
   messages: [],
   status: "ready",
   error: undefined,
@@ -100,6 +104,12 @@ function ExpertThreadHarness({ activeExpertId }: { activeExpertId: string }) {
         }
       />
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         expertIdentity={expertIdentity}
         isResolvingExpertIdentity={!hasExpertsSettled}

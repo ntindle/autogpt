@@ -56,6 +56,7 @@ from backend.copilot.gate.held import resolve_answered
 from backend.copilot.graphiti.config import is_enabled_for_user
 from backend.copilot.graphiti.context import fetch_warm_context
 from backend.copilot.graphiti.ingest import enqueue_conversation_turn
+from backend.copilot.graphiti.rollout import shared_memory_enabled
 from backend.copilot.learning.capture import capture_chat_turn, find_initiating_user_row
 from backend.copilot.llm_attribution import openrouter_attribution
 from backend.copilot.local_context_probe import (
@@ -172,6 +173,7 @@ from backend.copilot.transcript import (
     validate_transcript,
 )
 from backend.copilot.transcript_builder import TranscriptBuilder
+from backend.data.db_accessors import context_without_live_leases
 from backend.util import json as util_json
 from backend.util.exceptions import NotFoundError
 from backend.util.feature_flag import Flag, is_feature_enabled
@@ -1710,6 +1712,8 @@ async def _fetch_graphiti_context(
         user_id,
         message or "",
         expert_id=session.expert_id,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
     )
 
 
@@ -1965,7 +1969,8 @@ async def stream_chat_completion_baseline(
             first_message = user_messages[0].content or message or ""
             if first_message:
                 task = asyncio.create_task(
-                    _update_title_async(session_id, first_message, user_id)
+                    _update_title_async(session_id, first_message, user_id),
+                    context=context_without_live_leases(),
                 )
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
@@ -1975,7 +1980,10 @@ async def stream_chat_completion_baseline(
     # Append tool documentation, technical notes, and Graphiti memory instructions
     graphiti_enabled = await is_enabled_for_user(user_id)
 
-    graphiti_supplement = get_graphiti_supplement() if graphiti_enabled else ""
+    shared_memory = graphiti_enabled and await shared_memory_enabled(user_id)
+    graphiti_supplement = (
+        get_graphiti_supplement(shared_memory=shared_memory) if graphiti_enabled else ""
+    )
     auto_mode_supplement = approval_mode_supplement(await active_mode(user_id, session))
     # The whole expert-team surface rides the hire-experts flag, failing
     # closed for anonymous turns.  Resolved here rather than at the
@@ -2089,7 +2097,11 @@ async def stream_chat_completion_baseline(
         session_ctx_content = ""
         if user_id:
             session_ctx_content = await build_session_context(
-                session_id=session_id, user_id=user_id
+                session_id=session_id,
+                user_id=user_id,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
+                expert_id=session.expert_id,
             )
         # Skill index — same content/contract as the SDK path.  Failures
         # here MUST NOT block the turn; log and proceed with empty index.
@@ -2112,6 +2124,8 @@ async def stream_chat_completion_baseline(
             skills_ctx=skills_ctx,
             user_id=user_id,
             expert_id=session.expert_id,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
         )
         if prefixed is not None:
             # Reverse scan so we update the current turn's user message, not
@@ -2332,7 +2346,9 @@ async def stream_chat_completion_baseline(
         else origin_disabled_tools(session.metadata.origin)
     )
     tools = get_available_tools(
-        disabled_groups=disabled_tool_groups, disabled_tools=disabled_tools
+        disabled_groups=disabled_tool_groups,
+        disabled_tools=disabled_tools,
+        shared_memory=shared_memory,
     )
 
     # --- Permission filtering ---
@@ -2962,7 +2978,8 @@ async def stream_chat_completion_baseline(
                     session_id,
                     message,
                     final_text if state else "",
-                )
+                ),
+                context=context_without_live_leases(),
             )
             _background_tasks.add(_ingest_task)
             _ingest_task.add_done_callback(_background_tasks.discard)

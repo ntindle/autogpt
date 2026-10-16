@@ -1,9 +1,9 @@
-import asyncio
 from datetime import datetime, timezone
-from typing import Annotated, Optional
+from typing import Annotated
 
-from autogpt_libs.auth import get_request_context, get_user_id, requires_user
+from autogpt_libs.auth import get_user_id, requires_user
 from autogpt_libs.auth.models import RequestContext
+from autogpt_libs.auth.permissions import OrgAction, TeamAction
 from fastapi import APIRouter, Body, HTTPException, Path, Query, Response, Security
 from starlette.status import HTTP_204_NO_CONTENT, HTTP_404_NOT_FOUND
 
@@ -16,6 +16,9 @@ from backend.api.features.graph_executions.model import (
     ExecutionShareResponse,
 )
 from backend.api.features.workspace.routes import create_file_download_response
+from backend.api.live_auth import (
+    requires_live_resource_permission as requires_resource_permission,
+)
 from backend.data import execution as execution_db
 from backend.data import graph as graph_db
 from backend.data.execution_cost_summary import (
@@ -28,7 +31,7 @@ from backend.data.onboarding import (
     get_user_onboarding,
 )
 from backend.data.sharing.tokens import SHARE_TOKEN_PATTERN, generate_share_token
-from backend.data.workspace import get_workspace_file_by_id
+from backend.data.tenancy import live_resource_permission_barrier
 from backend.executor import utils as execution_utils
 from backend.util.exceptions import NotFoundError
 from backend.util.settings import Settings
@@ -47,12 +50,22 @@ router = APIRouter()
     dependencies=[Security(requires_user)],
 )
 async def stop_graph_run(
-    graph_id: str, graph_exec_id: str, user_id: Annotated[str, Security(get_user_id)]
+    graph_id: str,
+    graph_exec_id: str,
+    user_id: Annotated[str, Security(get_user_id)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(
+            OrgAction.EXECUTE_RESOURCES, TeamAction.EXECUTE_AGENTS
+        ),
+    ],
 ) -> execution_db.GraphExecutionMeta | None:
     res = await _stop_graph_run(
         user_id=user_id,
         graph_id=graph_id,
         graph_exec_id=graph_exec_id,
+        organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
     if not res:
         return None
@@ -61,25 +74,56 @@ async def stop_graph_run(
 
 async def _stop_graph_run(
     user_id: str,
-    graph_id: Optional[str] = None,
-    graph_exec_id: Optional[str] = None,
+    graph_id: str,
+    graph_exec_id: str,
+    organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> list[execution_db.GraphExecutionMeta]:
-    graph_execs = await execution_db.get_graph_executions(
+    candidate = await execution_db.get_graph_execution(
         user_id=user_id,
-        graph_id=graph_id,
-        graph_exec_id=graph_exec_id,
-        statuses=[
-            execution_db.ExecutionStatus.INCOMPLETE,
-            execution_db.ExecutionStatus.QUEUED,
-            execution_db.ExecutionStatus.RUNNING,
-        ],
+        execution_id=graph_exec_id,
+        organization_id=organization_id,
+        team_id_restriction=team_id_restriction,
     )
-    stopped_execs = [
-        execution_utils.stop_graph_execution(graph_exec_id=exec.id, user_id=user_id)
-        for exec in graph_execs
-    ]
-    await asyncio.gather(*stopped_execs)
-    return graph_execs
+    active_statuses = {
+        execution_db.ExecutionStatus.INCOMPLETE,
+        execution_db.ExecutionStatus.QUEUED,
+        execution_db.ExecutionStatus.RUNNING,
+    }
+    if (
+        candidate is None
+        or candidate.user_id != user_id
+        or candidate.graph_id != graph_id
+        or candidate.status not in active_statuses
+    ):
+        return []
+
+    async with live_resource_permission_barrier(
+        user_id,
+        organization_id,
+        candidate.team_id,
+        OrgAction.EXECUTE_RESOURCES,
+        TeamAction.EXECUTE_AGENTS,
+    ) as allowed:
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Resource scope is inactive")
+        execution = await execution_db.get_graph_execution_exact_scope(
+            user_id,
+            graph_exec_id,
+            organization_id,
+            candidate.team_id,
+        )
+        if (
+            execution is None
+            or execution.user_id != user_id
+            or execution.graph_id != graph_id
+            or execution.status not in active_statuses
+        ):
+            return []
+        await execution_utils.stop_graph_execution(
+            graph_exec_id=execution.id, user_id=user_id
+        )
+        return [execution]
 
 
 @router.get(
@@ -90,13 +134,17 @@ async def _stop_graph_run(
 )
 async def list_graphs_executions(
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS),
+    ],
 ) -> list[execution_db.GraphExecutionMeta]:
     paginated_result = await execution_db.get_graph_executions_paginated(
         user_id=user_id,
         page=1,
         page_size=250,
         organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
 
     # Apply feature flags to filter out disabled features
@@ -114,6 +162,10 @@ async def list_graphs_executions(
 )
 async def get_executions_cost_summary(
     user_id: Annotated[str, Security(get_user_id)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS),
+    ],
     since: datetime | None = Query(
         None,
         description="Window start (UTC). Defaults to start of current calendar month.",
@@ -140,6 +192,8 @@ async def get_executions_cost_summary(
         since=since,
         until=until,
         top_runs_limit=top_runs_limit,
+        organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
 
 
@@ -152,7 +206,10 @@ async def get_executions_cost_summary(
 async def list_graph_executions(
     graph_id: str,
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS),
+    ],
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
     page_size: int = Query(
         25, ge=1, le=100, description="Number of executions per page"
@@ -164,6 +221,7 @@ async def list_graph_executions(
         page=page,
         page_size=page_size,
         organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
 
     # Apply feature flags to filter out disabled features
@@ -194,13 +252,17 @@ async def get_graph_execution(
     graph_id: str,
     graph_exec_id: str,
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS),
+    ],
 ) -> execution_db.GraphExecution | execution_db.GraphExecutionWithNodes:
     result = await execution_db.get_graph_execution(
         user_id=user_id,
         execution_id=graph_exec_id,
         include_node_executions=True,
         organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
     if not result or result.graph_id != graph_id:
         raise HTTPException(
@@ -212,6 +274,7 @@ async def get_graph_execution(
         version=result.graph_version,
         user_id=user_id,
         organization_id=ctx.org_id,
+        team_id=ctx.team_id,
     ):
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND, detail=f"Graph #{graph_id} not found"
@@ -239,11 +302,45 @@ async def get_graph_execution(
 async def delete_graph_execution(
     graph_exec_id: str,
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(
+            OrgAction.CREATE_RESOURCES, TeamAction.DELETE_AGENTS
+        ),
+    ],
 ) -> None:
-    await execution_db.delete_graph_execution(
-        graph_exec_id=graph_exec_id, user_id=user_id
+    candidate = await execution_db.get_graph_execution(
+        user_id=user_id,
+        execution_id=graph_exec_id,
+        organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    async with live_resource_permission_barrier(
+        user_id,
+        ctx.org_id,
+        candidate.team_id,
+        OrgAction.CREATE_RESOURCES,
+        TeamAction.DELETE_AGENTS,
+    ) as allowed:
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Resource scope is inactive")
+        execution = await execution_db.get_graph_execution_exact_scope(
+            user_id,
+            graph_exec_id,
+            ctx.org_id,
+            candidate.team_id,
+        )
+        if execution is None:
+            raise HTTPException(status_code=404, detail="Execution not found")
+        await execution_db.delete_graph_execution(
+            graph_exec_id=graph_exec_id,
+            user_id=user_id,
+            organization_id=ctx.org_id,
+            team_id_restriction=candidate.team_id,
+            exact_scope=True,
+        )
 
 
 @router.post(
@@ -254,48 +351,56 @@ async def enable_execution_sharing(
     graph_id: Annotated[str, Path],
     graph_exec_id: Annotated[str, Path],
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(
+            OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS
+        ),
+    ],
     _body: ExecutionShareRequest = Body(default=ExecutionShareRequest()),
 ) -> ExecutionShareResponse:
     """Enable sharing for a graph execution."""
-    # Verify the execution belongs to the user
-    execution = await execution_db.get_graph_execution(
-        user_id=user_id, execution_id=graph_exec_id
-    )
-    if not execution:
-        raise HTTPException(status_code=404, detail="Execution not found")
-
-    # Generate a unique share token
-    share_token = generate_share_token()
-
-    # Remove stale allowlist records before updating the token — prevents a
-    # window where old records + new token could coexist.
-    await execution_db.delete_shared_execution_files(execution_id=graph_exec_id)
-
-    # Update the execution with share info — the underlying update_many
-    # also enforces (id, user_id) at the DB layer, so a TOCTOU delete
-    # between the pre-check above and this write surfaces as 404 rather
-    # than a silent no-op.
-    try:
-        await execution_db.update_graph_execution_share_status(
-            execution_id=graph_exec_id,
-            user_id=user_id,
-            is_shared=True,
-            share_token=share_token,
-            shared_at=datetime.now(timezone.utc),
-        )
-    except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    # Create allowlist of workspace files referenced in outputs
-    await execution_db.create_shared_execution_files(
-        execution_id=graph_exec_id,
-        share_token=share_token,
+    candidate = await execution_db.get_graph_execution(
         user_id=user_id,
-        outputs=execution.outputs,
+        execution_id=graph_exec_id,
+        organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
+    if not candidate or candidate.graph_id != graph_id:
+        raise HTTPException(status_code=404, detail="Execution not found")
+    async with live_resource_permission_barrier(
+        user_id,
+        ctx.org_id,
+        candidate.team_id,
+        OrgAction.CREATE_RESOURCES,
+        TeamAction.CREATE_AGENTS,
+    ) as allowed:
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Resource scope is inactive")
+        execution = await execution_db.get_graph_execution_exact_scope(
+            user_id,
+            graph_exec_id,
+            ctx.org_id,
+            candidate.team_id,
+        )
+        if not execution or execution.graph_id != graph_id:
+            raise HTTPException(status_code=404, detail="Execution not found")
 
-    # Return the share URL
+        share_token = generate_share_token()
+        try:
+            await execution_db.replace_execution_share(
+                execution_id=graph_exec_id,
+                user_id=user_id,
+                organization_id=ctx.org_id,
+                team_id=candidate.team_id,
+                is_shared=True,
+                share_token=share_token,
+                shared_at=datetime.now(timezone.utc),
+                outputs=execution.outputs,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
     frontend_url = settings.config.frontend_base_url or "http://localhost:3000"
     share_url = f"{frontend_url}/share/{share_token}"
 
@@ -311,31 +416,53 @@ async def disable_execution_sharing(
     graph_id: Annotated[str, Path],
     graph_exec_id: Annotated[str, Path],
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(
+            OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS
+        ),
+    ],
 ) -> None:
     """Disable sharing for a graph execution."""
-    # Verify the execution belongs to the user
-    execution = await execution_db.get_graph_execution(
-        user_id=user_id, execution_id=graph_exec_id
+    candidate = await execution_db.get_graph_execution(
+        user_id=user_id,
+        execution_id=graph_exec_id,
+        organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
-    if not execution:
+    if not candidate or candidate.graph_id != graph_id:
         raise HTTPException(status_code=404, detail="Execution not found")
-
-    # Remove shared file allowlist records
-    await execution_db.delete_shared_execution_files(execution_id=graph_exec_id)
-
-    # Remove share info — owner-gated at the DB layer; TOCTOU delete
-    # after the pre-check surfaces as 404.
-    try:
-        await execution_db.update_graph_execution_share_status(
-            execution_id=graph_exec_id,
-            user_id=user_id,
-            is_shared=False,
-            share_token=None,
-            shared_at=None,
+    async with live_resource_permission_barrier(
+        user_id,
+        ctx.org_id,
+        candidate.team_id,
+        OrgAction.CREATE_RESOURCES,
+        TeamAction.CREATE_AGENTS,
+    ) as allowed:
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Resource scope is inactive")
+        execution = await execution_db.get_graph_execution_exact_scope(
+            user_id,
+            graph_exec_id,
+            ctx.org_id,
+            candidate.team_id,
         )
-    except NotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        if not execution or execution.graph_id != graph_id:
+            raise HTTPException(status_code=404, detail="Execution not found")
+
+        try:
+            await execution_db.replace_execution_share(
+                execution_id=graph_exec_id,
+                user_id=user_id,
+                organization_id=ctx.org_id,
+                team_id=candidate.team_id,
+                is_shared=False,
+                share_token=None,
+                shared_at=None,
+                outputs=execution.outputs,
+            )
+        except NotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
 
 @router.get("/public/shared/{share_token}")
@@ -374,17 +501,7 @@ async def download_shared_file(
     Validates that the file was explicitly exposed when sharing was enabled.
     Returns a uniform 404 for all failure modes to prevent enumeration attacks.
     """
-    # Single-query validation against the allowlist
-    execution_id = await execution_db.get_shared_execution_file(
-        share_token=share_token, file_id=file_id
-    )
-    if not execution_id:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    # Look up the actual file (no workspace scoping needed — the allowlist
-    # already validated that this file belongs to the shared execution)
-    file = await get_workspace_file_by_id(file_id)
-    if not file:
-        raise HTTPException(status_code=404, detail="Not found")
-
-    return await create_file_download_response(file)
+    async with execution_db.shared_execution_file_access(share_token, file_id) as file:
+        if file is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        return await create_file_download_response(file)

@@ -143,6 +143,12 @@ describe("connecting a service from the composer", () => {
     const { rerender } = render(
       <>
         <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
           key="chat-host-session-maria"
           {...baseProps}
           sessionId="session-maria"
@@ -161,6 +167,12 @@ describe("connecting a service from the composer", () => {
     rerender(
       <>
         <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
           key="chat-host-new"
           {...baseProps}
           sessionId={null}
@@ -196,6 +208,12 @@ describe("connecting a service from the composer", () => {
     render(
       <>
         <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
           {...baseProps}
           sessionId={null}
           expertIdentity={maria}

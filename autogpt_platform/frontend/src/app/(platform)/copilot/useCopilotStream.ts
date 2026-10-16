@@ -14,6 +14,7 @@ import {
   resetCopilotChatRuntime,
   shouldReloadCopilotChatRuntime,
 } from "./copilotChatRegistry";
+import type { CopilotTenantScope } from "./helpers";
 import { handleStreamError } from "./copilotStreamErrorHandlers";
 import { useCopilotStreamStore } from "./copilotStreamStore";
 import {
@@ -102,6 +103,7 @@ interface UseCopilotStreamArgs {
   refetchSession: () => Promise<{ data?: unknown }>;
   /** Model tier override. `undefined` = let backend decide. */
   copilotModel: CopilotLlmModel | undefined;
+  sessionTenantScope?: CopilotTenantScope;
 }
 
 export function useCopilotStream({
@@ -116,6 +118,7 @@ export function useCopilotStream({
   hasActiveStream,
   refetchSession,
   copilotModel,
+  sessionTenantScope,
 }: UseCopilotStreamArgs) {
   const queryClient = useQueryClient();
   const setInitialPrompt = useCopilotUIStore((s) => s.setInitialPrompt);
@@ -149,6 +152,7 @@ export function useCopilotStream({
   }, [sessionId]);
   if (chatRuntime) {
     chatRuntime.copilotModelRef.current = copilotModel;
+    chatRuntime.tenantScopeRef.current = sessionTenantScope;
   }
 
   // Transient per-mount flags. The parent keys this subtree by sessionId,
@@ -660,6 +664,7 @@ export function useCopilotStream({
 
   const stop = useCopilotStop({
     sessionId,
+    sessionTenantScope,
     stopStream: sdkStopStream(sdkStop, setMessages),
     isUserStoppingRef,
     setIsUserStopping,

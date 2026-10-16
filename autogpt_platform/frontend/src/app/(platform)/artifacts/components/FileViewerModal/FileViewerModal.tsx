@@ -1,5 +1,7 @@
 "use client";
 
+import { getWorkspaceDownloadHref } from "@/services/org-team/workspace";
+
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
 import { ArtifactContent } from "@/app/(platform)/copilot/components/ArtifactPanel/components/ArtifactContent";
 import { classifyArtifact } from "@/app/(platform)/copilot/components/ArtifactPanel/helpers";
@@ -8,11 +10,7 @@ import { Button } from "@/components/atoms/Button/Button";
 import { Dialog } from "@/components/molecules/Dialog/Dialog";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useState } from "react";
-import {
-  downloadFileBlob,
-  getFileDownloadUrl,
-  getPreviewKind,
-} from "../ArtifactsList/helpers";
+import { downloadFileBlob, getPreviewKind } from "../ArtifactsList/helpers";
 import { CodeIcon, Download04Icon, EyeIcon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
 import { DownloadOnly } from "./components/DownloadOnly";
@@ -48,7 +46,11 @@ export function FileViewerModal({ file, onClose }: Props) {
     file.name,
   );
   const artifact = toArtifactRef(file);
-  const downloadUrl = getFileDownloadUrl(file.id);
+  const downloadUrl = getWorkspaceDownloadHref(
+    file.id,
+    file.organization_id ?? null,
+    file.team_id ?? null,
+  );
 
   return (
     <Dialog
@@ -63,6 +65,8 @@ export function FileViewerModal({ file, onClose }: Props) {
         <Header
           name={file.name}
           fileId={file.id}
+          organizationId={file.organization_id ?? null}
+          teamId={file.team_id ?? null}
           showSourceToggle={classification.hasSourceToggle}
           isSourceView={isSourceView}
           onToggleSource={() => setIsSourceView((v) => !v)}
@@ -91,6 +95,8 @@ export function FileViewerModal({ file, onClose }: Props) {
 interface HeaderProps {
   name: string;
   fileId: string;
+  organizationId: string | null;
+  teamId: string | null;
   showSourceToggle: boolean;
   isSourceView: boolean;
   onToggleSource: () => void;
@@ -99,6 +105,8 @@ interface HeaderProps {
 function Header({
   name,
   fileId,
+  organizationId,
+  teamId,
   showSourceToggle,
   isSourceView,
   onToggleSource,
@@ -110,7 +118,7 @@ function Header({
     if (isDownloading) return;
     setIsDownloading(true);
     try {
-      await downloadFileBlob(fileId, name);
+      await downloadFileBlob(fileId, name, organizationId, teamId);
     } catch (error) {
       toast({
         title: "Failed to download file",
@@ -166,8 +174,14 @@ function toArtifactRef(file: WorkspaceFileItem): ArtifactRef {
     id: file.id,
     title: file.name,
     mimeType: file.mime_type ?? null,
-    sourceUrl: getFileDownloadUrl(file.id),
+    sourceUrl: getWorkspaceDownloadHref(
+      file.id,
+      file.organization_id ?? null,
+      file.team_id ?? null,
+    ),
     origin: file.origin === "uploaded" ? "user-upload" : "agent",
     sizeBytes: file.size_bytes,
+    organizationId: file.organization_id ?? null,
+    teamId: file.team_id ?? null,
   };
 }

@@ -145,6 +145,7 @@ def _submit_result(task: WorkspaceTask, tasks: list[WorkspaceTask], text: str) -
         id=review_id,
         user_id=task.user_id,
         organization_id=task.organization_id,
+        team_id=task.team_id,
         title=f"Approve {task.title}"[:500],
         parent_id=task.parent_id,
         project=task.project,

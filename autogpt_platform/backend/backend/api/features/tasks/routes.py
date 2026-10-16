@@ -16,6 +16,7 @@ from backend.api.features.tasks.models import (
     TaskContextResponse,
     TaskCreate,
     TaskListResponse,
+    TaskSessionScope,
     WorkspaceTask,
 )
 from backend.api.features.tasks.planning_refresh import (
@@ -33,7 +34,9 @@ from backend.api.features.tasks.schedules import (
     set_schedule_paused,
 )
 from backend.api.features.tasks.service import execute_task_command, task_assignees
+from backend.copilot.model import get_chat_session_metadata
 from backend.data.db_accessors import tasks_db
+from backend.data.tenancy import has_live_resource_access
 from backend.util.exceptions import NotFoundError
 
 router = APIRouter(
@@ -65,13 +68,29 @@ async def create_task(
     background_tasks: BackgroundTasks,
 ) -> WorkspaceTask:
     try:
-        task = await tasks_db().create_workspace_task(user_id, request, ctx.org_id)
+        task = await tasks_db().create_workspace_task(
+            user_id, request, ctx.org_id, team_id=ctx.team_id
+        )
         background_tasks.add_task(suggest_task_assignee, user_id, task.id)
         return task
     except NotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     except (TaskConflict, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.get(
+    "/conversation/{session_id}/scope", operation_id="get_workspace_task_session_scope"
+)
+async def get_task_session_scope(session_id: str, user_id: UserID) -> TaskSessionScope:
+    session = await get_chat_session_metadata(session_id, user_id)
+    if session is None or not await has_live_resource_access(
+        user_id, session.organization_id, session.team_id, "view"
+    ):
+        raise HTTPException(404, "Conversation not found")
+    return TaskSessionScope(
+        organization_id=session.organization_id, team_id=session.team_id
+    )
 
 
 @router.post("/{task_id}/commands", operation_id="command_workspace_task")

@@ -23,6 +23,7 @@ from backend.copilot.tools.workdir import (
     validate_ephemeral_path,
 )
 from backend.data.activity_event import ActivityEventDraft
+from backend.data.tenancy import ResourceAccess
 from backend.data.workspace_folder import WorkspaceFolder
 from backend.data.workspace_scope import WorkspaceAccessDeniedError
 from backend.util.settings import Config
@@ -888,6 +889,10 @@ class WriteWorkspaceFileTool(BaseTool):
     def requires_auth(self) -> bool:
         return True
 
+    @property
+    def resource_access(self) -> ResourceAccess:
+        return "create"
+
     def activity_event(
         self,
         session: ChatSession,
@@ -984,7 +989,7 @@ class WriteWorkspaceFileTool(BaseTool):
             )
 
         try:
-            manager = await get_workspace_manager(user_id, session_id)
+            manager = await get_workspace_manager(user_id, session_id, access="create")
             rec = await manager.write_file(
                 content=content_bytes,
                 filename=filename,
@@ -1102,6 +1107,10 @@ class DeleteWorkspaceFileTool(BaseTool):
     def requires_auth(self) -> bool:
         return True
 
+    @property
+    def resource_access(self) -> ResourceAccess:
+        return "create"
+
     def activity_event(
         self,
         session: ChatSession,
@@ -1142,7 +1151,7 @@ class DeleteWorkspaceFileTool(BaseTool):
             return ErrorResponse(message=_SKILLS_REGISTRY_ERROR, session_id=session_id)
 
         try:
-            manager = await get_workspace_manager(user_id, session_id)
+            manager = await get_workspace_manager(user_id, session_id, access="create")
             resolved = await _resolve_file(manager, file_id, path, session_id)
             if isinstance(resolved, ErrorResponse):
                 return resolved

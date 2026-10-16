@@ -4,6 +4,8 @@ import type { SetupRequirementsResponse } from "@/app/api/__generated__/models/s
 import { HeldCallDetail } from "./HeldCallRowParts";
 import { heldShowsOwnCall } from "./heldRow";
 import { useContext } from "react";
+import { getLibraryAgentHref } from "@/services/org-team/builder";
+import { useCopilotTenantScope } from "../../CopilotTenantScopeContext";
 import { PendingQuestionsContext } from "../QuestionDock/PendingQuestionsContext";
 import { QuestionsForm } from "../QuestionDock/QuestionDock";
 import { SetupRequirementsCard } from "../SetupRequirementsCard/SetupRequirementsCard";
@@ -317,6 +319,8 @@ function toolCard(
   row: ChainRow,
   output: Record<string, unknown> | null,
   readOnly: boolean,
+  organizationId: string | null,
+  teamId: string | null,
 ) {
   const input = asObject(row.input);
 
@@ -343,7 +347,13 @@ function toolCard(
             href={
               str(output, "library_agent_link") ??
               (graphID && executionID
-                ? `/library/agents/${graphID}?activeTab=runs&activeItem=${executionID}`
+                ? getLibraryAgentHref(
+                    graphID,
+                    organizationId,
+                    teamId,
+                    executionID,
+                    "runs",
+                  )
                 : undefined)
             }
           />
@@ -598,11 +608,14 @@ export function ToolResult({ row, readOnly = false }: Props) {
 }
 
 function ToolOutput({ row, readOnly }: Required<Props>) {
+  const scope = useCopilotTenantScope();
   const output = asObject(row.output);
   const target = capabilityTargetRow(row);
   const card =
-    toolCard(target, output, readOnly) ??
-    (target === row ? null : toolCard(row, output, readOnly));
+    toolCard(target, output, readOnly, scope.organizationId, scope.teamId) ??
+    (target === row
+      ? null
+      : toolCard(row, output, readOnly, scope.organizationId, scope.teamId));
   if (card) return card;
 
   if (!output) return <KeyValueList value={row.output} />;

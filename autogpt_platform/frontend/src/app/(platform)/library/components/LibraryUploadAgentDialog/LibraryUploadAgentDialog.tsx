@@ -15,6 +15,8 @@ import { z } from "zod";
 import { useLibraryUploadAgentDialog } from "./useLibraryUploadAgentDialog";
 import { Upload03Icon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { TeamPicker } from "@/components/contextual/TeamPicker/TeamPicker";
+import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
 
 export const uploadAgentFormSchema = z.object({
   agentFile: z.string().min(1, "Workflow file is required"),
@@ -23,8 +25,17 @@ export const uploadAgentFormSchema = z.object({
 });
 
 export default function LibraryUploadAgentDialog() {
-  const { onSubmit, isUploading, isOpen, setIsOpen, form, agentObject } =
-    useLibraryUploadAgentDialog();
+  const {
+    onSubmit,
+    isUploading,
+    isOpen,
+    setIsOpen,
+    form,
+    agentObject,
+    teamId,
+    setTeamId,
+    isReady,
+  } = useLibraryUploadAgentDialog();
 
   return (
     <Dialog
@@ -114,11 +125,18 @@ export default function LibraryUploadAgentDialog() {
             )}
           />
 
+          <TeamPicker
+            surfaceKey={CreateSurface.LibraryUpload}
+            value={teamId}
+            onChange={setTeamId}
+            wrapperClassName="!mb-4"
+          />
+
           <Button
             type="submit"
             variant="primary"
             className="min-w-[18rem]"
-            disabled={!agentObject || isUploading}
+            disabled={!agentObject || isUploading || !isReady}
           >
             {isUploading ? (
               <div className="flex items-center gap-2">

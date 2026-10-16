@@ -6,12 +6,14 @@ in a thread-local context, following the graph executor pattern.
 
 import asyncio
 import concurrent.futures
+import contextlib
 import logging
 import os
 import subprocess
 import threading
 import time
 import uuid
+from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Callable, cast
 
@@ -38,6 +40,7 @@ from backend.copilot.llm_attribution import set_turn_impersonated
 from backend.copilot.model import maybe_append_user_message
 from backend.copilot.rate_limit import RateLimitUnavailable
 from backend.copilot.response_model import (
+    StreamBaseResponse,
     StreamError,
     StreamStart,
     StreamStatus,
@@ -50,6 +53,11 @@ from backend.copilot.tools.agent_browser import close_browser_daemon
 from backend.copilot.trial_cost_context import trial_cost_context
 from backend.copilot.turn_pause import TurnPause
 from backend.copilot.turn_tracing import TurnTrace, turn_transaction
+from backend.data.db_accessors import (
+    context_without_live_leases,
+    credit_db,
+    live_resource_lease,
+)
 from backend.data.model import OAuth2Credentials
 from backend.executor.cluster_lock import ClusterLock
 from backend.integrations.codex.transport import CodexCredentialIntegrityError
@@ -111,6 +119,39 @@ _CODEX_CREDENTIAL_ACQUIRE_TIMEOUT_SECONDS = 5.0
 # turn waits this long for the skills and workflows the turn is built from.
 EXPERT_SETUP_WAIT_SECONDS = 60.0
 EXPERT_SETUP_POLL_SECONDS = 1.0
+
+
+async def _guard_stream_with_live_resource_lease(
+    stream: AsyncGenerator[StreamBaseResponse, None],
+    user_id: str,
+    organization_id: str | None,
+    team_id: str | None,
+) -> AsyncGenerator[StreamBaseResponse, None]:
+    provider_context = context_without_live_leases()
+    try:
+        while True:
+            async with live_resource_lease(
+                user_id,
+                organization_id,
+                team_id,
+                "execute",
+            ) as allowed:
+                if not allowed:
+                    raise RuntimeError("workspace_access_revoked")
+                try:
+                    if hasattr(allowed, "run"):
+                        event = await allowed.run(
+                            anext(stream),
+                            context=provider_context,
+                        )
+                    else:
+                        event = await anext(stream)
+                except StopAsyncIteration:
+                    break
+            yield event
+    finally:
+        with contextlib.suppress(Exception):
+            await stream.aclose()
 
 
 # Module-level symbol preserved for backward-compat with callers that import
@@ -617,6 +658,7 @@ class CoPilotProcessor:
         # Re-published with the error: the client keys its dialogs on the code.
         error_code: str | None = None
         credential_lease = None
+        dispatch_lease_id: str | None = None
         cost_context_stack = AsyncExitStack()
         scheduled_watch = ScheduledTurnWatch.for_entry(entry)
         credit_turn: CreditBilledTurn | None = None
@@ -646,6 +688,19 @@ class CoPilotProcessor:
                 raise RuntimeError("codex_session_route_mismatch")
 
             session = await _normalize_private_expert_session_tenancy(session)
+            if (entry.organization_id, entry.team_id) != (
+                session.organization_id,
+                session.team_id,
+            ):
+                raise RuntimeError("copilot_session_tenancy_mismatch")
+            dispatch_lease_id = await credit_db().acquire_live_resource_lease(
+                session.user_id,
+                session.organization_id,
+                session.team_id,
+                "execute",
+            )
+            if dispatch_lease_id is None:
+                raise RuntimeError("workspace_access_revoked")
             if entry.llm_auth_provider == "platform":
                 # Every platform-billed turn passes the allowance here, from
                 # whichever path queued it (see backend.copilot.budget_gate).
@@ -863,14 +918,8 @@ class CoPilotProcessor:
                 permissions=task_permissions,
                 envelope=envelope,
                 request_arrival_at=entry.request_arrival_at,
-                organization_id=(
-                    session.organization_id
-                    if session.expert_id is not None
-                    else entry.organization_id
-                ),
-                team_id=(
-                    session.team_id if session.expert_id is not None else entry.team_id
-                ),
+                organization_id=session.organization_id,
+                team_id=session.team_id,
                 credential_lease=credential_lease,
                 session=session,
             )
@@ -878,18 +927,30 @@ class CoPilotProcessor:
             # FE shows escalating ``StreamStatus`` messages during long
             # silent gaps (deep thinking, slow tool execution, inter-tool
             # gaps) instead of looping the generic "Thinking…" phrases.
-            heartbeat_stream = wrap_stream_with_heartbeat(raw_stream)
+            guarded_stream = _guard_stream_with_live_resource_lease(
+                raw_stream,
+                session.user_id,
+                session.organization_id,
+                session.team_id,
+            )
+            heartbeat_stream = wrap_stream_with_heartbeat(guarded_stream)
             published_stream = stream_registry.stream_and_publish(
                 session_id=entry.session_id,
                 turn_id=entry.turn_id,
                 stream=heartbeat_stream,
             )
+            await credit_db().release_live_resource_lease(dispatch_lease_id)
+            dispatch_lease_id = None
             # Explicit aclose() on early exit: ``async for … break`` does
             # not close the generator, so GeneratorExit would never reach
             # stream_chat_completion_sdk, leaving its stream lock held
             # until GC eventually runs.
             try:
-                async for chunk in published_stream:
+                while True:
+                    try:
+                        chunk = await anext(published_stream)
+                    except StopAsyncIteration:
+                        break
                     turn.observe(chunk)
                     if cancel.is_set():
                         log.info("Cancel requested, breaking stream")
@@ -930,6 +991,13 @@ class CoPilotProcessor:
             if not error_msg and cancel.is_set():
                 error_msg = stream_registry.CANCELLED_MESSAGE
             try:
+                if dispatch_lease_id is not None:
+                    try:
+                        await credit_db().release_live_resource_lease(dispatch_lease_id)
+                    except Exception as release_err:
+                        log.error(
+                            f"Failed to release Copilot dispatch lease: {release_err}"
+                        )
                 if credential_lease is not None:
                     try:
                         await credential_lease.release()

@@ -3,19 +3,20 @@
 import json
 import logging
 from collections import deque
+from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, Any
 
 from openai.types.chat import ChatCompletionToolParam
 
-from backend.copilot.context import get_current_envelope
+from backend.copilot.context import get_current_envelope, get_workspace_manager
 from backend.copilot.model import ChatSession
 from backend.copilot.response_model import StreamToolOutputAvailable
 from backend.copilot.turn_tracing import tool_transaction
 from backend.data.activity_event import ActivityEventDraft
-from backend.data.db_accessors import activity_event_db, workspace_db
+from backend.data.db_accessors import activity_event_db, live_resource_lease
+from backend.data.tenancy import ResourceAccess
 from backend.util import tracing
 from backend.util.truncate import truncate
-from backend.util.workspace import WorkspaceManager
 
 from .capability_gates import gate_denied, gate_denied_error
 from .models import (
@@ -107,8 +108,7 @@ async def _persist_and_summarize(
             outline = _outline(summarized, offsets, _DIGEST_PREVIEW_CHARS)
 
     try:
-        workspace = await workspace_db().get_or_create_workspace(user_id)
-        manager = WorkspaceManager(user_id, workspace.id, session_id)
+        manager = await get_workspace_manager(user_id, session_id)
         await manager.write_file(
             content=body.encode("utf-8"),
             filename=f"{tool_call_id}.json",
@@ -352,6 +352,13 @@ class BaseTool:
         return False
 
     @property
+    def resource_access(self) -> ResourceAccess:
+        return "execute"
+
+    def additional_resource_accesses(self, **kwargs) -> tuple[ResourceAccess, ...]:
+        return ()
+
+    @property
     def is_available(self) -> bool:
         """Whether this tool is available in the current environment.
 
@@ -432,6 +439,36 @@ class BaseTool:
             return output
 
     async def _execute_checked(
+        self,
+        user_id: str | None,
+        session: ChatSession,
+        tool_call_id: str,
+        **kwargs,
+    ) -> StreamToolOutputAvailable:
+        if not self.requires_auth or not user_id:
+            return await self._execute_authorized(
+                user_id, session, tool_call_id, **kwargs
+            )
+        async with AsyncExitStack() as stack:
+            guards = []
+            for access in (
+                self.resource_access,
+                *self.additional_resource_accesses(**kwargs),
+            ):
+                guard = await stack.enter_async_context(
+                    live_resource_lease(
+                        user_id, session.organization_id, session.team_id, access
+                    )
+                )
+                if not guard:
+                    return self._access_denied(session, tool_call_id)
+                guards.append(guard)
+            action = self._execute_authorized(user_id, session, tool_call_id, **kwargs)
+            for guard in reversed(guards):
+                action = guard.run(action)
+            return await action
+
+    async def _execute_authorized(
         self,
         user_id: str | None,
         session: ChatSession,
@@ -701,6 +738,19 @@ class BaseTool:
                 review_id=review_id,
                 ask=headline.ask,
                 object=headline.object,
+            ).model_dump_json(),
+            success=False,
+        )
+
+    def _access_denied(
+        self, session: ChatSession, tool_call_id: str
+    ) -> StreamToolOutputAvailable:
+        return StreamToolOutputAvailable(
+            toolCallId=tool_call_id,
+            toolName=self.name,
+            output=ErrorResponse(
+                message="Your current organization role cannot use this tool",
+                session_id=session.session_id,
             ).model_dump_json(),
             success=False,
         )

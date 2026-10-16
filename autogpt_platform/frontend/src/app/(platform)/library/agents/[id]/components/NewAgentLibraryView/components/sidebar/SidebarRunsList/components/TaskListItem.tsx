@@ -24,6 +24,7 @@ import {
   StopCircleIcon,
 } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { TeamBadge } from "@/components/contextual/TeamBadge/TeamBadge";
 
 const statusIconMap: Record<AgentExecutionStatus, React.ReactNode> = {
   INCOMPLETE: (
@@ -114,6 +115,7 @@ export function TaskListItem({
       }
       onClick={onClick}
       selected={selected}
+      badge={<TeamBadge teamId={run.team_id} />}
       testID={`library-run-item-${run.id}`}
       actions={
         <TaskActionsDropdown agent={agent} run={run} onDeleted={onDeleted} />

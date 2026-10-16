@@ -26,13 +26,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/molecules/DropdownMenu/DropdownMenu";
 import { useToast } from "@/components/molecules/Toast/use-toast";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
 import { exportAsJSONFile } from "@/lib/utils";
+import { useOrgTeamStore } from "@/services/org-team/store";
+import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { MoreHorizontalIcon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+
+import { ShareAgentDialog } from "@/app/(platform)/library/components/ShareAgentDialog/ShareAgentDialog";
+import { getBuilderHref } from "@/services/org-team/builder";
 
 interface Props {
   agent: LibraryAgent;
@@ -50,19 +59,33 @@ export function AgentActionsDropdown({
   onClearSelectedRun,
 }: Props) {
   const { toast } = useToast();
+  const organizationId = agent.organization_id ?? null;
+  const teamId = agent.team_id ?? null;
 
-  const { mutateAsync: deleteAgent } = useDeleteV2DeleteLibraryAgent();
+  const { mutateAsync: deleteAgent } = useDeleteV2DeleteLibraryAgent({
+    request: getTenantRequestInit(organizationId, teamId),
+  });
 
   const { mutateAsync: deleteRun, isPending: isDeletingRun } =
-    useDeleteV1DeleteGraphExecution();
+    useDeleteV1DeleteGraphExecution({
+      request: getTenantRequestInit(organizationId, teamId),
+    });
 
   const queryClient = useQueryClient();
   const router = useRouter();
   const [isDeletingAgent, setIsDeletingAgent] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showDeleteRunDialog, setShowDeleteRunDialog] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
 
-  const { mutateAsync: deleteSchedule } = useDeleteV1DeleteExecutionSchedule();
+  // Share only makes sense once the user has teams; the backend enforces
+  // owner/admin rights and any 400 is surfaced via the dialog's toast.
+  const hasTeams = useOrgTeamStore((s) => s.teams.length > 0);
+  const showOrgSettings = useGetFlag(Flag.SHOW_ORG_SETTINGS);
+
+  const { mutateAsync: deleteSchedule } = useDeleteV1DeleteExecutionSchedule({
+    request: getTenantRequestInit(organizationId, teamId),
+  });
   const [isDeletingSchedule, setIsDeletingSchedule] = useState(false);
   const [showDeleteScheduleDialog, setShowDeleteScheduleDialog] =
     useState(false);
@@ -102,6 +125,7 @@ export function AgentActionsDropdown({
         agent.graph_id,
         agent.graph_version,
         { for_export: true },
+        getTenantRequestInit(organizationId, teamId),
       );
       if (res.status === 200) {
         const filename = `${agent.name}_v${agent.graph_version}.json`;
@@ -128,7 +152,11 @@ export function AgentActionsDropdown({
       toast({ title: "Task deleted" });
 
       await queryClient.refetchQueries({
-        queryKey: getGetV1ListGraphExecutionsQueryKey(agentGraphId),
+        queryKey: getTeamScopedQueryKey(
+          getGetV1ListGraphExecutionsQueryKey(agentGraphId),
+          organizationId,
+          teamId,
+        ),
       });
 
       if (onClearSelectedRun) onClearSelectedRun();
@@ -153,9 +181,13 @@ export function AgentActionsDropdown({
       toast({ title: "Schedule deleted" });
 
       await queryClient.invalidateQueries({
-        queryKey: getGetV1ListExecutionSchedulesForAGraphQueryOptions(
-          agentGraphId ?? "",
-        ).queryKey,
+        queryKey: getTeamScopedQueryKey(
+          getGetV1ListExecutionSchedulesForAGraphQueryOptions(
+            agentGraphId ?? "",
+          ).queryKey,
+          organizationId,
+          teamId,
+        ),
       });
 
       setShowDeleteDialog(false);
@@ -200,7 +232,12 @@ export function AgentActionsDropdown({
           ) : null}
           <DropdownMenuItem asChild>
             <Link
-              href={`/build?flowID=${agent.graph_id}&flowVersion=${agent.graph_version}`}
+              href={getBuilderHref({
+                graphId: agent.graph_id,
+                graphVersion: agent.graph_version,
+                organizationId: agent.organization_id ?? null,
+                teamId: agent.team_id ?? null,
+              })}
               target="_blank"
               className="flex items-center gap-2"
             >
@@ -213,6 +250,15 @@ export function AgentActionsDropdown({
           >
             Export workflow to file
           </DropdownMenuItem>
+          {showOrgSettings && hasTeams ? (
+            <DropdownMenuItem
+              onClick={() => setShowShareDialog(true)}
+              className="flex items-center gap-2"
+              data-testid="agent-actions-share"
+            >
+              Share with a team
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem
             onClick={() => setShowDeleteDialog(true)}
             className="flex items-center gap-2"
@@ -323,6 +369,14 @@ export function AgentActionsDropdown({
           </div>
         </Dialog.Content>
       </Dialog>
+
+      {hasTeams ? (
+        <ShareAgentDialog
+          agent={agent}
+          isOpen={showShareDialog}
+          setIsOpen={setShowShareDialog}
+        />
+      ) : null}
     </>
   );
 }

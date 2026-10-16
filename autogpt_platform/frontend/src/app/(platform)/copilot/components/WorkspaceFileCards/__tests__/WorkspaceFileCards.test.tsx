@@ -119,6 +119,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useCopilotUIStore.setState({
+    artifactTenantScope: null,
     artifactPanel: {
       isOpen: false,
       activeArtifact: null,

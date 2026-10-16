@@ -36,6 +36,7 @@ from typing import Any
 
 from backend.copilot.context import get_workspace_manager
 from backend.copilot.model import ChatSession
+from backend.util.background import spawn_background_task
 from backend.util.request import validate_url_host
 
 from .base import BaseTool
@@ -197,7 +198,10 @@ def _fire_and_forget_save(
             "[browser] Skipping state save for session %s: closing", session_name
         )
         return
-    task = asyncio.create_task(_save_browser_state(session_name, user_id, session))
+    task = spawn_background_task(
+        _save_browser_state(session_name, user_id, session),
+        name=f"agent-browser-save:{session_name}",
+    )
     saves = _pending_saves.setdefault(session_name, set())
     saves.add(task)
     task.add_done_callback(saves.discard)

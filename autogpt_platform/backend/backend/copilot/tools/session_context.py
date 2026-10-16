@@ -84,7 +84,13 @@ async def is_followups_feature_enabled(user_id: str | None) -> bool:
     )
 
 
-async def build_session_context(session_id: str, user_id: str) -> str:
+async def build_session_context(
+    session_id: str,
+    user_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    expert_id: str | None = None,
+) -> str:
     """Return the body of the ``<session_context>`` block for this turn.
 
     Calls the polymorphic ``get_execution_schedules`` endpoint with
@@ -113,6 +119,8 @@ async def build_session_context(session_id: str, user_id: str) -> str:
             user_id=user_id,
             session_id=session_id,
             kind="copilot_turn",
+            organization_id=organization_id,
+            team_ids=[team_id] if team_id else [],
         )
     except Exception as e:
         # Graceful degradation: scheduler RPC issues must never fail the
@@ -129,12 +137,13 @@ async def build_session_context(session_id: str, user_id: str) -> str:
     # The endpoint already narrows by ``kind`` server-side; the isinstance
     # filter is a belt-and-braces guard against a legacy untyped row that
     # might slip through (matches ``schedules.routes.list_copilot_turn_schedules``).
-    # A resume or send at the budget reset is the user's, set and cancelled
-    # from the chat, so the model isn't told about it.
     jobs = [
-        j
-        for j in raw_jobs
-        if isinstance(j, CopilotTurnJobInfo) and j.purpose == "followup"
+        job
+        for job in raw_jobs
+        if isinstance(job, CopilotTurnJobInfo)
+        and job.purpose == "followup"
+        and (job.organization_id, job.team_id, job.expert_id)
+        == (organization_id, team_id, expert_id)
     ]
 
     if not jobs:

@@ -5,9 +5,11 @@
 -- creating it again answered 409 — so replace it with a partial index shaped
 -- like the root one. Named differently, and dropped from schema.prisma, so
 -- Prisma stops expecting an unqualified index it cannot express.
-DROP INDEX "UserWorkspaceFolder_workspaceId_parentId_name_key";
+DROP INDEX IF EXISTS "UserWorkspaceFolder_workspaceId_parentId_name_key";
 
-CREATE UNIQUE INDEX "UserWorkspaceFolder_workspaceId_parentId_name_live_key" ON "UserWorkspaceFolder"("workspaceId", "parentId", "name") WHERE "isDeleted" = false;
+DROP INDEX IF EXISTS "UserWorkspaceFolder_workspaceId_scopeKey_parentId_name_key";
+
+CREATE UNIQUE INDEX "UserWorkspaceFolder_workspace_scope_parent_name_live_key" ON "UserWorkspaceFolder"("workspaceId", "scopeKey", "parentId", "name") WHERE "isDeleted" = false;
 
 -- Files reserved their path the same way, and bought the freedom back in code:
 -- soft-delete renamed the row ("/a.txt" -> "/a.txt__deleted__<ts>"). That put
@@ -16,9 +18,11 @@ CREATE UNIQUE INDEX "UserWorkspaceFolder_workspaceId_parentId_name_live_key" ON 
 -- same name, so the second rename hit the very index it exists to dodge. Give
 -- files the folders' constraint instead, and let a deleted row keep the path
 -- it was deleted at.
-DROP INDEX "UserWorkspaceFile_workspaceId_path_key";
+DROP INDEX IF EXISTS "UserWorkspaceFile_workspaceId_path_key";
 
-CREATE UNIQUE INDEX "UserWorkspaceFile_workspaceId_path_live_key" ON "UserWorkspaceFile"("workspaceId", "path") WHERE "isDeleted" = false;
+DROP INDEX IF EXISTS "UserWorkspaceFile_workspaceId_scopeKey_path_key";
+
+CREATE UNIQUE INDEX "UserWorkspaceFile_workspace_scope_path_live_key" ON "UserWorkspaceFile"("workspaceId", "scopeKey", "path") WHERE "isDeleted" = false;
 
 -- Give the rows the old rename mangled their paths back: the index skips
 -- deleted rows, so a restored path collides with nothing. Both suffixes ever

@@ -9,6 +9,7 @@ import { useMoveToFolderDialog } from "./useMoveToFolderDialog";
 
 interface Props {
   move: MoveSubject;
+  scope?: { organizationId: string | null; teamId: string | null };
   /** What is being moved, as shown in the prompt: `“report.pdf”`, `3 files`
       or `“Reports”`. */
   subject: string;
@@ -23,13 +24,14 @@ interface Props {
 
 export function MoveToFolderDialog({
   move,
+  scope,
   subject,
   canMoveToRoot,
   isOpen,
   setIsOpen,
   onMoved,
 }: Props) {
-  const { folders } = useArtifactsFolders();
+  const { folders } = useArtifactsFolders(scope);
   const offerRoot = canMoveToRoot ?? defaultCanMoveToRoot(move, folders);
   const {
     rows,
@@ -41,6 +43,7 @@ export function MoveToFolderDialog({
     isMoving,
   } = useMoveToFolderDialog({
     move,
+    scope,
     canMoveToRoot: offerRoot,
     onDone: () => {
       setIsOpen(false);

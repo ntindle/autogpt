@@ -20,8 +20,8 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 # local transport. Pinned as module constants so the field defaults and
 # the validator can't drift — same pattern as
 # ``copilot/config.py::_DEFAULT_TITLE_MODEL`` etc.
-_DEFAULT_LLM_MODEL = "gpt-4.1-mini"
-_DEFAULT_RERANKER_MODEL = "gpt-4.1-nano"
+_DEFAULT_LLM_MODEL = "openai/gpt-4.1-mini"
+_DEFAULT_RERANKER_MODEL = "openai/gpt-4.1-nano"
 _DEFAULT_EMBEDDER_MODEL = "text-embedding-3-small"
 
 # Local-transport defaults. Mirrors dev's chat-side ``--with-ollama``
@@ -91,7 +91,7 @@ class GraphitiConfig(BaseSettings):
     # Cross-encoder reranker (P-1.4) — used by warm-context retrieval to
     # rerank top edges from BM25 + cosine + BFS. Graphiti's built-in
     # OpenAIRerankerClient runs concurrent boolean-classifier prompts
-    # against gpt-4.1-nano by default (one prompt per candidate; log-
+    # against openai/gpt-4.1-nano by default (one prompt per candidate; log-
     # probabilities decide the score). The audit estimated ~10–15%
     # precision lift on warm context at the cost of one LLM call per
     # session start. Defaults match Graphiti's own default so the

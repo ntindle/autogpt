@@ -44,7 +44,7 @@ export function SelectedRunView({
   banner,
 }: Props) {
   const { run, preset, isLoading, responseError, httpError } =
-    useSelectedRunView(agent.graph_id, runId);
+    useSelectedRunView(agent, runId);
 
   const breakpoint = useBreakpoint();
   const isLgScreenUp = isLargeScreen(breakpoint);
@@ -53,7 +53,11 @@ export function SelectedRunView({
     pendingReviews,
     isLoading: reviewsLoading,
     refetch: refetchReviews,
-  } = usePendingReviewsForExecution(runId);
+  } = usePendingReviewsForExecution(
+    runId,
+    run?.organization_id ?? agent.organization_id ?? null,
+    run?.team_id ?? agent.team_id ?? null,
+  );
 
   useEffect(() => {
     if (run?.status === AgentExecutionStatus.REVIEW && runId) {
@@ -182,7 +186,13 @@ export function SelectedRunView({
                           <LoadingSpinner />
                         </div>
                       ) : run && "outputs" in run ? (
-                        <RunOutputs outputs={run.outputs as any} />
+                        <RunOutputs
+                          outputs={run.outputs as Record<string, unknown[]>}
+                          organizationId={
+                            run.organization_id ?? agent.organization_id
+                          }
+                          teamId={run.team_id ?? agent.team_id}
+                        />
                       ) : (
                         <Text variant="body" className="text-neutral-600">
                           No output from this run.

@@ -69,6 +69,12 @@ class WorkspaceFile(pydantic.BaseModel):
     deleted_at: Optional[datetime] = None
     folder_id: Optional[str] = None
     metadata: dict = pydantic.Field(default_factory=dict)
+    organization_id: Optional[str] = None
+    team_id: Optional[str] = None
+    session_id: Optional[str] = None
+    execution_id: Optional[str] = None
+    scope_resolved: bool = True
+    is_user_global_config: bool = False
 
     @staticmethod
     def from_db(file: "UserWorkspaceFile") -> "WorkspaceFile":
@@ -87,7 +93,27 @@ class WorkspaceFile(pydantic.BaseModel):
             deleted_at=file.deletedAt,
             folder_id=file.folderId,
             metadata=file.metadata if isinstance(file.metadata, dict) else {},
+            organization_id=file.organizationId,
+            team_id=file.teamId,
+            session_id=file.sessionId,
+            execution_id=file.executionId,
+            scope_resolved=file.scopeResolved,
+            is_user_global_config=file.isUserGlobalConfig,
         )
+
+
+def _workspace_scope_where(
+    organization_id: str | None,
+    team_id: str | None,
+    *,
+    user_global_config: bool = False,
+) -> UserWorkspaceFileWhereInput:
+    return {
+        "organizationId": None if user_global_config else organization_id,
+        "teamId": None if user_global_config else team_id,
+        "scopeResolved": True,
+        "isUserGlobalConfig": user_global_config,
+    }
 
 
 async def get_or_create_workspace(user_id: str) -> Workspace:
@@ -143,6 +169,11 @@ async def create_workspace_file(
     size_bytes: int,
     checksum: Optional[str] = None,
     metadata: Optional[dict] = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    session_id: str | None = None,
+    execution_id: str | None = None,
+    user_global_config: bool = False,
 ) -> WorkspaceFile:
     """
     Create a new workspace file record.
@@ -183,6 +214,12 @@ async def create_workspace_file(
             "sizeBytes": size_bytes,
             "checksum": checksum,
             "metadata": SafeJson(metadata or {}),
+            "organizationId": organization_id,
+            "teamId": team_id,
+            "sessionId": session_id,
+            "executionId": execution_id,
+            "scopeResolved": True,
+            "isUserGlobalConfig": user_global_config,
         }
     )
 
@@ -196,6 +233,10 @@ async def create_workspace_file(
 async def get_workspace_file(
     file_id: str,
     workspace_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    *,
+    user_global_config: bool = False,
 ) -> Optional[WorkspaceFile]:
     """
     Get a workspace file by ID.
@@ -211,31 +252,24 @@ async def get_workspace_file(
         "id": file_id,
         "isDeleted": False,
         "workspaceId": workspace_id,
+        **_workspace_scope_where(
+            organization_id,
+            team_id,
+            user_global_config=user_global_config,
+        ),
     }
 
     file = await UserWorkspaceFile.prisma().find_first(where=where_clause)
     return WorkspaceFile.from_db(file) if file else None
 
 
-async def get_workspace_file_by_id(
-    file_id: str,
-) -> Optional[WorkspaceFile]:
-    """
-    Get a workspace file by ID without workspace scoping.
-
-    Only use this when access has already been validated through another
-    mechanism (e.g. SharedExecutionFile allowlist). For user-facing
-    endpoints, use get_workspace_file() which enforces workspace scoping.
-    """
-    file = await UserWorkspaceFile.prisma().find_first(
-        where={"id": file_id, "isDeleted": False}
-    )
-    return WorkspaceFile.from_db(file) if file else None
-
-
 async def get_workspace_file_by_path(
     workspace_id: str,
     path: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    *,
+    user_global_config: bool = False,
 ) -> Optional[WorkspaceFile]:
     """
     Get a workspace file by its virtual path.
@@ -256,6 +290,11 @@ async def get_workspace_file_by_path(
             "workspaceId": workspace_id,
             "path": path,
             "isDeleted": False,
+            **_workspace_scope_where(
+                organization_id,
+                team_id,
+                user_global_config=user_global_config,
+            ),
         }
     )
     return WorkspaceFile.from_db(file) if file else None
@@ -274,6 +313,9 @@ async def list_workspace_files(
     folder_id: Optional[str] = None,
     folder_ids: Optional[list[str]] = None,
     root_only: bool = False,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    user_global_config: bool = False,
     allowed_path_prefixes: Optional[list[str]] = None,
     include_user_files: bool = False,
 ) -> list[WorkspaceFile]:
@@ -319,7 +361,14 @@ async def list_workspace_files(
     scope_branches = _scope_branches(allowed_path_prefixes, include_user_files)
     if scope_branches is not None and not scope_branches:
         return []
-    where_clause: UserWorkspaceFileWhereInput = {"workspaceId": workspace_id}
+    where_clause: UserWorkspaceFileWhereInput = {
+        "workspaceId": workspace_id,
+        **_workspace_scope_where(
+            organization_id,
+            team_id,
+            user_global_config=user_global_config,
+        ),
+    }
 
     if not include_deleted:
         where_clause["isDeleted"] = False
@@ -398,6 +447,11 @@ async def count_workspace_files(
     workspace_id: str,
     path_prefix: Optional[str] = None,
     include_deleted: bool = False,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    *,
+    user_global_config: bool = False,
+    all_scopes: bool = False,
     folder_id: Optional[str] = None,
     folder_ids: Optional[list[str]] = None,
     root_only: bool = False,
@@ -424,6 +478,14 @@ async def count_workspace_files(
     if scope_branches is not None and not scope_branches:
         return 0
     where_clause: UserWorkspaceFileWhereInput = {"workspaceId": workspace_id}
+    if not all_scopes:
+        where_clause.update(
+            _workspace_scope_where(
+                organization_id,
+                team_id,
+                user_global_config=user_global_config,
+            )
+        )
     if not include_deleted:
         where_clause["isDeleted"] = False
 
@@ -452,6 +514,8 @@ async def rename_workspace_file(
     file_id: str,
     workspace_id: str,
     name: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> Optional[WorkspaceFile]:
     """Rename a file in place: its virtual path keeps its folder and gets the
     new name; the storage blob is untouched.
@@ -461,7 +525,7 @@ async def rename_workspace_file(
 
     Returns the updated file, or None when it does not exist in the workspace.
     """
-    file = await get_workspace_file(file_id, workspace_id)
+    file = await get_workspace_file(file_id, workspace_id, organization_id, team_id)
     if file is None:
         return None
     folder = skill_owner_folder(
@@ -470,7 +534,9 @@ async def rename_workspace_file(
     if folder is not None:
         from backend.data.workspace_skill import rename_workspace_skill_file
 
-        return await rename_workspace_skill_file(file_id, workspace_id, name, folder)
+        return await rename_workspace_skill_file(
+            file_id, workspace_id, name, folder, organization_id, team_id
+        )
     new_path = posixpath.join(posixpath.dirname(file.path), name)
     updated = await UserWorkspaceFile.prisma().update(
         where={"id": file_id},
@@ -485,6 +551,10 @@ async def rename_workspace_file(
 async def soft_delete_workspace_file(
     file_id: str,
     workspace_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    *,
+    user_global_config: bool = False,
 ) -> Optional[WorkspaceFile]:
     """
     Soft-delete a workspace file.
@@ -501,7 +571,13 @@ async def soft_delete_workspace_file(
         Updated WorkspaceFile instance or None if not found
     """
     # First verify the file exists and belongs to workspace
-    file = await get_workspace_file(file_id, workspace_id)
+    file = await get_workspace_file(
+        file_id,
+        workspace_id,
+        organization_id,
+        team_id,
+        user_global_config=user_global_config,
+    )
     if file is None:
         return None
 
@@ -520,6 +596,9 @@ async def soft_delete_workspace_file(
 async def resolve_workspace_files(
     user_id: str,
     file_ids: list[str],
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    session_id: str | None = None,
 ) -> list[UserWorkspaceFile]:
     """Return workspace-scoped file records for the given IDs.
 
@@ -536,6 +615,11 @@ async def resolve_workspace_files(
             "id": {"in": valid_ids},
             "workspaceId": workspace.id,
             "isDeleted": False,
+            "organizationId": organization_id,
+            "teamId": team_id,
+            "scopeResolved": True,
+            "isUserGlobalConfig": False,
+            **({"sessionId": session_id} if session_id is not None else {}),
         }
     )
 
@@ -546,6 +630,8 @@ async def resolve_attachable_workspace_files(
     *,
     session_id: str,
     expert_id: str | None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> list[UserWorkspaceFile]:
     """Resolve attachment IDs for a message sent in ``session_id``.
 
@@ -559,7 +645,7 @@ async def resolve_attachable_workspace_files(
     Runs in the API server with direct DB access, so the resolver is called
     in-process; code in the executor must go through ``workspace_db()``.
     """
-    files = await resolve_workspace_files(user_id, file_ids)
+    files = await resolve_workspace_files(user_id, file_ids, organization_id, team_id)
     if expert_id is None or not files:
         return files
     scope = await resolve_expert_workspace_scope(user_id, expert_id)
@@ -607,7 +693,13 @@ def build_files_block(
     return "\n\n[Attached files]\n" + "\n".join(lines) + "\n" + "\n".join(hints)
 
 
-async def get_workspace_total_size(workspace_id: str) -> int:
+async def get_workspace_total_size(
+    workspace_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    *,
+    all_scopes: bool = False,
+) -> int:
     """
     Get the total size of all files in a workspace.
 
@@ -620,7 +712,11 @@ async def get_workspace_total_size(workspace_id: str) -> int:
     Returns:
         Total size in bytes
     """
-    files = await UserWorkspaceFile.prisma().find_many(
-        where={"workspaceId": workspace_id, "isDeleted": False},
-    )
+    where: UserWorkspaceFileWhereInput = {
+        "workspaceId": workspace_id,
+        "isDeleted": False,
+    }
+    if not all_scopes:
+        where.update(_workspace_scope_where(organization_id, team_id))
+    files = await UserWorkspaceFile.prisma().find_many(where=where)
     return sum(f.sizeBytes for f in files)

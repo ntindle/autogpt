@@ -17,6 +17,7 @@ type Props = {
   agent: LibraryAgent;
   scheduleId: string;
   schedule?: GraphExecutionJobInfo;
+  canDelete: boolean;
   onDeleted?: () => void;
   onSelectRun?: (id: string) => void;
 };
@@ -25,6 +26,7 @@ export function SelectedScheduleActions({
   agent,
   scheduleId,
   schedule,
+  canDelete,
   onDeleted,
   onSelectRun,
 }: Props) {
@@ -72,60 +74,64 @@ export function SelectedScheduleActions({
             <Icon icon={EyeIcon} size={18} className="text-zinc-700" />
           </Button>
         )}
-        {schedule && (
+        {schedule && canDelete && (
           <EditScheduleModal
             graphId={agent.graph_id}
             schedule={schedule}
             iconOnly
           />
         )}
-        <Button
-          variant="icon"
-          size="icon"
-          aria-label="Delete schedule"
-          onClick={() => setShowDeleteDialog(true)}
-          disabled={isDeleting}
-        >
-          {isDeleting ? (
-            <LoadingSpinner size="small" />
-          ) : (
-            <Icon icon={Delete02Icon} size={18} />
-          )}
-        </Button>
+        {canDelete ? (
+          <Button
+            variant="icon"
+            size="icon"
+            aria-label="Delete schedule"
+            onClick={() => setShowDeleteDialog(true)}
+            disabled={isDeleting}
+          >
+            {isDeleting ? (
+              <LoadingSpinner size="small" />
+            ) : (
+              <Icon icon={Delete02Icon} size={18} />
+            )}
+          </Button>
+        ) : null}
         <AgentActionsDropdown agent={agent} scheduleId={scheduleId} />
       </SelectedActionsWrap>
 
-      <Dialog
-        controlled={{
-          isOpen: showDeleteDialog,
-          set: setShowDeleteDialog,
-        }}
-        styling={{ maxWidth: "32rem" }}
-        title="Delete schedule"
-      >
-        <Dialog.Content>
-          <Text variant="large">
-            Are you sure you want to delete this schedule? This action cannot be
-            undone.
-          </Text>
-          <Dialog.Footer>
-            <Button
-              variant="secondary"
-              onClick={() => setShowDeleteDialog(false)}
-              disabled={isDeleting}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              loading={isDeleting}
-            >
-              Delete Schedule
-            </Button>
-          </Dialog.Footer>
-        </Dialog.Content>
-      </Dialog>
+      {canDelete ? (
+        <Dialog
+          controlled={{
+            isOpen: showDeleteDialog,
+            set: setShowDeleteDialog,
+          }}
+          styling={{ maxWidth: "32rem" }}
+          title="Delete schedule"
+        >
+          <Dialog.Content>
+            <Text variant="large">
+              Are you sure you want to delete this schedule? This action cannot
+              be undone.
+            </Text>
+            <Dialog.Footer>
+              <Button
+                variant="secondary"
+                onClick={() => setShowDeleteDialog(false)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleDelete}
+                loading={isDeleting}
+              >
+                Delete Schedule
+              </Button>
+            </Dialog.Footer>
+          </Dialog.Content>
+        </Dialog>
+      ) : null}
     </>
   );
 }

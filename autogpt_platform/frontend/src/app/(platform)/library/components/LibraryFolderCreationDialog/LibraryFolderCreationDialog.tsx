@@ -25,6 +25,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { FOLDER_COLORS } from "../folder-constants";
 import { Folder01Icon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { TeamPicker } from "@/components/contextual/TeamPicker/TeamPicker";
+import { useCreateTeamSelection } from "@/components/contextual/TeamPicker/useCreateTeamSelection";
+import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
 
 const LazyEmojiPicker = dynamic(
   () =>
@@ -47,8 +50,11 @@ export default function LibraryFolderCreationDialog() {
   const [isOpen, setIsOpen] = useState(false);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { teamId, setTeamId, teamRequestInit, isReady } =
+    useCreateTeamSelection(CreateSurface.LibraryFolder);
 
   const { mutate: createFolder, isPending } = usePostV2CreateFolder({
+    request: teamRequestInit,
     mutation: {
       onSuccess: () => {
         queryClient.invalidateQueries({
@@ -139,6 +145,13 @@ export default function LibraryFolderCreationDialog() {
             )}
           />
 
+          <TeamPicker
+            surfaceKey={CreateSurface.LibraryFolder}
+            value={teamId}
+            onChange={setTeamId}
+            wrapperClassName="!mb-0"
+          />
+
           <FormField
             control={form.control}
             name="folderColor"
@@ -213,7 +226,7 @@ export default function LibraryFolderCreationDialog() {
             type="submit"
             variant="primary"
             className="mt-2 min-w-[18rem]"
-            disabled={!form.formState.isValid || isPending}
+            disabled={!form.formState.isValid || isPending || !isReady}
             loading={isPending}
           >
             Create

@@ -5,8 +5,9 @@ from typing import Annotated, Literal, cast
 from urllib.parse import urlparse
 
 import stripe
-from autogpt_libs.auth import get_request_context, get_user_id, requires_user
+from autogpt_libs.auth import get_user_id, requires_user
 from autogpt_libs.auth.models import RequestContext
+from autogpt_libs.auth.permissions import OrgAction
 from fastapi import (
     APIRouter,
     Depends,
@@ -23,6 +24,9 @@ from typing_extensions import Optional
 from backend.api.features.billing.client_country import ClientCountry
 from backend.api.features.billing.credits_rate_limit import (
     enforce_subscription_status_rate_limit,
+)
+from backend.api.live_auth import (
+    requires_live_org_permission as requires_org_permission,
 )
 from backend.copilot.rate_limit import get_tier_multipliers
 from backend.data import checkout_audience
@@ -1060,7 +1064,10 @@ async def stripe_webhook(request: Request):
 )
 async def manage_payment_method(
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_org_permission(OrgAction.MANAGE_BILLING),
+    ],
 ) -> dict[str, str | None]:
     """Return a Stripe billing-portal URL for the caller.
 

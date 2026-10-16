@@ -1,0 +1,9 @@
+{
+  "upstream": {
+    "repository": "Significant-Gravitas/AutoGPT",
+    "branch": "dev"
+  },
+  "fork": "ntindle/autogpt",
+  "mainline": "mainline",
+  "branches": ["personal/tasks", "personal/orgs"]
+}

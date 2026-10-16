@@ -44,6 +44,10 @@ TEST_USER_ID = "test-user-id"
 JWT_USER_ID = "3e53486c-cf57-477e-ba2a-cb02dc828e1a"
 
 
+async def _run_with_credential_lease(action, _leases):
+    return await action
+
+
 def _make_webhook(
     webhook_id: str = "wh-123",
     user_id: str = TEST_USER_ID,
@@ -850,7 +854,7 @@ class TestWebhookPingOwnership:
         assert resp.status_code == 404
         # Ownership check must short-circuit before any side effects.
         mock_get_mgr.assert_not_called()
-        mock_creds.get.assert_not_called()
+        mock_creds.acquire_lease.assert_not_called()
 
     def test_nonexistent_webhook_returns_404(self):
         with patch(
@@ -861,10 +865,41 @@ class TestWebhookPingOwnership:
 
         assert resp.status_code == 404
 
+    def test_revoked_webhook_scope_returns_403_without_pinging(self, test_user_id):
+        webhook = _make_webhook(user_id=test_user_id)
+
+        @asynccontextmanager
+        async def deny_scope(*_args, **_kwargs):
+            yield False
+
+        with (
+            patch(
+                "backend.api.features.integrations.router.get_webhook",
+                AsyncMock(return_value=webhook),
+            ),
+            patch(
+                "backend.api.features.integrations.router.live_resource_permission_barrier",
+                deny_scope,
+            ),
+            patch(
+                "backend.api.features.integrations.router.get_webhook_manager"
+            ) as mock_get_mgr,
+            patch(
+                "backend.api.features.integrations.router.creds_manager"
+            ) as mock_creds,
+        ):
+            resp = client.post("/webhooks/wh-123/ping")
+
+        assert resp.status_code == 403
+        mock_get_mgr.assert_not_called()
+        mock_creds.acquire_lease.assert_not_called()
+
     def test_owned_webhook_pings(self, test_user_id):
         webhook = _make_webhook(user_id=test_user_id)
         webhook_manager = MagicMock()
         webhook_manager.trigger_ping = AsyncMock()
+        lease = MagicMock(credentials=_make_oauth2_cred())
+        lease.release = AsyncMock()
         with (
             patch(
                 "backend.api.features.integrations.router.get_webhook",
@@ -881,13 +916,19 @@ class TestWebhookPingOwnership:
                 "backend.api.features.integrations.router.wait_for_webhook_event",
                 AsyncMock(return_value=True),
             ),
+            patch(
+                "backend.api.features.integrations.router.run_with_credential_lease_guard",
+                new=_run_with_credential_lease,
+            ),
         ):
-            mock_creds.get = AsyncMock(return_value=None)
+            mock_creds.acquire_lease = AsyncMock(return_value=lease)
             resp = client.post("/webhooks/wh-123/ping")
 
         assert resp.status_code == 200
         assert resp.json() is True
+        mock_creds.acquire_lease.assert_awaited_once_with(test_user_id, "cred-456")
         webhook_manager.trigger_ping.assert_awaited_once()
+        lease.release.assert_awaited_once()
 
 
 class TestOAuthHandlerResolutionForDeviceProviders:

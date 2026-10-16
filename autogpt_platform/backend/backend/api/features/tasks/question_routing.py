@@ -142,6 +142,7 @@ def prepare_question_tasks(task: WorkspaceTask, tasks: list[WorkspaceTask]) -> N
         consultation = WorkspaceTask(
             user_id=task.user_id,
             organization_id=task.organization_id,
+            team_id=task.team_id,
             parent_id=task.id,
             project=task.project,
             required=False,

@@ -320,6 +320,8 @@ class Expert(BaseModel):
     learning_paused_at: datetime | None = None
     # Owner-scoped grouping. None = ungrouped ("unpodded").
     pod_id: str | None = None
+    organization_id: str | None = None
+    team_id: str | None = None
     # A hire's workflows, skills and routines land after it is returned.
     setup_status: ExpertSetupStatus = "ready"
     # What setup could not install; re-hiring the template retries it.
@@ -378,6 +380,8 @@ class ExpertRun(BaseModel):
     started_at: datetime | None
     ended_at: datetime | None
     link: str | None
+    organization_id: str | None = None
+    team_id: str | None = None
 
 
 class ExpertActivityDay(BaseModel):

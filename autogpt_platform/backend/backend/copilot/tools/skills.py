@@ -510,7 +510,13 @@ async def _get_user_skill_manager(
     user_id: str, scope: WorkspaceScope | None = None
 ) -> WorkspaceManager:
     workspace = await workspace_db().get_or_create_workspace(user_id)
-    return WorkspaceManager(user_id, workspace.id, session_id=None, scope=scope)
+    return WorkspaceManager(
+        user_id,
+        workspace.id,
+        session_id=None,
+        user_global_config=True,
+        scope=scope,
+    )
 
 
 async def resolve_skill_scope(
@@ -1873,7 +1879,9 @@ async def saved_skill_limit_reached(
     any other root moves into, or already fills, the saved budget."""
     workspace = await workspace_db().get_or_create_workspace(user_id)
     path = _skill_md_path(name, expert_id)
-    root = await workspace_db().get_workspace_file_by_path(workspace.id, path)
+    root = await workspace_db().get_workspace_file_by_path(
+        workspace.id, path, user_global_config=True
+    )
     meta = root.metadata if root is not None and root.metadata else {}
     origin = (
         SKILL_ORIGIN_MARKETPLACE
@@ -1881,7 +1889,7 @@ async def saved_skill_limit_reached(
         else SKILL_ORIGIN_USER
     )
     return not await workspace_skill_db().skill_root_has_room(
-        workspace.id, path, origin
+        workspace.id, path, origin, user_global_config=True
     )
 
 

@@ -4,7 +4,6 @@ import uuid
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 from typing import NamedTuple, TypedDict
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
@@ -24,6 +23,7 @@ from backend.util.clients import get_database_manager_async_client
 from backend.util.feature_flag import Flag, evaluate_feature_flag, is_feature_enabled
 from backend.util.funnel_analytics import emit_funnel_event
 from backend.util.posthog_events import PostHogEvent
+from backend.util.tenancy_urls import copilot_path
 from backend.util.timezone_utils import get_user_timezone_or_utc
 
 from .models import BriefingContent, BriefingDecisionItem, BriefingRunItem
@@ -103,12 +103,17 @@ def compose_briefing(
     # at the needs-attention list.
     for review in reviews[:_MAX_DECISION_ITEMS]:
         if review.session_id:
-            link = f"/copilot?sessionId={quote(review.session_id)}"
+            link = copilot_path(
+                review.session_id, review.organization_id, review.team_id
+            )
         else:
             info = agent_info_by_graph_id.get(review.graph_id or "")
             link = (
                 run_link(
-                    info.library_agent_id if info else None, review.graph_exec_id or ""
+                    info.library_agent_id if info else None,
+                    review.graph_exec_id or "",
+                    review.organization_id,
+                    review.team_id,
                 )
                 or _LIBRARY_LINK
             )
@@ -202,7 +207,7 @@ async def _compose_fresh_briefing(
     # costs one round-trip's latency rather than three. The library lookup
     # can't join them — it needs the graph ids the executions resolve to.
     experts, executions, reviews = await asyncio.gather(
-        experts_db().list_experts(user_id),
+        experts_db().list_experts(user_id, personal_only=True),
         # Filter and bound in the query: a user running minute-crons can
         # accumulate thousands of executions a day, and every one of them
         # would otherwise be serialized over the DatabaseManager RPC just to
@@ -212,13 +217,19 @@ async def _compose_fresh_briefing(
             created_time_gte=window_start,
             statuses=_BRIEFED_STATUSES,
             limit=_EXECUTION_FETCH_LIMIT,
+            personal_only=True,
         ),
         # One page, deliberately wider than _MAX_DECISION_ITEMS: the extra
         # rows aren't rendered, they're what makes decision_total (and the
         # "…and N more" line) a real number rather than the render cap.
         # A user past _PENDING_REVIEW_PAGE_SIZE waiting decisions therefore
         # sees the total reported at that ceiling.
-        review_db().get_pending_reviews_for_user(user_id, 1, _PENDING_REVIEW_PAGE_SIZE),
+        review_db().get_pending_reviews_for_user(
+            user_id,
+            1,
+            _PENDING_REVIEW_PAGE_SIZE,
+            personal_only=True,
+        ),
     )
     # Resolve only the graphs actually referenced, rather than paging the
     # library: paging it would drop the very agent being briefed for a user
@@ -226,7 +237,9 @@ async def _compose_fresh_briefing(
     graph_ids = list(
         {e.graph_id for e in executions} | {r.graph_id for r in reviews if r.graph_id}
     )
-    refs = await library_db().get_library_agent_refs_by_graph_ids(user_id, graph_ids)
+    refs = await library_db().get_library_agent_refs_by_graph_ids(
+        user_id, graph_ids, personal_only=True
+    )
     agent_info: dict[str, AgentInfo] = {
         ref.graph_id: AgentInfo(ref.name or DEFAULT_AGENT_NAME, ref.id) for ref in refs
     }

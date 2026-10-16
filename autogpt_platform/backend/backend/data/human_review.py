@@ -6,7 +6,7 @@ Handles all database operations for pending human reviews.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from prisma.enums import ReviewStatus
 from prisma.models import (
@@ -29,6 +29,7 @@ from backend.copilot.constants import (
     legacy_chat_session_id,
     parse_node_id_from_exec_id,
 )
+from backend.data.db import transaction
 from backend.data.execution import get_graph_execution_meta
 from backend.notifications.review_alerts import sync_awaiting_review
 from backend.util.json import SafeJson
@@ -50,7 +51,10 @@ class ReviewResult(BaseModel):
 
 
 async def _sync_awaiting_review_safely(
-    user_id: str, graph_id: str | None, chat_session_id: str | None = None
+    user_id: str,
+    graph_id: str | None,
+    chat_session_id: str | None = None,
+    graph_exec_id: str | None = None,
 ) -> None:
     """Keep the awaiting-review alert from deciding whether a review succeeds.
 
@@ -60,13 +64,29 @@ async def _sync_awaiting_review_safely(
     the caller back over a notification problem.
     """
     try:
-        await sync_awaiting_review(user_id, graph_id, chat_session_id=chat_session_id)
+        await sync_awaiting_review(
+            user_id,
+            graph_id,
+            chat_session_id=chat_session_id,
+            graph_exec_id=graph_exec_id,
+        )
     except Exception:
         logger.warning(
             "Could not sync the awaiting-review alert for %s",
             chat_session_id or graph_id,
             exc_info=True,
         )
+
+
+class ProcessedReviews(dict[str, PendingHumanReviewModel]):
+    def __init__(
+        self,
+        reviews: dict[str, PendingHumanReviewModel],
+        *,
+        should_resume: bool,
+    ) -> None:
+        super().__init__(reviews)
+        self.should_resume = should_resume
 
 
 def get_auto_approve_key(scope_id: str, node_id: str) -> str:
@@ -276,7 +296,12 @@ async def get_or_create_human_review(
     if review.status == ReviewStatus.WAITING:
         # Nothing sends until a human acts, which is exactly the shape of an
         # Alert. The engine debounces and coalesces from here.
-        await _sync_awaiting_review_safely(user_id, graph_id, chat_session_id)
+        await _sync_awaiting_review_safely(
+            user_id,
+            graph_id,
+            chat_session_id,
+            graph_exec_id if chat_session_id is None else None,
+        )
         return None
     else:
         return ReviewResult(
@@ -306,13 +331,13 @@ def _review_scope(
 
 def _alert_scope(
     review: PendingHumanReview,
-) -> tuple[str, str | None, str | None]:
+) -> tuple[str, str | None, str | None, str | None]:
     """``(user, graph id, session id)`` of the alert a review counts toward;
     a chat's legacy and new rows share one."""
     chat_session_id = review.chatSessionId or legacy_chat_session_id(review.graphExecId)
     if chat_session_id:
-        return review.userId, None, chat_session_id
-    return review.userId, review.graphId, None
+        return review.userId, None, chat_session_id, None
+    return review.userId, review.graphId, None, review.graphExecId
 
 
 def _scope_columns(
@@ -457,8 +482,14 @@ async def _resolve_node_id(node_exec_id: str, get_node_execution) -> str:
 
 
 async def get_pending_reviews_for_user(
-    user_id: str, page: int = 1, page_size: int = 25
-) -> list[PendingHumanReviewModel]:
+    user_id: str,
+    page: int = 1,
+    page_size: int = 25,
+    organization_id: str | None = None,
+    team_ids: list[str] | None = None,
+    team_id_restriction: str | None = None,
+    personal_only: bool = False,
+) -> list["PendingHumanReviewModel"]:
     """
     Get all pending reviews for a user with pagination.
 
@@ -473,19 +504,41 @@ async def get_pending_reviews_for_user(
     """
     offset = (page - 1) * page_size
 
+    where: dict[str, Any] = {
+        "userId": user_id,
+        "status": ReviewStatus.WAITING,
+    }
+    if organization_id is not None:
+        where["organizationId"] = organization_id
+        if team_id_restriction is not None:
+            where["teamId"] = team_id_restriction
+        else:
+            where["OR"] = [
+                {"teamId": None},
+                *([{"teamId": {"in": team_ids}}] if team_ids else []),
+            ]
+    if personal_only:
+        if organization_id is not None or team_id_restriction is not None:
+            raise ValueError("personal_only cannot be combined with org/team filters")
+        where["organizationId"] = None
+        where["teamId"] = None
+
     reviews = await PendingHumanReview.prisma().find_many(
-        where={"userId": user_id, "status": ReviewStatus.WAITING},
+        where=where,
         order={"createdAt": "desc"},
         skip=offset,
         take=page_size,
     )
 
     models = [PendingHumanReviewModel.from_db(review, node_id="") for review in reviews]
-    return await _enrich_pending_reviews(user_id, models)
+    return await _enrich_pending_reviews(user_id, models, personal_only=personal_only)
 
 
 async def _enrich_pending_reviews(
-    user_id: str, reviews: list[PendingHumanReviewModel]
+    user_id: str,
+    reviews: list[PendingHumanReviewModel],
+    *,
+    personal_only: bool = False,
 ) -> list[PendingHumanReviewModel]:
     """Batch-resolve node_id and attach expert/agent attribution.
 
@@ -509,9 +562,9 @@ async def _enrich_pending_reviews(
     # concurrently costs this endpoint two round-trips instead of four —
     # it backs the home needs-attention list, refetched on every focus.
     node_execs, executions, sessions = await asyncio.gather(
-        _node_executions_for(user_id, real_node_exec_ids),
-        _graph_executions_for(user_id, real_exec_ids),
-        _chat_sessions_for(user_id, session_ids),
+        _node_executions_for(user_id, real_node_exec_ids, personal_only),
+        _graph_executions_for(user_id, real_exec_ids, personal_only),
+        _chat_sessions_for(user_id, session_ids, personal_only),
     )
     node_id_by_exec = {ne.id: ne.agentNodeId for ne in node_execs}
     exec_by_id = {e.id: e for e in executions}
@@ -528,6 +581,7 @@ async def _enrich_pending_reviews(
                 "userId": user_id,
                 "agentGraphId": {"in": graph_ids},
                 "isDeleted": False,
+                **({"organizationId": None, "teamId": None} if personal_only else {}),
             },
             # @@unique([userId, agentGraphId, agentGraphVersion]) allows
             # several rows per graph; ordering makes "newest version wins"
@@ -548,21 +602,42 @@ async def _enrich_pending_reviews(
         execution = exec_by_id.get(r.graph_exec_id) if r.graph_exec_id else None
         if execution:
             r.expert_id = execution.expertId
-            if execution.Expert:
+            expert_matches_scope = execution.Expert and (
+                not personal_only
+                or (
+                    execution.Expert.organizationId is None
+                    and execution.Expert.teamId is None
+                )
+            )
+            if expert_matches_scope:
                 r.expert_name = execution.Expert.name
                 r.expert_avatar_url = execution.Expert.avatarUrl
 
             lib_agent = lib_by_graph.get(execution.agentGraphId)
             if lib_agent:
                 r.library_agent_id = lib_agent.id
+            graph_matches_scope = execution.AgentGraph and (
+                not personal_only
+                or (
+                    execution.AgentGraph.organizationId is None
+                    and execution.AgentGraph.teamId is None
+                )
+            )
             r.agent_name = (lib_agent.name if lib_agent else None) or (
-                execution.AgentGraph.name if execution.AgentGraph else None
+                execution.AgentGraph.name if graph_matches_scope else None
             )
         elif r.session_id:
             session = session_by_id.get(r.session_id)
             if session:
                 r.expert_id = session.expertId
-                if session.Expert:
+                expert_matches_scope = session.Expert and (
+                    not personal_only
+                    or (
+                        session.Expert.organizationId is None
+                        and session.Expert.teamId is None
+                    )
+                )
+                if expert_matches_scope:
                     r.expert_name = session.Expert.name
                     r.expert_avatar_url = session.Expert.avatarUrl
 
@@ -570,7 +645,7 @@ async def _enrich_pending_reviews(
 
 
 async def _node_executions_for(
-    user_id: str, node_exec_ids: list[str]
+    user_id: str, node_exec_ids: list[str], personal_only: bool = False
 ) -> list[AgentNodeExecution]:
     if not node_exec_ids:
         return []
@@ -580,33 +655,56 @@ async def _node_executions_for(
             # Callers pass ids from user-filtered PendingHumanReview rows,
             # but scope here too so this helper can never leak another
             # user's node executions if a future caller slips.
-            "GraphExecution": {"is": {"userId": user_id}},
+            "GraphExecution": {
+                "is": {
+                    "userId": user_id,
+                    **(
+                        {"organizationId": None, "teamId": None}
+                        if personal_only
+                        else {}
+                    ),
+                }
+            },
         }
     )
 
 
 async def _graph_executions_for(
-    user_id: str, graph_exec_ids: list[str]
+    user_id: str, graph_exec_ids: list[str], personal_only: bool = False
 ) -> list[AgentGraphExecution]:
     if not graph_exec_ids:
         return []
     return await AgentGraphExecution.prisma().find_many(
-        where={"id": {"in": graph_exec_ids}, "userId": user_id},
+        where={
+            "id": {"in": graph_exec_ids},
+            "userId": user_id,
+            **({"organizationId": None, "teamId": None} if personal_only else {}),
+        },
         include={"Expert": True, "AgentGraph": True},
     )
 
 
-async def _chat_sessions_for(user_id: str, session_ids: list[str]) -> list[ChatSession]:
+async def _chat_sessions_for(
+    user_id: str, session_ids: list[str], personal_only: bool = False
+) -> list[ChatSession]:
     if not session_ids:
         return []
     return await ChatSession.prisma().find_many(
-        where={"id": {"in": session_ids}, "userId": user_id},
+        where={
+            "id": {"in": session_ids},
+            "userId": user_id,
+            **({"organizationId": None, "teamId": None} if personal_only else {}),
+        },
         include={"Expert": True},
     )
 
 
 async def get_pending_reviews_for_execution(
-    graph_exec_id: str, user_id: str
+    graph_exec_id: str,
+    user_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    enforce_scope: bool = False,
 ) -> list[PendingHumanReviewModel]:
     """
     Get all pending reviews for a specific graph execution.
@@ -619,25 +717,47 @@ async def get_pending_reviews_for_execution(
         List of pending review models with node_id included
     """
     if chat_session_id := legacy_chat_session_id(graph_exec_id):
-        return await get_pending_reviews_for_chat_session(chat_session_id, user_id)
+        return await get_pending_reviews_for_chat_session(
+            chat_session_id,
+            user_id,
+            organization_id=organization_id,
+            team_id=team_id,
+            enforce_scope=enforce_scope,
+        )
+    # Local import to avoid event loop conflicts in tests
+
+    where: dict[str, Any] = {
+        "userId": user_id,
+        "graphExecId": graph_exec_id,
+        "status": ReviewStatus.WAITING,
+    }
+    if enforce_scope:
+        where["organizationId"] = organization_id
+        where["teamId"] = team_id
     reviews = await PendingHumanReview.prisma().find_many(
-        where={
-            "userId": user_id,
-            "graphExecId": graph_exec_id,
-            "status": ReviewStatus.WAITING,
-        },
+        where=where,
         order={"createdAt": "asc"},
     )
     return await _with_node_ids(reviews)
 
 
 async def get_pending_reviews_for_chat_session(
-    chat_session_id: str, user_id: str
+    chat_session_id: str,
+    user_id: str,
+    *,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    enforce_scope: bool = False,
 ) -> list[PendingHumanReviewModel]:
     """The reviews a chat is waiting on, oldest first."""
     reviews = await PendingHumanReview.prisma().find_many(
         where={
             "userId": user_id,
+            **(
+                {"organizationId": organization_id, "teamId": team_id}
+                if enforce_scope
+                else {}
+            ),
             "OR": [
                 {"chatSessionId": chat_session_id},
                 # Rows an older deploy wrote in the synthetic-graph shape.
@@ -668,7 +788,7 @@ async def _with_node_ids(
 async def process_all_reviews_for_execution(
     user_id: str,
     review_decisions: dict[str, tuple[ReviewStatus, SafeJsonData | None, str | None]],
-) -> dict[str, PendingHumanReviewModel]:
+) -> ProcessedReviews:
     """Process all pending reviews for an execution with approve/reject decisions.
 
     Handles race conditions gracefully: if a review was already processed with the
@@ -682,82 +802,105 @@ async def process_all_reviews_for_execution(
         Dict of node_exec_id -> updated review model (includes already-processed reviews)
     """
     if not review_decisions:
-        return {}
+        return ProcessedReviews({}, should_resume=False)
 
     node_exec_ids = list(review_decisions.keys())
 
-    # Get all reviews (both WAITING and already processed) for the user
-    all_reviews = await PendingHumanReview.prisma().find_many(
+    candidates = await PendingHumanReview.prisma().find_many(
         where={
             "nodeExecId": {"in": node_exec_ids},
             "userId": user_id,
         },
     )
-
-    # Separate into pending and already-processed reviews
-    reviews_to_process = []
-    already_processed = []
-    for review in all_reviews:
-        if review.status == ReviewStatus.WAITING:
-            reviews_to_process.append(review)
-        else:
-            already_processed.append(review)
-
-    # Check for truly missing reviews (not found at all)
-    found_ids = {review.nodeExecId for review in all_reviews}
-    missing_ids = set(node_exec_ids) - found_ids
+    candidate_ids = {review.nodeExecId for review in candidates}
+    missing_ids = set(node_exec_ids) - candidate_ids
     if missing_ids:
         raise ValueError(
-            f"Reviews not found or access denied: {', '.join(missing_ids)}"
+            f"Reviews not found or access denied: {', '.join(sorted(missing_ids))}"
+        )
+    graph_exec_ids = {review.graphExecId for review in candidates}
+    if len(graph_exec_ids) != 1:
+        raise ValueError("All reviews must belong to the same execution")
+    graph_exec_id = next(iter(graph_exec_ids))
+
+    async with transaction() as tx:
+        await tx.query_raw(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            f"human-review:{graph_exec_id}",
+        )
+        all_reviews = await PendingHumanReview.prisma(tx).find_many(
+            where={
+                "nodeExecId": {"in": node_exec_ids},
+                "userId": user_id,
+                "graphExecId": graph_exec_id,
+            },
         )
 
-    # Validate already-processed reviews have compatible status (same decision)
-    # This handles race conditions where another request processed the same reviews
-    for review in already_processed:
-        requested_status = review_decisions[review.nodeExecId][0]
-        if review.status != requested_status:
+        reviews_to_process = []
+        already_processed = []
+        for review in all_reviews:
+            if review.status == ReviewStatus.WAITING:
+                reviews_to_process.append(review)
+            else:
+                already_processed.append(review)
+
+        found_ids = {review.nodeExecId for review in all_reviews}
+        missing_ids = set(node_exec_ids) - found_ids
+        if missing_ids:
             raise ValueError(
-                f"Review {review.nodeExecId} was already processed with status "
-                f"{review.status}, cannot change to {requested_status}"
+                f"Reviews not found or access denied: {', '.join(sorted(missing_ids))}"
             )
 
-    # Log if we're handling a race condition (some reviews already processed)
-    if already_processed:
-        already_processed_ids = [r.nodeExecId for r in already_processed]
-        logger.info(
-            f"Race condition handled: {len(already_processed)} review(s) already "
-            f"processed by concurrent request: {already_processed_ids}"
+        for review in already_processed:
+            requested_status = review_decisions[review.nodeExecId][0]
+            if review.status != requested_status:
+                raise ValueError(
+                    f"Review {review.nodeExecId} was already processed with status "
+                    f"{review.status}, cannot change to {requested_status}"
+                )
+
+        if already_processed:
+            already_processed_ids = [r.nodeExecId for r in already_processed]
+            logger.info(
+                f"Race condition handled: {len(already_processed)} review(s) already "
+                f"processed by concurrent request: {already_processed_ids}"
+            )
+
+        updated_reviews = []
+        for review in reviews_to_process:
+            new_status, reviewed_data, message = review_decisions[review.nodeExecId]
+            has_data_changes = (
+                reviewed_data is not None and reviewed_data != review.payload
+            )
+
+            if has_data_changes and not review.editable:
+                raise ValueError(f"Review {review.nodeExecId} is not editable")
+
+            update_data: PendingHumanReviewUpdateInput = {
+                "status": new_status,
+                "reviewMessage": message,
+                "wasEdited": has_data_changes,
+                "reviewedAt": datetime.now(timezone.utc),
+            }
+
+            if has_data_changes:
+                update_data["payload"] = SafeJson(reviewed_data)
+
+            updated_reviews.append(
+                await PendingHumanReview.prisma(tx).update(
+                    where={"nodeExecId": review.nodeExecId},
+                    data=update_data,
+                )
+            )
+
+        waiting_count = await PendingHumanReview.prisma(tx).count(
+            where={
+                "graphExecId": graph_exec_id,
+                "userId": user_id,
+                "status": ReviewStatus.WAITING,
+            }
         )
-
-    # Create parallel update tasks for reviews that still need processing
-    update_tasks = []
-
-    for review in reviews_to_process:
-        new_status, reviewed_data, message = review_decisions[review.nodeExecId]
-        has_data_changes = reviewed_data is not None and reviewed_data != review.payload
-
-        # Check edit permissions for actual data modifications
-        if has_data_changes and not review.editable:
-            raise ValueError(f"Review {review.nodeExecId} is not editable")
-
-        update_data: PendingHumanReviewUpdateInput = {
-            "status": new_status,
-            "reviewMessage": message,
-            "wasEdited": has_data_changes,
-            "reviewedAt": datetime.now(timezone.utc),
-        }
-
-        if has_data_changes:
-            update_data["payload"] = SafeJson(reviewed_data)
-
-        task = PendingHumanReview.prisma().update(
-            where={"nodeExecId": review.nodeExecId},
-            data=update_data,
-        )
-        update_tasks.append(task)
-
-    # Execute all updates in parallel and get updated reviews
-    updated_reviews = await asyncio.gather(*update_tasks) if update_tasks else []
+        should_resume = bool(reviews_to_process) and waiting_count == 0
 
     # Re-derive the "waiting on your review" alert from the live queue, so
     # clearing the last item resolves it rather than leaving a stale alert.
@@ -786,7 +929,7 @@ async def process_all_reviews_for_execution(
             review, node_id=node_id
         )
 
-    return result
+    return ProcessedReviews(result, should_resume=should_resume)
 
 
 async def update_review_processed_status(node_exec_id: str, processed: bool) -> None:
@@ -834,7 +977,7 @@ async def cancel_pending_reviews_for_execution(graph_exec_id: str, user_id: str)
             "reviewedAt": datetime.now(timezone.utc),
         },
     )
-    await sync_awaiting_review(user_id, graph_exec.graph_id)
+    await sync_awaiting_review(user_id, graph_exec.graph_id, graph_exec_id)
     return result
 
 

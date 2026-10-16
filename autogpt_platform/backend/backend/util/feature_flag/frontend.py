@@ -37,6 +37,7 @@ class FrontendFlag(str, Enum):
     A key the backend reads too comes from the backend's `Flag`, so it is written once.
     """
 
+    SHOW_ORG_SETTINGS = Flag.SHOW_ORG_SETTINGS.value
     MARKETPLACE_SEARCH_TERMS = "marketplace-search-terms"
     ENABLE_PLATFORM_PAYMENT = Flag.ENABLE_PLATFORM_PAYMENT.value
     ARTIFACTS_PAGE = "artifacts-page"

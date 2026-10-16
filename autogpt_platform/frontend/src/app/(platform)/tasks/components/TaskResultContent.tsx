@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { useListWorkspaceFiles } from "@/app/api/__generated__/endpoints/workspace/workspace";
+import {
+  useListWorkspaceFiles,
+  getListWorkspaceFilesQueryKey,
+} from "@/app/api/__generated__/endpoints/workspace/workspace";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
+import { getWorkspaceDownloadHref } from "@/services/org-team/workspace";
+import { useTaskSessionScope } from "../useTaskSessionScope";
 import { okData } from "@/app/api/helpers";
 import type { ArtifactRef } from "../../copilot/store";
 import {
@@ -23,14 +32,61 @@ interface Props {
 
 export function TaskResultContent({ result, sessionId }: Props) {
   const [selected, setSelected] = useState<ArtifactRef | null>(null);
-  const files = useListWorkspaceFiles(
-    { session_id: sessionId, limit: 1000 },
-    { query: { enabled: Boolean(sessionId), select: okData } },
-  );
-  const artifacts = new Map(
-    extractWorkspaceArtifacts(result).map((artifact) => [
+  const scope = useTaskSessionScope(sessionId);
+  const params = { session_id: sessionId, limit: 1000 };
+  const files = useListWorkspaceFiles(params, {
+    query: {
+      enabled: Boolean(sessionId) && Boolean(scope.data),
+      select: okData,
+      queryKey: getTeamScopedQueryKey(
+        getListWorkspaceFilesQueryKey(params),
+        scope.data?.organization_id,
+        scope.data?.team_id,
+      ),
+    },
+    request: getTenantRequestInit(
+      scope.data?.organization_id,
+      scope.data?.team_id,
+      Boolean(scope.data),
+    ),
+  });
+  if (sessionId && !scope.data) {
+    return (
+      <div className="space-y-2 text-sm text-muted-foreground">
+        <p>
+          {scope.isError
+            ? "Could not load this task's result."
+            : "Loading task result…"}
+        </p>
+        {scope.isError && (
+          <button
+            type="button"
+            className="underline"
+            onClick={() => scope.refetch()}
+          >
+            Try again
+          </button>
+        )}
+      </div>
+    );
+  }
+  function fileUrl(fileId: string) {
+    return scope.data
+      ? getWorkspaceDownloadHref(
+          fileId,
+          scope.data.organization_id,
+          scope.data.team_id,
+        )
+      : "#";
+  }
+  const artifacts = new Map<string, ArtifactRef>(
+    extractWorkspaceArtifacts(result, fileUrl).map((artifact) => [
       artifact.id,
-      artifact,
+      {
+        ...artifact,
+        organizationId: scope.data?.organization_id,
+        teamId: scope.data?.team_id,
+      },
     ]),
   );
   const names = new Map<string, number>();
@@ -41,7 +97,15 @@ export function TaskResultContent({ result, sessionId }: Props) {
       artifacts.has(item.id) ||
       result.includes(item.path) ||
       (names.get(item.name) === 1 && result.includes(item.name));
-    if (referenced) artifacts.set(item.id, fileItemToArtifactRef(item));
+    if (referenced)
+      artifacts.set(item.id, {
+        ...fileItemToArtifactRef(item),
+        sourceUrl: getWorkspaceDownloadHref(
+          item.id,
+          item.organization_id ?? null,
+          item.team_id ?? null,
+        ),
+      });
   }
   function fileForUrl(url: string) {
     try {
@@ -74,7 +138,7 @@ export function TaskResultContent({ result, sessionId }: Props) {
             },
           }}
         >
-          {resolveWorkspaceUrls(result)}
+          {resolveWorkspaceUrls(result, fileUrl)}
         </MessageResponse>
       </div>
       {(artifacts.size > 0 || files.isError) && (

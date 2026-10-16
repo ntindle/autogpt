@@ -71,7 +71,8 @@ from backend.copilot.tool_display import tool_calls_for_provider
 from backend.copilot.credit_billing import credit_billed_turn, wait_for_cost
 from backend.copilot.turn_budget import resolve_turn_budget
 from backend.copilot.turn_pause import TurnPause, append_pause_marker
-from backend.data.db_accessors import chat_db
+from backend.data.db_accessors import chat_db, context_without_live_leases
+from backend.copilot.graphiti.rollout import shared_memory_enabled
 from backend.data.redis_client import get_redis_async
 from backend.executor.cluster_lock import AsyncClusterLock
 from backend.integrations.codex.models import CodexReasoningEffort, CodexTokenUsage
@@ -4891,7 +4892,8 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
             first_message = user_messages[0].content or message or ""
             if first_message:
                 task = asyncio.create_task(
-                    _update_title_async(session_id, first_message, user_id)
+                    _update_title_async(session_id, first_message, user_id),
+                    context=context_without_live_leases(),
                 )
                 _background_tasks.add(task)
                 task.add_done_callback(_background_tasks.discard)
@@ -5099,7 +5101,12 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
         use_e2b = e2b_sandbox is not None
         # Append appropriate supplement (Claude gets tool schemas automatically)
 
-        graphiti_supplement = get_graphiti_supplement() if graphiti_enabled else ""
+        shared_memory = graphiti_enabled and await shared_memory_enabled(user_id)
+        graphiti_supplement = (
+            get_graphiti_supplement(shared_memory=shared_memory)
+            if graphiti_enabled
+            else ""
+        )
         auto_mode_supplement = approval_mode_supplement(
             await active_mode(user_id, session)
         )
@@ -5238,6 +5245,7 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
         mcp_server = create_copilot_mcp_server(
             use_e2b=use_e2b,
             hidden_tool_names=hidden_tools,
+            shared_memory=shared_memory,
             tool_display_bridge=tool_display_bridge,
         )
 
@@ -5579,7 +5587,11 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
             session_ctx_content = ""
             if user_id:
                 session_ctx_content = await build_session_context(
-                    session_id=session_id, user_id=user_id
+                    session_id=session_id,
+                    user_id=user_id,
+                    organization_id=session.organization_id,
+                    team_id=session.team_id,
+                    expert_id=session.expert_id,
                 )
             # Build the per-user skill index so the model sees what's
             # available without an extra round-trip.  Failures here MUST
@@ -5608,6 +5620,8 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
                 skills_ctx=skills_ctx_content,
                 user_id=user_id,
                 expert_id=session.expert_id,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
             )
             if prefixed_message is not None:
                 current_message = prefixed_message
@@ -6601,7 +6615,8 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
                     session_id,
                     message,
                     _last_assistant,
-                )
+                ),
+                context=context_without_live_leases(),
             )
             _background_tasks.add(_ingest_task)
             _ingest_task.add_done_callback(_background_tasks.discard)
@@ -6876,7 +6891,13 @@ async def _fetch_graphiti_context(
         return True, ""
 
     ctx = (
-        await fetch_warm_context(user_id, message or "", expert_id=session.expert_id)
+        await fetch_warm_context(
+            user_id,
+            message or "",
+            expert_id=session.expert_id,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
+        )
         or ""
     )
     return True, ctx

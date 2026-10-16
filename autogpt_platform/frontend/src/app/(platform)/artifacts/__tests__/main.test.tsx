@@ -44,6 +44,7 @@ vi.mock("@/services/feature-flags/use-get-flag", () => ({
   Flag: {
     ARTIFACTS_PAGE: "artifacts-page",
     AUTOGPT_NEW_LAYOUT: "autogpt-new-layout",
+    SHOW_ORG_SETTINGS: "SHOW_ORG_SETTINGS",
     HIRE_EXPERTS: "hire-experts",
   },
   useGetFlag: (flag: string) => flag !== "autogpt-new-layout",

@@ -55,6 +55,13 @@ docker buildx bake \
 IMAGE=autogpt-platform:single-container-dev
 ```
 
+This bake target compiles the self-hosted organization, expert-team, memory,
+artifact/workspace, and chat-sharing surfaces into the frontend and enables the
+matching backend expert and memory gates. `NEXT_PUBLIC_*` flags are build-time
+values; changing them in a container's runtime environment cannot alter an
+already-built frontend image. The Dockerfile arguments default to `false`, so
+custom build targets must opt into the surfaces they intend to ship.
+
 Commands below use the shell variable `IMAGE`, whether it identifies the
 Docker Hub image, a pinned digest, or the local build.
 

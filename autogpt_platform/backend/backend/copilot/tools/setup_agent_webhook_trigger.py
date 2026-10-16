@@ -22,12 +22,14 @@ from backend.copilot.model import ChatSession
 from backend.data.db_accessors import graph_db, library_db, triggers_db
 from backend.data.graph import GraphModel, Node
 from backend.data.model import Credentials, CredentialsMetaInput
+from backend.data.tenancy import ResourceAccess
 from backend.util.exceptions import (
     InvalidInputError,
     MissingConfigError,
     NotFoundError,
     WebhookRegistrationError,
 )
+from backend.util.tenancy_urls import library_agent_path
 
 from .base import BaseTool
 from .expert_scope import annotate_expert_grants, require_installed_workflow
@@ -113,6 +115,10 @@ class SetupAgentWebhookTriggerTool(BaseTool):
     @property
     def requires_auth(self) -> bool:
         return True
+
+    @property
+    def resource_access(self) -> ResourceAccess:
+        return "create"
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -230,8 +236,13 @@ class SetupAgentWebhookTriggerTool(BaseTool):
         if card:
             return card
 
-        library_agent = await get_or_create_library_agent(graph, user_id)
         try:
+            library_agent = await get_or_create_library_agent(
+                graph,
+                user_id,
+                session.organization_id,
+                session.team_id,
+            )
             preset = await triggers_db().setup_triggered_preset(
                 user_id=user_id,
                 graph_id=graph.id,
@@ -241,6 +252,8 @@ class SetupAgentWebhookTriggerTool(BaseTool):
                 trigger_config=kwargs.get("trigger_config") or {},
                 agent_credentials=agent_credentials,
                 expert_id=session.expert_id,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
             )
         except (
             InvalidInputError,
@@ -255,7 +268,12 @@ class SetupAgentWebhookTriggerTool(BaseTool):
             )
 
         return self._build_success_response(
-            preset, trigger_node, library_agent.id, session_id
+            preset,
+            trigger_node,
+            library_agent.id,
+            library_agent.organization_id,
+            library_agent.team_id,
+            session_id,
         )
 
     async def _resolve_graph(
@@ -269,6 +287,7 @@ class SetupAgentWebhookTriggerTool(BaseTool):
         library_agent_id: str = (kwargs.get("library_agent_id") or "").strip()
         graph_id: str = (kwargs.get("graph_id") or "").strip()
         graph_version: int | None = kwargs.get("graph_version")
+        scoped_library_agent = None
 
         if not library_agent_id and not graph_id:
             builder_graph_id = session.metadata.builder_graph_id
@@ -284,7 +303,10 @@ class SetupAgentWebhookTriggerTool(BaseTool):
         if library_agent_id:
             try:
                 library_agent = await library_db().get_library_agent(
-                    library_agent_id, user_id
+                    library_agent_id,
+                    user_id,
+                    organization_id=session.organization_id,
+                    team_id_restriction=session.team_id,
                 )
             except NotFoundError:
                 return None, ErrorResponse(
@@ -292,14 +314,47 @@ class SetupAgentWebhookTriggerTool(BaseTool):
                     error="library_agent_not_found",
                     session_id=session_id,
                 )
+            if (library_agent.organization_id, library_agent.team_id) != (
+                session.organization_id,
+                session.team_id,
+            ):
+                return None, ErrorResponse(
+                    message=f"Library agent '{library_agent_id}' not found.",
+                    error="library_agent_not_found",
+                    session_id=session_id,
+                )
+            scoped_library_agent = library_agent
             graph_id = library_agent.graph_id
             graph_version = library_agent.graph_version
+        else:
+            scoped_library_agent = await library_db().get_library_agent_by_graph_id(
+                user_id,
+                graph_id,
+                graph_version,
+                organization_id=session.organization_id,
+                team_id_restriction=session.team_id,
+                exact_scope=True,
+            )
+            if scoped_library_agent and (
+                scoped_library_agent.organization_id,
+                scoped_library_agent.team_id,
+            ) != (session.organization_id, session.team_id):
+                scoped_library_agent = None
 
         # Sub-graphs are needed to aggregate the full set of required credentials.
         graph = await graph_db().get_graph(
-            graph_id, graph_version, user_id=user_id, include_subgraphs=True
+            graph_id,
+            graph_version,
+            user_id=user_id,
+            include_subgraphs=True,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
         )
-        if not graph:
+        if not graph or (
+            scoped_library_agent is None
+            and (graph.organization_id, graph.team_id)
+            != (session.organization_id, session.team_id)
+        ):
             return None, ErrorResponse(
                 message=f"Workflow '{graph_id}' not found.",
                 error="graph_not_found",
@@ -471,6 +526,8 @@ class SetupAgentWebhookTriggerTool(BaseTool):
         preset: LibraryAgentPreset,
         trigger_node: Node,
         library_agent_id: str,
+        organization_id: str | None,
+        team_id: str | None,
         session_id: str | None,
     ) -> TriggerSetupResponse:
         """Build the success response, surfacing the ingress URL when manual."""
@@ -496,7 +553,11 @@ class SetupAgentWebhookTriggerTool(BaseTool):
             session_id=session_id,
             preset_id=preset.id,
             library_agent_id=library_agent_id,
-            library_agent_link=f"/library/agents/{library_agent_id}",
+            library_agent_link=library_agent_path(
+                library_agent_id,
+                organization_id,
+                team_id,
+            ),
             name=preset.name,
             is_active=preset.is_active,
             provider=provider or "",

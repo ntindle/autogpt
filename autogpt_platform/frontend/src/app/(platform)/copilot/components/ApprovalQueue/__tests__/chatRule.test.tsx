@@ -33,6 +33,8 @@ function renderQueue(expertName: string | null = "Frankie") {
   render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
       <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
         chatSessionId={CHAT_SESSION}
         expertName={expertName}
       />

@@ -1,4 +1,7 @@
-import { useGetV1GetSpecificGraph } from "@/app/api/__generated__/endpoints/graphs/graphs";
+import {
+  getGetV1GetSpecificGraphQueryKey,
+  useGetV1GetSpecificGraph,
+} from "@/app/api/__generated__/endpoints/graphs/graphs";
 import { okData } from "@/app/api/helpers";
 import { ErrorBoundary } from "@/components/molecules/ErrorBoundary/ErrorBoundary";
 import { FloatingReviewsPanel } from "@/components/organisms/FloatingReviewsPanel/FloatingReviewsPanel";
@@ -29,10 +32,16 @@ import { useFlowRealtime } from "./useFlowRealtime";
 
 import "@xyflow/react/dist/style.css";
 import "./flow.css";
+import { useBuilderTenantScope } from "@/app/(platform)/build/hooks/useBuilderTenantScope";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
 
 const DELETE_KEY_CODES = ["Backspace", "Delete"];
 
 export const Flow = () => {
+  const tenantScope = useBuilderTenantScope();
   const [{ flowID, flowExecutionID }] = useQueryStates({
     flowID: parseAsString,
     flowExecutionID: parseAsString,
@@ -44,9 +53,19 @@ export const Flow = () => {
     {
       query: {
         select: okData,
-        enabled: !!flowID,
+        enabled: !!flowID && tenantScope.isReady,
+        queryKey: getTeamScopedQueryKey(
+          getGetV1GetSpecificGraphQueryKey(flowID ?? "", {}),
+          tenantScope.organizationId,
+          tenantScope.teamId,
+        ),
         retry: retryUnlessClientError,
       },
+      request: getTenantRequestInit(
+        tenantScope.organizationId,
+        tenantScope.teamId,
+        tenantScope.isReady,
+      ),
     },
   );
 
@@ -149,6 +168,8 @@ export const Flow = () => {
       <FloatingReviewsPanel
         executionId={flowExecutionID || undefined}
         graphId={flowID || undefined}
+        organizationId={tenantScope.organizationId}
+        teamId={tenantScope.teamId}
       />
       <ErrorBoundary context="BuilderChatPanel" fallback={null}>
         <BuilderChatPanel />

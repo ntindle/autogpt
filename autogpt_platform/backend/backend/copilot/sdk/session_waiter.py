@@ -43,7 +43,7 @@ from backend.copilot.response_model import StreamError, StreamFinish
 from backend.copilot.tree import SpawnRequest, TreeRefusal
 from backend.copilot.turn_pause import TurnPause
 from backend.copilot.turn_queue import SessionNotIdle, queued_turn_refusal
-from backend.data.db_accessors import chat_db
+from backend.data.db_accessors import chat_db, live_resource_lease
 
 from .stream_accumulator import EventAccumulator, ToolCallEntry, process_event
 
@@ -267,7 +267,12 @@ async def run_copilot_turn_via_queue(
             tool_name,
         )
         state = await queue_user_message(
-            session_id=session_id, message=message, metadata=message_metadata
+            session_id=session_id,
+            user_id=user_id,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
+            message=message,
+            metadata=message_metadata,
         )
         if timeout <= 0:
             # Fire-and-forget: caller explicitly asked not to wait.
@@ -298,22 +303,32 @@ async def run_copilot_turn_via_queue(
     turn_id = str(uuid.uuid4())
     delegated = session.metadata.delegated_by_session_id is not None
     try:
-        await schedule_turn(
-            session_id=session_id,
-            user_id=user_id,
-            turn_id=turn_id,
-            message=message,
-            tool_call_id=tool_call_id,
-            tool_name=tool_name,
-            llm_auth_provider=session.metadata.llm_auth_provider,
-            llm_credential_id=session.metadata.llm_credential_id,
-            permissions=permissions,
-            spawn=spawn,
-            message_metadata=message_metadata,
-            delegated=delegated,
-            # A child of an impersonated turn is the admin's work too.
-            impersonated=is_turn_impersonated(),
-        )
+        async with live_resource_lease(
+            user_id, session.organization_id, session.team_id, "execute"
+        ) as allowed:
+            if not allowed:
+                raise RuntimeError("workspace_access_revoked")
+            action = schedule_turn(
+                session_id=session_id,
+                user_id=user_id,
+                turn_id=turn_id,
+                message=message,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
+                llm_auth_provider=session.metadata.llm_auth_provider,
+                llm_credential_id=session.metadata.llm_credential_id,
+                permissions=permissions,
+                spawn=spawn,
+                message_metadata=message_metadata,
+                delegated=delegated,
+                impersonated=is_turn_impersonated(),
+            )
+            if hasattr(allowed, "run"):
+                await allowed.run(action)
+            else:
+                await action
     except TreeRefusal as refused:
         return "refused", SessionResult(refusal=refused.message)
     except ConcurrentTurnLimitError:

@@ -2,6 +2,8 @@ import { postV2CancelSessionTask } from "@/app/api/__generated__/endpoints/chat/
 import { toast } from "@/components/molecules/Toast/use-toast";
 import type { UIMessage } from "ai";
 import { resolveInProgressTools } from "./helpers";
+import type { CopilotTenantScope } from "./helpers";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
 
 /**
  * User-visible marker appended to the last assistant message so the UI
@@ -14,8 +16,7 @@ export const CANCELLED_MARKER = "[__COPILOT_ERROR_f7a1__] Operation cancelled";
 
 interface UseCopilotStopArgs {
   sessionId: string | null;
-  /** Aborts the stream and marks the turn stopped on screen, synchronously,
-   *  so the UI reflects the click before the cancel POST returns. */
+  sessionTenantScope?: CopilotTenantScope;
   stopStream: () => void;
   /** Flipped to `true` so the stream's onError/onFinish callbacks don't
    *  misinterpret the resulting AbortError as a disconnect + reconnect. */
@@ -36,6 +37,7 @@ interface UseCopilotStopArgs {
  */
 export function useCopilotStop({
   sessionId,
+  sessionTenantScope,
   stopStream,
   isUserStoppingRef,
   setIsUserStopping,
@@ -47,7 +49,14 @@ export function useCopilotStop({
 
     if (!sessionId) return;
     try {
-      const res = await postV2CancelSessionTask(sessionId);
+      const res = await postV2CancelSessionTask(
+        sessionId,
+        getTenantRequestInit(
+          sessionTenantScope?.organizationId,
+          sessionTenantScope?.teamId,
+          sessionTenantScope !== undefined,
+        ),
+      );
       if (
         res.status === 200 &&
         "reason" in res.data &&

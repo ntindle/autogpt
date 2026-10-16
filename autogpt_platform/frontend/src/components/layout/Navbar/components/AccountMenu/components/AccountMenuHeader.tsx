@@ -11,6 +11,7 @@ import { AccountMenuOrgList } from "./AccountMenuOrgList";
 import { InitialAvatar } from "./InitialAvatar";
 import { ArrowRight01Icon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 
 interface Props {
   userName?: string;
@@ -28,9 +29,49 @@ export function AccountMenuHeader({
   isLoading = false,
 }: Props) {
   const popupId = React.useId();
+  const [isOpen, setIsOpen] = React.useState(false);
+  const collaborationEnabled = useGetFlag(Flag.SHOW_ORG_SETTINGS);
+  const profile = (
+    <>
+      <InitialAvatar
+        src={avatarSrc}
+        name={userName}
+        username={userHandle}
+        className="h-8 w-8"
+      />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        {isLoading || !userName || !userEmail ? (
+          <>
+            <Skeleton className="h-3.5 w-24" />
+            <Skeleton className="h-3 w-32" />
+          </>
+        ) : (
+          <>
+            <span className="truncate text-sm font-semibold leading-tight text-neutral-900">
+              {userName}
+            </span>
+            <span
+              data-testid="account-menu-user-email"
+              className="truncate text-sm leading-tight text-neutral-700"
+            >
+              {userEmail}
+            </span>
+          </>
+        )}
+      </div>
+    </>
+  );
+
+  if (!collaborationEnabled) {
+    return (
+      <div className="flex w-full items-center gap-3 px-3 py-3 text-left">
+        {profile}
+      </div>
+    );
+  }
 
   return (
-    <Popover>
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -39,32 +80,7 @@ export function AccountMenuHeader({
           aria-haspopup="true"
           data-testid="account-menu-org-trigger"
         >
-          <InitialAvatar
-            src={avatarSrc}
-            name={userName}
-            username={userHandle}
-            className="h-8 w-8"
-          />
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            {isLoading || !userName || !userEmail ? (
-              <>
-                <Skeleton className="h-3.5 w-24" />
-                <Skeleton className="h-3 w-32" />
-              </>
-            ) : (
-              <>
-                <span className="truncate text-sm font-semibold leading-tight text-neutral-900">
-                  {userName}
-                </span>
-                <span
-                  data-testid="account-menu-user-email"
-                  className="truncate text-sm leading-tight text-neutral-700"
-                >
-                  {userEmail}
-                </span>
-              </>
-            )}
-          </div>
+          {profile}
           <Icon
             icon={ArrowRight01Icon}
             className="shrink-0 text-neutral-700"
@@ -82,7 +98,7 @@ export function AccountMenuHeader({
         className="w-64 rounded-2xl border border-neutral-200 p-0 shadow-lg"
         data-testid="account-menu-org-popover"
       >
-        <AccountMenuOrgList />
+        <AccountMenuOrgList onSelect={() => setIsOpen(false)} />
       </PopoverContent>
     </Popover>
   );

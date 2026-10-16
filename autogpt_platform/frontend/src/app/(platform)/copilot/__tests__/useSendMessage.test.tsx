@@ -45,6 +45,7 @@ function renderSendMessage(sessionId: string | null = SESSION_ID) {
   const createSession = vi.fn(async () => SESSION_ID);
   const hook = renderHook(() =>
     useSendMessage({
+      isSessionScopeReady: true,
       sessionId,
       sendMessage: sendMessage as never,
       createSession,

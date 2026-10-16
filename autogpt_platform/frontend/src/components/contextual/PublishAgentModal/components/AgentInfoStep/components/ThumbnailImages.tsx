@@ -3,7 +3,6 @@
 import { Button } from "@/components/atoms/Button/Button";
 import { Text } from "@/components/atoms/Text/Text";
 import Image from "next/image";
-import { isLocalStoreMediaUrl } from "@/lib/store-media";
 import { useThumbnailImages } from "./useThumbnailImages";
 import { cn } from "@/lib/utils";
 import {
@@ -13,9 +12,12 @@ import {
   PlusSignIcon,
 } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { shouldBypassImageOptimization } from "@/lib/utils/image";
 
 interface ThumbnailImagesProps {
   agentId: string | null;
+  organizationId?: string | null;
+  teamId?: string | null;
   onImagesChange: (images: string[]) => void;
   initialImages?: string[];
   initialSelectedImage?: string | null;
@@ -24,6 +26,8 @@ interface ThumbnailImagesProps {
 
 export function ThumbnailImages({
   agentId,
+  organizationId = null,
+  teamId = null,
   onImagesChange,
   initialImages = [],
   initialSelectedImage = null,
@@ -42,6 +46,8 @@ export function ThumbnailImages({
     handleImageSelect,
   } = useThumbnailImages({
     agentId,
+    organizationId,
+    teamId,
     onImagesChange,
     initialImages,
     initialSelectedImage,
@@ -126,9 +132,9 @@ export function ThumbnailImages({
                   >
                     <Image
                       src={src}
-                      unoptimized={isLocalStoreMediaUrl(src)}
                       alt={`Thumbnail ${index + 1}`}
                       fill
+                      unoptimized={shouldBypassImageOptimization(src)}
                       style={{ objectFit: "cover" }}
                     />
                   </button>

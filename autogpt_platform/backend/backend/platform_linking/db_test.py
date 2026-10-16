@@ -26,6 +26,7 @@ from .db import (
     delete_server_link,
     delete_user_link,
     fetch_workspace_artifact,
+    find_server_link_owner_for_sender,
     get_link_token_info,
     get_link_token_status,
     mask_email,
@@ -51,6 +52,22 @@ async def _fake_transaction():
 
 
 class TestResolve:
+    @pytest.mark.asyncio
+    async def test_server_owner_requires_exact_sender(self):
+        with patch("backend.platform_linking.db.PlatformLink") as mock_link:
+            mock_link.prisma.return_value.find_first = AsyncMock(return_value=None)
+            owner = await find_server_link_owner_for_sender(
+                "DISCORD", "g1", "different-user"
+            )
+        assert owner is None
+        mock_link.prisma.return_value.find_first.assert_awaited_once_with(
+            where={
+                "platform": "DISCORD",
+                "platformServerId": "g1",
+                "ownerPlatformUserId": "different-user",
+            }
+        )
+
     @pytest.mark.asyncio
     async def test_server_linked(self):
         with patch("backend.platform_linking.db.PlatformLink") as mock_link:
@@ -479,6 +496,27 @@ class TestConfirmUserLink:
             )
             with pytest.raises(LinkTokenExpiredError):
                 await confirm_user_link("abc", "u1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("verified_id", [None, "different-user"])
+    async def test_telegram_requires_matching_verified_identity(self, verified_id):
+        fake_token = MagicMock(
+            linkType=LinkType.USER.value,
+            usedAt=None,
+            expiresAt=datetime.now(timezone.utc) + timedelta(minutes=5),
+            platform="TELEGRAM",
+            platformUserId="telegram-user",
+        )
+        with patch("backend.platform_linking.db.PlatformLinkToken") as mock_model:
+            mock_model.prisma.return_value.find_unique = AsyncMock(
+                return_value=fake_token
+            )
+            with pytest.raises(NotAuthorizedError):
+                await confirm_user_link(
+                    "abc",
+                    "u1",
+                    verified_platform_user_id=verified_id,
+                )
 
     @pytest.mark.asyncio
     async def test_already_linked_to_other_user(self):

@@ -63,6 +63,7 @@ async def create_workspace_task_occurrence(
             id=occurrence_id,
             user_id=user_id,
             organization_id=template.organization_id,
+            team_id=template.team_id,
             title=template.title,
             description=template.description,
             project=template.project,

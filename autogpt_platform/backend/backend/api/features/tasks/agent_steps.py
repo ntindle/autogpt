@@ -74,6 +74,7 @@ async def add_workspace_task_step(
             user_id=user_id,
             source_session_id=session_id,
             organization_id=root.organization_id,
+            team_id=root.team_id,
             title=title,
             description=description,
             project=root.project,

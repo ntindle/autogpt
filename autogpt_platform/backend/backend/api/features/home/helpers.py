@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict
 from backend.api.features.experts.models import Expert
 from backend.api.features.library.model import LibraryAgentRef
 from backend.copilot.briefing.outcome import DEFAULT_AGENT_NAME, as_utc
+from backend.data.execution import GraphExecutionMeta
 from backend.executor.scheduler import GraphExecutionJobInfo
 
 from .models import HomeExpert
@@ -90,13 +91,15 @@ class AgentRef(BaseModel):
 
 
 UNKNOWN_AGENT = AgentRef(name=DEFAULT_AGENT_NAME, library_agent_id=None)
+AgentScopeKey = tuple[str, str | None, str | None]
+AgentScopeMap = dict[AgentScopeKey | str, AgentRef]
 
 
 def agent_refs_by_graph(
     experts: list[Expert], refs: list[LibraryAgentRef]
-) -> dict[str, AgentRef]:
-    agents = {
-        ref.graph_id: AgentRef(
+) -> AgentScopeMap:
+    agents: AgentScopeMap = {
+        (ref.graph_id, ref.organization_id, ref.team_id): AgentRef(
             name=ref.name or UNKNOWN_AGENT.name,
             library_agent_id=None if ref.is_deleted else ref.id,
             image_url=ref.image_url,
@@ -106,16 +109,22 @@ def agent_refs_by_graph(
     for expert in experts:
         for workflow in expert.workflows:
             if workflow.graph_id:
-                current = agents.get(workflow.graph_id, UNKNOWN_AGENT)
-                # An expert names its own copy of the workflow, but only the
-                # library row carries the picture, so keep the one we found.
-                agents[workflow.graph_id] = AgentRef(
+                key = (workflow.graph_id, expert.organization_id, expert.team_id)
+                current = agents.get(key, UNKNOWN_AGENT)
+                agents[key] = AgentRef(
                     name=workflow.name or current.name,
                     library_agent_id=workflow.library_agent_id
                     or current.library_agent_id,
                     image_url=current.image_url,
                 )
     return agents
+
+
+def agent_ref_for_execution(
+    agents: AgentScopeMap, execution: GraphExecutionMeta
+) -> AgentRef:
+    exact = (execution.graph_id, execution.organization_id, execution.team_id)
+    return agents.get(exact, agents.get(execution.graph_id, UNKNOWN_AGENT))
 
 
 def setup_count(expert: Expert) -> int:

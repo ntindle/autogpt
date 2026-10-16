@@ -45,6 +45,7 @@ describe("a paced POST turn read through the shadow tee", () => {
         id: "s1",
         transport: createCopilotTransport({
           sessionId: "s1",
+          tenantScopeRef: { current: { organizationId: null, teamId: null } },
           copilotModelRef: { current: undefined },
         }),
         onFinish: (args) => finishes.push(args),

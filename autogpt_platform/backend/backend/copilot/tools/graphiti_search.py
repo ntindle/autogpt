@@ -14,8 +14,19 @@ from backend.copilot.graphiti._format import (
 )
 from backend.copilot.graphiti.client import get_graphiti_client
 from backend.copilot.graphiti.config import is_enabled_for_user
-from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.lifecycle import (
+    active_shared_search_filter,
+    filter_active_shared_edges,
+    filter_edges_by_scope,
+)
+from backend.copilot.graphiti.tiers import (
+    MemoryTier,
+    TierError,
+    merge_tiered,
+    resolve_search_targets,
+)
 from backend.copilot.model import ChatSession
+from backend.data.tenancy import ResourceAccess
 
 from .base import BaseTool
 from .models import ErrorResponse, MemorySearchResponse, ToolResponseBase
@@ -23,6 +34,12 @@ from .models import ErrorResponse, MemorySearchResponse, ToolResponseBase
 logger = logging.getLogger(__name__)
 
 _MAX_LIMIT = 50
+
+
+def _search_config(limit: int):
+    from graphiti_core.search.search_config_recipes import EDGE_HYBRID_SEARCH_RRF
+
+    return EDGE_HYBRID_SEARCH_RRF.model_copy(update={"limit": limit}, deep=True)
 
 
 class MemorySearchTool(BaseTool):
@@ -63,6 +80,16 @@ class MemorySearchTool(BaseTool):
                         "Omit to search all scopes."
                     ),
                 },
+                "tier": {
+                    "type": "string",
+                    "enum": ["all", "personal", "team", "org"],
+                    "description": (
+                        "Tiers to search: 'all' (default: personal + org + the "
+                        "current workspace), or 'personal'/'team'/'org'. Shared results are "
+                        "labelled with their source (e.g. 'org memory')."
+                    ),
+                    "default": "all",
+                },
             },
             "required": ["query"],
         }
@@ -70,6 +97,10 @@ class MemorySearchTool(BaseTool):
     @property
     def requires_auth(self) -> bool:
         return True
+
+    @property
+    def resource_access(self) -> ResourceAccess:
+        return "view"
 
     async def _execute(
         self,
@@ -79,6 +110,7 @@ class MemorySearchTool(BaseTool):
         query: str = "",
         limit: int = 15,
         scope: str = "",
+        tier: str = "all",
         **kwargs,
     ) -> ToolResponseBase:
         if not user_id:
@@ -101,47 +133,124 @@ class MemorySearchTool(BaseTool):
 
         limit = min(limit, _MAX_LIMIT)
 
+        # Resolve which tier groups this search may read. Only ACTIVE team
+        # memberships are ever included, and org/team tiers require an org
+        # on the session — non-members can never read shared memory.
         try:
-            group_id = MemoryScope.build(user_id, session.expert_id).group_id
+            targets = await resolve_search_targets(
+                user_id,
+                session.organization_id,
+                tier,
+                session_team_id=session.team_id,
+                expert_id=session.expert_id,
+            )
+        except TierError as exc:
+            return ErrorResponse(message=exc.message, session_id=session.session_id)
         except ValueError:
             return ErrorResponse(
                 message="Invalid user ID for memory operations.",
                 session_id=session.session_id,
             )
 
-        try:
-            client = await get_graphiti_client(group_id)
+        if not targets:
+            # e.g. tier='team' when the user has no active team memberships.
+            return MemorySearchResponse(
+                message="No memories found matching your query.",
+                session_id=session.session_id,
+                facts=[],
+                recent_episodes=[],
+            )
 
-            edges, episodes = await asyncio.gather(
-                client.search(
-                    query=query,
-                    group_ids=[group_id],
-                    num_results=limit,
-                ),
-                client.retrieve_episodes(
-                    reference_time=datetime.now(timezone.utc),
-                    group_ids=[group_id],
-                    last_n=5,
-                ),
+        now = datetime.now(timezone.utc)
+
+        async def _search_one(target):
+            client = await get_graphiti_client(target.group_id)
+            driver = getattr(client, "graph_driver", None) or getattr(
+                client, "driver", None
             )
-        except Exception:
-            logger.warning(
-                "Memory search failed for user %s", user_id[:12], exc_info=True
+            if target.tier == MemoryTier.personal:
+                edge_results, episodes = await asyncio.gather(
+                    client.search_(
+                        query=query,
+                        config=_search_config(limit),
+                        group_ids=[target.group_id],
+                    ),
+                    client.retrieve_episodes(
+                        reference_time=now,
+                        group_ids=[target.group_id],
+                        last_n=5,
+                    ),
+                )
+                edges = edge_results.edges if edge_results is not None else []
+                if scope:
+                    edges = await filter_edges_by_scope(
+                        target.group_id, edges, scope, driver=driver
+                    )
+                return edges, episodes
+            edge_results = await client.search_(
+                query=query,
+                config=_search_config(_MAX_LIMIT),
+                group_ids=[target.group_id],
+                search_filter=active_shared_search_filter(),
             )
+            edges = edge_results.edges if edge_results is not None else []
+            active_edges = await filter_active_shared_edges(
+                target.group_id,
+                edges,
+                driver=driver,
+            )
+            if scope:
+                active_edges = await filter_edges_by_scope(
+                    target.group_id, active_edges, scope, driver=driver
+                )
+            return active_edges, []
+
+        # Per-tier failures are non-fatal — a flaky shared graph must not
+        # sink a personal search. Only surface "unavailable" when every
+        # tier failed.
+        results = await asyncio.gather(
+            *(_search_one(t) for t in targets), return_exceptions=True
+        )
+
+        personal_edges: list = []
+        personal_eps: list[str] = []
+        shared_edges: list[tuple[str | None, list]] = []
+        shared_eps: list[tuple[str | None, list[str]]] = []
+        any_ok = False
+
+        for target, res in zip(targets, results):
+            if isinstance(res, BaseException):
+                logger.warning(
+                    "Memory search tier %s failed for user %s",
+                    target.group_id[:20],
+                    user_id[:12],
+                    exc_info=res,
+                )
+                continue
+            any_ok = True
+            edges, episodes = res
+            ep_lines = _episode_lines(episodes, scope)
+            if target.tier == MemoryTier.personal:
+                personal_edges = edges
+                personal_eps = ep_lines
+            else:
+                shared_edges.append((target.label, edges))
+                shared_eps.append((target.label, ep_lines))
+
+        if not any_ok:
             return ErrorResponse(
                 message="Memory search is temporarily unavailable.",
                 session_id=session.session_id,
             )
 
-        facts = _format_edges(edges)
+        merged_facts = merge_tiered(personal_edges, shared_edges, limit)
+        facts = [
+            f"{_label_prefix(label)}{_edge_to_fact_line(e)}"
+            for e, label in merged_facts
+        ]
 
-        # Scope hard-filter: if a scope was requested, filter episodes
-        # whose MemoryEnvelope JSON contains a different scope.
-        # Skip redundant _format_episodes() when scope is set.
-        if scope:
-            recent = _filter_episodes_by_scope(episodes, scope)
-        else:
-            recent = _format_episodes(episodes)
+        merged_eps = merge_tiered(personal_eps, shared_eps, limit)
+        recent = [f"{_label_prefix(label)}{line}" for line, label in merged_eps]
 
         if not facts and not recent:
             return MemorySearchResponse(
@@ -152,11 +261,19 @@ class MemorySearchTool(BaseTool):
             )
 
         scope_note = f" (scope filter: {scope})" if scope else ""
+        tier_note = "" if tier in ("", "all") else f" (tier: {tier})"
+        shared_note = (
+            " Facts labelled 'org memory' / 'team memory (<name>)' are shared "
+            "context — weigh them against your personal (unlabelled) memory."
+            if any(label for _, label in [*merged_facts, *merged_eps])
+            else ""
+        )
         return MemorySearchResponse(
             message=(
-                f"Found {len(facts)} relationship facts and {len(recent)} stored memories{scope_note}. "
+                f"Found {len(facts)} relationship facts and {len(recent)} stored memories{scope_note}{tier_note}. "
                 "Use BOTH sections to answer — stored memories often contain operational "
                 "rules and instructions that relationship facts summarize."
+                f"{shared_note}"
             ),
             session_id=session.session_id,
             facts=facts,
@@ -164,13 +281,26 @@ class MemorySearchTool(BaseTool):
         )
 
 
+def _label_prefix(label: str | None) -> str:
+    """Render a provenance label as a bracketed prefix (empty for personal)."""
+    return f"[{label}] " if label else ""
+
+
+def _edge_to_fact_line(e) -> str:
+    fact = extract_fact(e)
+    valid_from, valid_to = extract_temporal_validity(e)
+    return f"{fact} (valid: {valid_from} — {valid_to})"
+
+
+def _episode_lines(episodes, scope: str) -> list[str]:
+    """Format (and, when a scope is requested, hard-filter) recent episodes."""
+    if scope:
+        return _filter_episodes_by_scope(episodes, scope)
+    return _format_episodes(episodes)
+
+
 def _format_edges(edges) -> list[str]:
-    results = []
-    for e in edges:
-        fact = extract_fact(e)
-        valid_from, valid_to = extract_temporal_validity(e)
-        results.append(f"{fact} (valid: {valid_from} — {valid_to})")
-    return results
+    return [_edge_to_fact_line(e) for e in edges]
 
 
 def _format_episodes(episodes) -> list[str]:

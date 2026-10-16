@@ -48,6 +48,8 @@ class WorkspaceFolder(pydantic.BaseModel):
     updated_at: datetime
     # Files directly in this folder; a subfolder's files are counted on it.
     file_count: int = 0
+    organization_id: str | None = None
+    team_id: str | None = None
 
     @staticmethod
     def from_db(
@@ -62,21 +64,38 @@ class WorkspaceFolder(pydantic.BaseModel):
             created_at=folder.createdAt,
             updated_at=folder.updatedAt,
             file_count=file_count,
+            organization_id=folder.organizationId,
+            team_id=folder.teamId,
         )
 
 
-async def _file_count(workspace_id: str, folder_id: str) -> int:
+def _scope_where(organization_id: str | None, team_id: str | None) -> dict:
+    return {"organizationId": organization_id, "teamId": team_id, "scopeResolved": True}
+
+
+async def _file_count(
+    workspace_id: str,
+    folder_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> int:
     """Live (non-deleted) file count for a single folder."""
     return await UserWorkspaceFile.prisma().count(
         where={
             "folderId": folder_id,
             "workspaceId": workspace_id,
             "isDeleted": False,
+            **_scope_where(organization_id, team_id),
         },
     )
 
 
-async def _file_counts(workspace_id: str, folder_ids: list[str]) -> dict[str, int]:
+async def _file_counts(
+    workspace_id: str,
+    folder_ids: list[str],
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> dict[str, int]:
     """Live file counts per folder in a single batched query.
 
     Counts in SQL instead of hydrating every file row just to ``len()`` it, so
@@ -90,6 +109,7 @@ async def _file_counts(workspace_id: str, folder_ids: list[str]) -> dict[str, in
             "workspaceId": workspace_id,
             "folderId": {"in": folder_ids},
             "isDeleted": False,
+            **_scope_where(organization_id, team_id),
         },
         count=True,
     )
@@ -103,6 +123,8 @@ async def _file_counts(workspace_id: str, folder_ids: list[str]) -> dict[str, in
 async def _get_folder_record(
     folder_id: str,
     workspace_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> "UserWorkspaceFolder":
     """Fetch a workspace-scoped folder record or raise NotFoundError."""
     folder = await UserWorkspaceFolder.prisma().find_first(
@@ -110,6 +132,7 @@ async def _get_folder_record(
             "id": folder_id,
             "workspaceId": workspace_id,
             "isDeleted": False,
+            **_scope_where(organization_id, team_id),
         },
     )
     if not folder:
@@ -117,7 +140,9 @@ async def _get_folder_record(
     return folder
 
 
-async def list_workspace_folders(workspace_id: str) -> list[WorkspaceFolder]:
+async def list_workspace_folders(
+    workspace_id: str, organization_id: str | None = None, team_id: str | None = None
+) -> list[WorkspaceFolder]:
     """Every non-deleted folder in a workspace, flat.
 
     Named for the workspace because the RPC surface the copilot tools reach is
@@ -126,17 +151,35 @@ async def list_workspace_folders(workspace_id: str) -> list[WorkspaceFolder]:
     which costs one query however deep the nesting goes.
     """
     folders = await UserWorkspaceFolder.prisma().find_many(
-        where={"workspaceId": workspace_id, "isDeleted": False},
+        where={
+            "workspaceId": workspace_id,
+            "isDeleted": False,
+            **_scope_where(organization_id, team_id),
+        },
         order={"name": "asc"},
     )
-    counts = await _file_counts(workspace_id, [f.id for f in folders])
+    counts = await _file_counts(
+        workspace_id,
+        [f.id for f in folders],
+        organization_id=organization_id,
+        team_id=team_id,
+    )
     return [WorkspaceFolder.from_db(f, file_count=counts.get(f.id, 0)) for f in folders]
 
 
-async def get_folder(folder_id: str, workspace_id: str) -> WorkspaceFolder:
+async def get_folder(
+    folder_id: str,
+    workspace_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> WorkspaceFolder:
     """Get a single folder by ID, scoped to the workspace."""
-    folder = await _get_folder_record(folder_id, workspace_id)
-    count = await _file_count(workspace_id, folder_id)
+    folder = await _get_folder_record(
+        folder_id, workspace_id, organization_id=organization_id, team_id=team_id
+    )
+    count = await _file_count(
+        workspace_id, folder_id, organization_id=organization_id, team_id=team_id
+    )
     return WorkspaceFolder.from_db(folder, file_count=count)
 
 
@@ -145,6 +188,8 @@ async def create_folder(
     name: str,
     icon: Optional[str] = None,
     parent_id: Optional[str] = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> WorkspaceFolder:
     """Create a folder, under *parent_id* or at the workspace root.
 
@@ -159,6 +204,7 @@ async def create_folder(
     create_data: dict = {
         "name": name,
         "Workspace": {"connect": {"id": workspace_id}},
+        **_scope_where(organization_id, team_id),
     }
     if icon is not None:
         create_data["icon"] = icon
@@ -168,8 +214,19 @@ async def create_folder(
     async with transaction() as tx:
         if parent_id is not None:
             await _lock_workspace_hierarchy(tx, workspace_id)
-            await _get_folder_record(parent_id, workspace_id)
-        if await _name_taken(workspace_id, name, parent_id):
+            await _get_folder_record(
+                parent_id,
+                workspace_id,
+                organization_id=organization_id,
+                team_id=team_id,
+            )
+        if await _name_taken(
+            workspace_id,
+            name,
+            parent_id,
+            organization_id=organization_id,
+            team_id=team_id,
+        ):
             raise FolderAlreadyExistsError("A folder with this name already exists")
 
         try:
@@ -186,6 +243,8 @@ async def _name_taken(
     name: str,
     parent_id: Optional[str],
     exclude_folder_id: Optional[str] = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> bool:
     """Whether a live sibling under *parent_id* already carries this name.
 
@@ -199,6 +258,7 @@ async def _name_taken(
         "name": name,
         "parentId": parent_id,
         "isDeleted": False,
+        **_scope_where(organization_id, team_id),
     }
     if exclude_folder_id is not None:
         where["id"] = {"not": exclude_folder_id}
@@ -210,18 +270,35 @@ async def update_folder(
     workspace_id: str,
     name: Optional[str] = None,
     icon: Optional[str] = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> WorkspaceFolder:
     """Rename a folder and/or change its icon, leaving it where it is."""
-    return await apply_folder_update(folder_id, workspace_id, name=name, icon=icon)
+    return await apply_folder_update(
+        folder_id,
+        workspace_id,
+        name=name,
+        icon=icon,
+        organization_id=organization_id,
+        team_id=team_id,
+    )
 
 
 async def move_folder(
     folder_id: str,
     workspace_id: str,
     parent_id: Optional[str],
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> WorkspaceFolder:
     """Move a folder under *parent_id*, or to the workspace root when None."""
-    return await apply_folder_update(folder_id, workspace_id, parent_id=parent_id)
+    return await apply_folder_update(
+        folder_id,
+        workspace_id,
+        parent_id=parent_id,
+        organization_id=organization_id,
+        team_id=team_id,
+    )
 
 
 async def apply_folder_update(
@@ -230,6 +307,8 @@ async def apply_folder_update(
     parent_id: ParentChange = UNCHANGED,
     name: Optional[str] = None,
     icon: Optional[str] = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> WorkspaceFolder:
     """Move and/or rename a folder as a single write.
 
@@ -251,18 +330,35 @@ async def apply_folder_update(
         if moving or name is not None:
             await _lock_workspace_hierarchy(tx, workspace_id)
 
-        folder = await _get_folder_record(folder_id, workspace_id)
+        folder = await _get_folder_record(
+            folder_id, workspace_id, organization_id=organization_id, team_id=team_id
+        )
         destination = parent_id if moving else folder.parentId
 
         if moving and destination is not None:
-            await _get_folder_record(destination, workspace_id)
-            if folder_id in await _ancestor_ids(workspace_id, destination):
+            await _get_folder_record(
+                destination,
+                workspace_id,
+                organization_id=organization_id,
+                team_id=team_id,
+            )
+            if folder_id in await _ancestor_ids(
+                workspace_id,
+                destination,
+                organization_id=organization_id,
+                team_id=team_id,
+            ):
                 raise FolderValidationError(
                     "A folder cannot be moved into itself or one of its subfolders"
                 )
 
         if (moving or name is not None) and await _name_taken(
-            workspace_id, folder.name if name is None else name, destination, folder_id
+            workspace_id,
+            folder.name if name is None else name,
+            destination,
+            folder_id,
+            organization_id=organization_id,
+            team_id=team_id,
         ):
             raise FolderAlreadyExistsError("A folder with this name already exists")
 
@@ -280,7 +376,12 @@ async def apply_folder_update(
             # check must not be updated and reported as a 200.
             try:
                 updated_count = await UserWorkspaceFolder.prisma(tx).update_many(
-                    where={"id": folder_id, "isDeleted": False},
+                    where={
+                        "id": folder_id,
+                        "workspaceId": workspace_id,
+                        "isDeleted": False,
+                        **_scope_where(organization_id, team_id),
+                    },
                     data=data,
                 )
             except UniqueViolationError:
@@ -290,7 +391,9 @@ async def apply_folder_update(
 
     if data:
         logger.info(f"Updated workspace folder {folder_id}: {sorted(data)}")
-    return await get_folder(folder_id, workspace_id)
+    return await get_folder(
+        folder_id, workspace_id, organization_id=organization_id, team_id=team_id
+    )
 
 
 async def _lock_workspace_hierarchy(tx: Prisma, workspace_id: str) -> None:
@@ -308,7 +411,12 @@ async def _lock_workspace_hierarchy(tx: Prisma, workspace_id: str) -> None:
     )
 
 
-async def _ancestor_ids(workspace_id: str, folder_id: str) -> list[str]:
+async def _ancestor_ids(
+    workspace_id: str,
+    folder_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> list[str]:
     """*folder_id* and every live folder above it, nearest first.
 
     Stops on a repeat so a cycle already in the data cannot hang the walk.
@@ -316,7 +424,11 @@ async def _ancestor_ids(workspace_id: str, folder_id: str) -> list[str]:
     by_id = {
         f.id: f
         for f in await UserWorkspaceFolder.prisma().find_many(
-            where={"workspaceId": workspace_id, "isDeleted": False},
+            where={
+                "workspaceId": workspace_id,
+                "isDeleted": False,
+                **_scope_where(organization_id, team_id),
+            },
         )
     }
     chain: list[str] = []
@@ -329,7 +441,12 @@ async def _ancestor_ids(workspace_id: str, folder_id: str) -> list[str]:
     return chain
 
 
-async def delete_folder(folder_id: str, workspace_id: str) -> None:
+async def delete_folder(
+    folder_id: str,
+    workspace_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> None:
     """
     Soft-delete a folder and its subfolders, returning every file to root.
 
@@ -343,18 +460,31 @@ async def delete_folder(folder_id: str, workspace_id: str) -> None:
     """
     async with transaction() as tx:
         await _lock_workspace_hierarchy(tx, workspace_id)
-        await _get_folder_record(folder_id, workspace_id)
-        doomed = await _subtree_ids(workspace_id, folder_id)
+        await _get_folder_record(
+            folder_id, workspace_id, organization_id=organization_id, team_id=team_id
+        )
+        doomed = await _subtree_ids(
+            workspace_id, folder_id, organization_id=organization_id, team_id=team_id
+        )
 
         await UserWorkspaceFile.prisma(tx).update_many(
-            where={"folderId": {"in": doomed}, "workspaceId": workspace_id},
+            where={
+                "folderId": {"in": doomed},
+                "workspaceId": workspace_id,
+                **_scope_where(organization_id, team_id),
+            },
             data={"folderId": None},
         )
         # update_many with an isDeleted guard so a concurrent delete that slips
         # past the ownership check above is a no-op rather than re-deleting a
         # logically-deleted row (TOCTOU-safe, idempotent).
         await UserWorkspaceFolder.prisma(tx).update_many(
-            where={"id": {"in": doomed}, "isDeleted": False},
+            where={
+                "id": {"in": doomed},
+                "workspaceId": workspace_id,
+                "isDeleted": False,
+                **_scope_where(organization_id, team_id),
+            },
             data={"isDeleted": True},
         )
 
@@ -364,7 +494,12 @@ async def delete_folder(folder_id: str, workspace_id: str) -> None:
     )
 
 
-async def _subtree_ids(workspace_id: str, folder_id: str) -> list[str]:
+async def _subtree_ids(
+    workspace_id: str,
+    folder_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> list[str]:
     """*folder_id* and every live folder beneath it.
 
     One query plus a walk in Python: a user's folder list is small, and a
@@ -374,7 +509,11 @@ async def _subtree_ids(workspace_id: str, folder_id: str) -> list[str]:
     """
     children: dict[Optional[str], list[str]] = {}
     for f in await UserWorkspaceFolder.prisma().find_many(
-        where={"workspaceId": workspace_id, "isDeleted": False},
+        where={
+            "workspaceId": workspace_id,
+            "isDeleted": False,
+            **_scope_where(organization_id, team_id),
+        },
     ):
         children.setdefault(f.parentId, []).append(f.id)
 
@@ -396,6 +535,8 @@ async def resolve_attachable_workspace_folders(
     folder_ids: list[str],
     *,
     expert_id: str | None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> list[WorkspaceFolder]:
     """Return the caller's own live folders among *folder_ids*.
 
@@ -416,9 +557,15 @@ async def resolve_attachable_workspace_folders(
             "id": {"in": folder_ids},
             "workspaceId": workspace.id,
             "isDeleted": False,
+            **_scope_where(organization_id, team_id),
         },
     )
-    counts = await _file_counts(workspace.id, [f.id for f in folders])
+    counts = await _file_counts(
+        workspace.id,
+        [f.id for f in folders],
+        organization_id=organization_id,
+        team_id=team_id,
+    )
     return [WorkspaceFolder.from_db(f, file_count=counts.get(f.id, 0)) for f in folders]
 
 
@@ -426,6 +573,8 @@ async def bulk_move_files_to_folder(
     workspace_id: str,
     file_ids: list[str],
     folder_id: Optional[str],
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> list[WorkspaceFile]:
     """
     Move multiple files into a folder (or to root when ``folder_id`` is None).
@@ -435,7 +584,9 @@ async def bulk_move_files_to_folder(
     """
     # folderId is set directly; the FK only checks existence, not ownership.
     if folder_id:
-        await _get_folder_record(folder_id, workspace_id)
+        await _get_folder_record(
+            folder_id, workspace_id, organization_id=organization_id, team_id=team_id
+        )
 
     if not file_ids:
         return []
@@ -446,6 +597,7 @@ async def bulk_move_files_to_folder(
         "id": {"in": file_ids},
         "workspaceId": workspace_id,
         "isDeleted": False,
+        **_scope_where(organization_id, team_id),
     }
     async with transaction() as tx:
         await UserWorkspaceFile.prisma(tx).update_many(

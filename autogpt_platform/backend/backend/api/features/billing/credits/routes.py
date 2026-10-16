@@ -1,17 +1,15 @@
 from datetime import datetime
 from typing import Annotated
 
-from autogpt_libs.auth import (
-    get_request_context,
-    get_user_id,
-    requires_org_permission,
-    requires_user,
-)
+from autogpt_libs.auth import get_user_id, requires_user
 from autogpt_libs.auth.models import RequestContext
 from autogpt_libs.auth.permissions import OrgAction
 from fastapi import APIRouter, Header, HTTPException, Query, Response, Security
 
 from backend.api.features.billing.client_country import ClientCountry
+from backend.api.live_auth import (
+    requires_live_org_permission as requires_org_permission,
+)
 from backend.api.model import RequestTopUp
 from backend.data.checkout_audience import schedule_checkout_opened
 from backend.data.credit import (
@@ -40,7 +38,7 @@ router = APIRouter(dependencies=[Security(requires_user)])
 # /credits/invoices).
 BillingManagerContext = Annotated[
     RequestContext,
-    Security(requires_org_permission(OrgAction.MANAGE_BILLING)),
+    requires_org_permission(OrgAction.MANAGE_BILLING),
 ]
 
 
@@ -176,7 +174,10 @@ async def configure_user_auto_top_up(
 )
 async def get_user_auto_top_up(
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_org_permission(OrgAction.MANAGE_BILLING),
+    ],
 ) -> AutoTopUpConfig:
     return await get_auto_top_up(user_id)
 

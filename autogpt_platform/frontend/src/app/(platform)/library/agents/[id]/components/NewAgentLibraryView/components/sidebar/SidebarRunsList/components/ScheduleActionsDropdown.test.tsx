@@ -62,6 +62,7 @@ describe("ScheduleActionsDropdown", () => {
 
     render(
       <ScheduleActionsDropdown
+        canDelete={true}
         agent={agent}
         schedule={schedule}
         onRunCreated={onRunCreated}

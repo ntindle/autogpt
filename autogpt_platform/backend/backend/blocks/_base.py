@@ -602,6 +602,8 @@ class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
         static_output: bool = False,
         block_type: BlockType = BlockType.STANDARD,
         webhook_config: Optional[BlockWebhookConfig | BlockManualWebhookConfig] = None,
+        is_sensitive_action: bool = False,
+        allow_owner_credentials: bool = True,
         is_irreversible_action: bool = False,
         capability_kind: CapabilityKind | None = None,
         effect: BlockEffect | None = None,
@@ -647,6 +649,8 @@ class Block(ABC, Generic[BlockSchemaInputType, BlockSchemaOutputType]):
         self.static_output = static_output
         self.block_type = block_type
         self.webhook_config = webhook_config
+        self.is_sensitive_action = is_sensitive_action
+        self.allow_owner_credentials = allow_owner_credentials
         self.is_irreversible_action = is_irreversible_action
         self._capability_kind: CapabilityKind | None = capability_kind
         self.effect = effect

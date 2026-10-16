@@ -1,5 +1,6 @@
 import {
   listWorkspaceFiles,
+  getListWorkspaceFoldersQueryKey,
   useListWorkspaceFolders,
 } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
@@ -10,6 +11,11 @@ import {
   childrenOf,
 } from "@/app/(platform)/artifacts/components/WorkspaceFolders/folderTree";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useCopilotTenantScope } from "../../../../CopilotTenantScopeContext";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
 import {
   applySelection,
   orderByList,
@@ -42,6 +48,7 @@ interface Args {
 }
 
 export function useWorkspaceFilePicker({ enabled, expertId }: Args) {
+  const scope = useCopilotTenantScope();
   const [searchTerm, setSearchTerm] = useState("");
   // Deliberately outside `reset()`: the filter is a property of this chat, so
   // it survives close-and-reopen. The picker's `key={expertId}` remount is
@@ -77,32 +84,48 @@ export function useWorkspaceFilePicker({ enabled, expertId }: Args) {
   const listedFolderId = showFolders ? folderId : null;
 
   const foldersQuery = useListWorkspaceFolders({
-    query: { select: okData, enabled: enabled && !isExpertOnly },
+    query: {
+      select: okData,
+      enabled: enabled && !isExpertOnly,
+      queryKey: getTeamScopedQueryKey(
+        getListWorkspaceFoldersQueryKey(),
+        scope.organizationId,
+        scope.teamId,
+      ),
+    },
+    request: getTenantRequestInit(scope.organizationId, scope.teamId),
   });
   const folders = foldersQuery.data?.folders ?? [];
 
   const query = useInfiniteQuery({
-    queryKey: [
-      "workspace-file-picker",
-      "list",
-      {
-        q: q ?? null,
-        expertId: expertId ?? null,
-        includeUserFiles: includeUserFiles ?? null,
-        folderId: listedFolderId,
-        rootOnly,
-      },
-    ] as const,
+    queryKey: getTeamScopedQueryKey(
+      [
+        "workspace-file-picker",
+        "list",
+        {
+          q: q ?? null,
+          expertId: expertId ?? null,
+          includeUserFiles: includeUserFiles ?? null,
+          folderId: listedFolderId,
+          rootOnly,
+        },
+      ],
+      scope.organizationId,
+      scope.teamId,
+    ),
     queryFn: ({ pageParam }) =>
-      listWorkspaceFiles({
-        limit: PAGE_SIZE,
-        offset: pageParam,
-        q,
-        expert_id: expertId ?? undefined,
-        include_user_files: includeUserFiles,
-        folder_id: listedFolderId ?? undefined,
-        root_only: rootOnly || undefined,
-      }),
+      listWorkspaceFiles(
+        {
+          limit: PAGE_SIZE,
+          offset: pageParam,
+          q,
+          expert_id: expertId ?? undefined,
+          include_user_files: includeUserFiles,
+          folder_id: listedFolderId ?? undefined,
+          root_only: rootOnly || undefined,
+        },
+        getTenantRequestInit(scope.organizationId, scope.teamId),
+      ),
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) => {
       if (lastPage.status !== 200) return undefined;
@@ -112,21 +135,6 @@ export function useWorkspaceFilePicker({ enabled, expertId }: Args) {
     // Keep the previous page while a search refines the same listing, but
     // never show one expert's files, the other side of the filter or another
     // folder's files while its request is pending.
-    placeholderData: (previousData, previousQuery) => {
-      const prev = previousQuery?.queryKey[2];
-      if (!prev) return undefined;
-      if (prev.expertId !== (expertId ?? null)) return undefined;
-      if (prev.includeUserFiles !== (includeUserFiles ?? null))
-        return undefined;
-      // A search refines a listing; opening a folder replaces it.
-      const isBrowsing = prev.q === null && !q;
-      if (
-        isBrowsing &&
-        (prev.folderId !== listedFolderId || prev.rootOnly !== rootOnly)
-      )
-        return undefined;
-      return previousData;
-    },
     enabled,
   });
 

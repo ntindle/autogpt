@@ -265,6 +265,7 @@ class ManageTasksTool(BaseTool):
                 user_id,
                 TaskCreate(title=title, description=description, project=project),
                 session.organization_id,
+                team_id=session.team_id,
                 source_session_id=session.session_id,
             )
             return WorkspaceTasksResponse(

@@ -28,7 +28,17 @@ function task(overrides: Partial<WorkspaceTask> = {}): WorkspaceTask {
     ...overrides,
   };
 }
-beforeEach(() => sessionStorage.clear());
+beforeEach(() => {
+  sessionStorage.clear();
+  server.use(
+    http.get("/api/proxy/api/tasks/conversation/:sessionId/scope", () =>
+      HttpResponse.json({
+        organization_id: "saved-org",
+        team_id: "saved-team",
+      }),
+    ),
+  );
+});
 
 test("submit a human deliverable, retain it on reload, and show no self-review step", async () => {
   let item = task();
@@ -173,6 +183,8 @@ test("workspace deliverables are linked and previewable from their review", asyn
         files: [
           {
             id,
+            organization_id: "saved-org",
+            team_id: "saved-team",
             name: "biggerarm_plan.md",
             path: "/sessions/work-session/biggerarm_plan.md",
             mime_type: "text/markdown",
@@ -184,7 +196,7 @@ test("workspace deliverables are linked and previewable from their review", asyn
         has_more: false,
       }),
     ),
-    http.get(`/api/proxy/api/workspace/files/${id}/download`, () =>
+    http.get(`/api/workspace/files/${id}/download`, () =>
       HttpResponse.text(
         "# Biggerarm deliverable\n\nVerified fixture dimensions",
       ),
@@ -200,7 +212,9 @@ test("workspace deliverables are linked and previewable from their review", asyn
   });
   expect(
     within(files).getByRole("link", { name: "Download" }).getAttribute("href"),
-  ).toBe(`/api/proxy/api/workspace/files/${id}/download`);
+  ).toBe(
+    `/api/workspace/files/${id}/download?organizationId=saved-org&teamId=saved-team`,
+  );
   await userEvent.click(
     within(files).getByRole("button", { name: "biggerarm_plan.md" }),
   );
@@ -232,6 +246,8 @@ test("bare workspace references open inline previews without leaving the review"
         files: [
           {
             id,
+            organization_id: "saved-org",
+            team_id: "saved-team",
             name: filename,
             path: `/robotics/${filename}`,
             mime_type: "text/markdown",
@@ -241,7 +257,7 @@ test("bare workspace references open inline previews without leaving the review"
         has_more: false,
       }),
     ),
-    http.get(`/api/proxy/api/workspace/files/${id}/download`, () =>
+    http.get(`/api/workspace/files/${id}/download`, () =>
       HttpResponse.text(
         "# Autonomy architecture\n\n```\n[sensing] -> [planning]\n                 |\n              [control]\n```",
       ),

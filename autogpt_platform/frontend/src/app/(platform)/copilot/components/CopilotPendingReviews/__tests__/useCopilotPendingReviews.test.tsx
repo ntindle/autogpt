@@ -37,7 +37,12 @@ describe("useCopilotPendingReviews", () => {
     const calls = countRequests("COMPLETED");
     renderHook(
       () =>
-        useCopilotPendingReviews({ graphExecId: "exec-1", graphId: "graph-1" }),
+        useCopilotPendingReviews({
+          organizationId: null,
+          teamId: null,
+          graphExecId: "exec-1",
+          graphId: "graph-1",
+        }),
       { wrapper },
     );
     await waitFor(() => expect(calls.reviews).toBeGreaterThan(0));
@@ -52,7 +57,12 @@ describe("useCopilotPendingReviews", () => {
     const calls = countRequests("RUNNING");
     renderHook(
       () =>
-        useCopilotPendingReviews({ graphExecId: "exec-1", graphId: "graph-1" }),
+        useCopilotPendingReviews({
+          organizationId: null,
+          teamId: null,
+          graphExecId: "exec-1",
+          graphId: "graph-1",
+        }),
       { wrapper },
     );
     await waitFor(() => expect(calls.execution).toBeGreaterThan(0));
@@ -76,7 +86,12 @@ describe("useCopilotPendingReviews", () => {
     );
     renderHook(
       () =>
-        useCopilotPendingReviews({ graphExecId: "exec-1", graphId: "graph-1" }),
+        useCopilotPendingReviews({
+          organizationId: null,
+          teamId: null,
+          graphExecId: "exec-1",
+          graphId: "graph-1",
+        }),
       { wrapper },
     );
 
@@ -102,7 +117,12 @@ describe("useCopilotPendingReviews", () => {
       }),
     );
     const { result } = renderHook(
-      () => useCopilotPendingReviews({ chatSessionId: "chat-1" }),
+      () =>
+        useCopilotPendingReviews({
+          organizationId: null,
+          teamId: null,
+          chatSessionId: "chat-1",
+        }),
       { wrapper },
     );
 
@@ -120,7 +140,12 @@ describe("useCopilotPendingReviews", () => {
     const calls = countRequests("REVIEW");
     renderHook(
       () =>
-        useCopilotPendingReviews({ graphExecId: "exec-1", graphId: "graph-1" }),
+        useCopilotPendingReviews({
+          organizationId: null,
+          teamId: null,
+          graphExecId: "exec-1",
+          graphId: "graph-1",
+        }),
       { wrapper },
     );
     await waitFor(() => expect(calls.reviews).toBeGreaterThan(0));
@@ -147,6 +172,8 @@ describe("useCopilotPendingReviews", () => {
       renderHook(
         () =>
           useCopilotPendingReviews({
+            organizationId: null,
+            teamId: null,
             chatSessionId: "s1",
             pollWhileEmpty: false,
           }),
@@ -172,6 +199,8 @@ describe("useCopilotPendingReviews", () => {
     const { rerender } = renderHook(
       ({ key }) =>
         useCopilotPendingReviews({
+          organizationId: null,
+          teamId: null,
           chatSessionId: "s1",
           pollWhileEmpty: false,
           refetchKey: key,

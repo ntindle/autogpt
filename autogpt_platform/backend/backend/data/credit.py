@@ -768,6 +768,15 @@ class UserCreditBase(ABC):
 
 
 class UserCredit(UserCreditBase):
+    def __init__(self, billing_user_id: str | None = None):
+        self.billing_user_id = billing_user_id
+
+    def _billing_user(self, user_id: str) -> str:
+        return self.billing_user_id or user_id
+
+    async def create_billing_portal_session(self, user_id: str) -> str | None:
+        return await super().create_billing_portal_session(self._billing_user(user_id))
+
     async def _send_refund_notification(
         self,
         kind: Literal["request", "processed"],
@@ -819,6 +828,7 @@ class UserCredit(UserCreditBase):
         metadata: UsageTransactionMetadata,
         fail_insufficient_credits: bool = True,
     ) -> int:
+        user_id = self._billing_user(user_id)
         if cost == 0:
             return 0
 
@@ -860,6 +870,7 @@ class UserCredit(UserCreditBase):
         organization_id: str | None = None,
         top_up_type: TopUpType = TopUpType.UNCATEGORIZED,
     ):
+        user_id = self._billing_user(user_id)
         await self._top_up_credits(
             user_id=user_id, amount=amount, top_up_type=top_up_type
         )
@@ -871,6 +882,7 @@ class UserCredit(UserCreditBase):
         reason: str,
         transaction_key: str | None = None,
     ) -> int:
+        user_id = self._billing_user(user_id)
         if amount < 0:
             raise ValueError(f"Grant amount must not be negative: {amount}")
         try:
@@ -890,6 +902,7 @@ class UserCredit(UserCreditBase):
     async def onboarding_reward(
         self, user_id: str, credits: int, step: "OnboardingStep"
     ):
+        user_id = self._billing_user(user_id)
         try:
             await self._add_transaction(
                 user_id=user_id,
@@ -908,6 +921,7 @@ class UserCredit(UserCreditBase):
     async def top_up_refund(
         self, user_id: str, transaction_key: str, metadata: dict[str, str]
     ) -> int:
+        user_id = self._billing_user(user_id)
         transaction = await CreditTransaction.prisma().find_first_or_raise(
             where={
                 "transactionKey": transaction_key,
@@ -1213,6 +1227,7 @@ class UserCredit(UserCreditBase):
         datafast_visitor_id: str | None = None,
         datafast_session_id: str | None = None,
     ) -> str:
+        user_id = self._billing_user(user_id)
         if amount < 500 or amount % 100 != 0:
             raise ValueError(
                 f"Top up amount must be at least 500 credits and multiple of 100 but is {amount}"
@@ -1289,6 +1304,8 @@ class UserCredit(UserCreditBase):
     async def fulfill_checkout(
         self, *, session_id: str | None = None, user_id: str | None = None
     ):
+        if user_id is not None:
+            user_id = self._billing_user(user_id)
         if (not session_id and not user_id) or (session_id and user_id):
             raise ValueError("Either session_id or user_id must be provided")
 
@@ -1354,6 +1371,7 @@ class UserCredit(UserCreditBase):
     async def get_credits(
         self, user_id: str, organization_id: str | None = None
     ) -> int:
+        user_id = self._billing_user(user_id)
         balance, _ = await self._get_credits(user_id)
         return balance
 
@@ -1366,6 +1384,7 @@ class UserCredit(UserCreditBase):
         cursor: str | None = None,
         viewer_organization_id: str | None = None,
     ) -> TransactionHistory:
+        user_id = self._billing_user(user_id)
         return await get_credit_history(
             user_id=user_id,
             transaction_count_limit=transaction_count_limit,
@@ -1378,6 +1397,7 @@ class UserCredit(UserCreditBase):
     async def get_refund_requests(
         self, user_id: str, limit: int = MAX_CREDIT_REFUND_REQUESTS_FETCH
     ) -> list[RefundRequest]:
+        user_id = self._billing_user(user_id)
         return [
             RefundRequest(
                 id=r.id,
@@ -1400,6 +1420,7 @@ class UserCredit(UserCreditBase):
     async def list_invoices(
         self, user_id: str, limit: int = 24
     ) -> list[InvoiceListItem]:
+        user_id = self._billing_user(user_id)
         # Skip the Stripe call entirely for users that have never been
         # provisioned a customer — listing invoices must NOT have the side
         # effect of creating a Stripe Customer record (would orphan billable
@@ -1520,7 +1541,8 @@ async def get_credit_model(
 
     When a non-personal ``organization_id`` is supplied, billing operations
     are routed to the org-level credit tables via ``OrgCreditModel``.
-    Personal orgs (and no org context) use the standard per-user model.
+    Personal orgs use the standard per-user model bound to the org owner's
+    wallet. No-org requests use the caller's user wallet.
     """
     if not settings.config.enable_credit:
         return DisabledUserCredit()
@@ -1534,8 +1556,10 @@ async def get_credit_model(
         # TODO(org-billing): route personal orgs through OrgCreditModel once
         # org-level Stripe (top_up_intent/fulfill_checkout/top_up_refund)
         # rolls out.
-        if await get_personal_org_owner(organization_id) is None:
+        personal_owner_id = await get_personal_org_owner(organization_id)
+        if personal_owner_id is None:
             return OrgCreditModel(organization_id)
+        return UserCredit(billing_user_id=personal_owner_id)
     return UserCredit()
 
 

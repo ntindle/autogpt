@@ -37,15 +37,15 @@ export function Providers({ children, ...props }: ThemeProviderProps) {
               <PostHogPageViewTracker />
             </Suspense>
             <CredentialsProvider>
-              <OrgTeamProvider>
-                <FeatureFlagProvider>
+              <FeatureFlagProvider>
+                <OrgTeamProvider>
                   <OnboardingProvider>
                     <ThemeProvider forcedTheme="light" {...props}>
                       <TooltipProvider>{children}</TooltipProvider>
                     </ThemeProvider>
                   </OnboardingProvider>
-                </FeatureFlagProvider>
-              </OrgTeamProvider>
+                </OrgTeamProvider>
+              </FeatureFlagProvider>
             </CredentialsProvider>
           </BackendAPIProvider>
         </PostHogProvider>

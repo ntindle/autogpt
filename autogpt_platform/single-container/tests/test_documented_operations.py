@@ -180,6 +180,7 @@ class DocumentedOperationsTest(unittest.TestCase):
             }
         self.assertNotIn("cache", archived_paths)
         self.assertIn("config", archived_paths)
+        self.assertIn("media", archived_paths)
         self.assertIn("workspaces", archived_paths)
         self.assertIn("store-media", archived_paths)
 
@@ -822,6 +823,7 @@ class DocumentedOperationsTest(unittest.TestCase):
             "postgres/PG_VERSION": "16\n",
             "postgres/postgresql.conf": POSTGRESQL_CONF,
             "postgres/pg_hba.conf": PG_HBA_CONF,
+            "media/avatar.png": "durable media\n",
             "workspaces/example.txt": "durable workspace\n",
             "store-media/users/example/images/example.png": "durable marketplace media\n",
             "cache/regenerable.txt": "do not archive\n",

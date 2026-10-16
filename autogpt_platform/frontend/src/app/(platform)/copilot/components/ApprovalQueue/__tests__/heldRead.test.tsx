@@ -29,7 +29,11 @@ function serve(reviews: PendingHumanReviewModel[]) {
 function renderQueue() {
   return render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
-      <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT_SESSION}
+      />
     </CopilotChatActionsProvider>,
   );
 }

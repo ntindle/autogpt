@@ -133,6 +133,10 @@ export function FileActionsMenu({ file, className }: Props) {
       )}
       {isMoveOpen && (
         <MoveToFolderDialog
+          scope={{
+            organizationId: file.organization_id ?? null,
+            teamId: file.team_id ?? null,
+          }}
           move={{
             kind: "files",
             fileIds: [file.id],

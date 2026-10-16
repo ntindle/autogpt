@@ -13,6 +13,7 @@ from backend.blocks.mcp.helpers import (
     mcp_authorization_header,
     normalize_mcp_url,
     parse_mcp_content,
+    release_mcp_credential_leases,
     server_host,
 )
 from backend.copilot.model import ChatSession
@@ -27,6 +28,10 @@ from backend.copilot.tools.utils import (
 )
 from backend.data.db_accessors import experts_db
 from backend.data.model import OAuth2Credentials
+from backend.integrations.credential_lease import (
+    CredentialLease,
+    run_with_credential_lease_guard,
+)
 from backend.integrations.providers import ProviderName
 from backend.util.request import (
     AUTH_STATUS_CODES,
@@ -225,6 +230,7 @@ class RunMCPToolTool(BaseTool):
 
         # Fast DB lookup — no network call.
         # Normalize for matching because stored credentials use normalized URLs.
+        mcp_leases: list[CredentialLease] = []
         normalized_url = normalize_mcp_url(server_url)
         # Narrow before ranking, not after: an ungranted manual token outranks a
         # granted OAuth row, so checking the single best match would refuse an
@@ -237,7 +243,7 @@ class RunMCPToolTool(BaseTool):
                 )
             )
         creds = await auto_lookup_mcp_credential(
-            user_id, normalized_url, allowed_ids=allowed_ids
+            user_id, normalized_url, mcp_leases, allowed_ids=allowed_ids
         )
         if creds is None and allowed_ids is not None:
             ungranted = await auto_lookup_mcp_credential(user_id, normalized_url)
@@ -287,7 +293,10 @@ class RunMCPToolTool(BaseTool):
                 probe_client = client
                 try:
                     try:
-                        await probe_client.initialize()
+                        await run_with_credential_lease_guard(
+                            probe_client.initialize(),
+                            mcp_leases,
+                        )
                     except HTTPClientError as probe_err:
                         if probe_err.status_code in AUTH_STATUS_CODES:
                             connected = False
@@ -296,6 +305,7 @@ class RunMCPToolTool(BaseTool):
                                 in CREDENTIAL_REJECTED_STATUS_CODES
                             ):
                                 rejection = _rejection(creds, probe_err)
+                                await release_mcp_credential_leases(mcp_leases)
                                 await invalidate_mcp_credential(user_id, creds.id)
                         # Other HTTP statuses (5xx, redirects, etc.) →
                         # leave the cred in place and report
@@ -326,6 +336,7 @@ class RunMCPToolTool(BaseTool):
                     # ``close`` is best-effort and swallows its own
                     # errors.
                     await probe_client.close()
+                    await release_mcp_credential_leases(mcp_leases)
             return await self._build_setup_requirements(
                 server_url,
                 session_id,
@@ -338,23 +349,28 @@ class RunMCPToolTool(BaseTool):
         if client is None:
             client = MCPClient(server_url)
 
-        try:
+        async def initialize_and_run_tool():
             await client.initialize()
-
             if not tool_name:
                 # Stage 1: Discover available tools
                 return await self._discover_tools(client, server_url, session_id)
-            else:
-                # Stage 2: Execute the selected tool
-                return await self._execute_tool(
-                    client,
-                    server_url,
-                    tool_name,
-                    resolved_tool_arguments,
-                    session_id,
-                    user_id,
-                    session,
-                )
+
+            # Stage 2: Execute the selected tool
+            return await self._execute_tool(
+                client,
+                server_url,
+                tool_name,
+                resolved_tool_arguments,
+                session_id,
+                user_id,
+                session,
+            )
+
+        try:
+            return await run_with_credential_lease_guard(
+                initialize_and_run_tool(),
+                mcp_leases,
+            )
 
         except HTTPClientError as e:
             if e.status_code in AUTH_STATUS_CODES:
@@ -366,6 +382,7 @@ class RunMCPToolTool(BaseTool):
                     else None
                 )
                 if creds is not None and credential_rejected:
+                    await release_mcp_credential_leases(mcp_leases)
                     await invalidate_mcp_credential(user_id, creds.id)
                 # A 403 over a credential we deliberately kept means "this
                 # token is fine, it just may not call *this* tool". Rendering
@@ -428,6 +445,7 @@ class RunMCPToolTool(BaseTool):
         finally:
             # Release any legacy session; a no-op on stateless servers.
             await client.close()
+            await release_mcp_credential_leases(mcp_leases)
 
     async def _discover_tools(
         self,

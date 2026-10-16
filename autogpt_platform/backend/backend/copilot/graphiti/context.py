@@ -4,6 +4,8 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+from backend.data.db_accessors import live_resource_lease
+
 from ._format import (
     extract_episode_body,
     extract_episode_body_raw,
@@ -13,19 +15,35 @@ from ._format import (
 )
 from .client import get_graphiti_client
 from .config import graphiti_config
+from .lifecycle import active_shared_search_filter, filter_active_shared_edges
 from .scope import MemoryScope
+from .tiers import MemoryTier, TierTarget, merge_tiered, resolve_warm_targets
 
 logger = logging.getLogger(__name__)
 
+# Recent-episode budget for warm context, split personal-first across tiers
+# (same >= half rule as facts). Kept small so episodes stay a recency hint,
+# not the bulk of the injected context.
+_WARM_EPISODE_BUDGET = 8
+_SHARED_CANDIDATE_CAP = 50
+
 
 async def fetch_warm_context(
-    user_id: str, message: str, expert_id: str | None = None
+    user_id: str,
+    message: str,
+    *,
+    expert_id: str | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> str | None:
     """Fetch relevant temporal context for the current memory owner and message.
 
     Called at the start of a session (first turn) to pre-load facts from
-    prior conversations.  Returns a formatted ``<temporal_context>`` block
-    suitable for appending to the system prompt, or ``None`` on failure.
+    prior conversations. Fans out across the personal tier, the org tier
+    (when ``organization_id`` is set), and the SESSION'S team tier (when
+    ``team_id`` is set AND the user is an active member) — merging the
+    results with provenance labels. Returns a formatted
+    ``<temporal_context>`` block, or ``None`` on failure.
 
     Graceful degradation: any error (timeout, connection, graphiti-core bug)
     returns ``None`` so the copilot continues without temporal context.
@@ -36,7 +54,7 @@ async def fetch_warm_context(
     try:
         scope = MemoryScope.build(user_id, expert_id)
         return await asyncio.wait_for(
-            _fetch(scope, message),
+            _fetch(scope, message, organization_id, team_id),
             timeout=graphiti_config.context_timeout,
         )
     except asyncio.TimeoutError:
@@ -50,15 +68,56 @@ async def fetch_warm_context(
         return None
 
 
-async def _fetch(scope: MemoryScope, message: str) -> str | None:
+async def _fetch(
+    scope: MemoryScope,
+    message: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> str | None:
+    user_id = scope.owner_user_id
+    if organization_id is None:
+        return await _fetch_authorized(scope, message, None, None)
+
+    async with live_resource_lease(
+        user_id, organization_id, team_id, "view"
+    ) as allowed:
+        if allowed:
+            action = _fetch_authorized(scope, message, organization_id, team_id)
+            return (
+                await allowed.run(action) if hasattr(allowed, "run") else await action
+            )
+
+    if team_id is not None:
+        async with live_resource_lease(
+            user_id, organization_id, None, "view"
+        ) as org_allowed:
+            if org_allowed:
+                action = _fetch_authorized(scope, message, organization_id, None)
+                return (
+                    await org_allowed.run(action)
+                    if hasattr(org_allowed, "run")
+                    else await action
+                )
+
+    return await _fetch_authorized(scope, message, None, None)
+
+
+async def _fetch_authorized(
+    scope: MemoryScope,
+    message: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> str | None:
+    user_id, expert_id = scope.owner_user_id, scope.expert_id
     # Imported lazily so the module can be imported without graphiti-core
     # installed (matches the pattern in client.py).
     from graphiti_core.search.search_config_recipes import (
         EDGE_HYBRID_SEARCH_CROSS_ENCODER,
     )
 
-    group_id = scope.group_id
-    client = await get_graphiti_client(group_id)
+    targets = await resolve_warm_targets(
+        user_id, organization_id, team_id, expert_id=expert_id
+    )
 
     # P-1.4: warm context is the single most-impactful retrieval per
     # session — the one place where the cross-encoder rerank earns its
@@ -71,32 +130,88 @@ async def _fetch(scope: MemoryScope, message: str) -> str | None:
     search_config = EDGE_HYBRID_SEARCH_CROSS_ENCODER.model_copy(
         update={"limit": graphiti_config.context_max_facts}
     )
-    edge_results, episodes = await asyncio.gather(
-        client.search_(
-            query=message,
-            config=search_config,
-            group_ids=[group_id],
-        ),
-        client.retrieve_episodes(
-            reference_time=datetime.now(timezone.utc),
-            group_ids=[group_id],
-            last_n=5,
-        ),
+    shared_search_config = search_config.model_copy(
+        update={
+            "limit": min(graphiti_config.context_max_facts * 2, _SHARED_CANDIDATE_CAP)
+        }
     )
-    edges = edge_results.edges if edge_results is not None else []
+    now = datetime.now(timezone.utc)
 
-    # Ratification sync hit-hook (P0.4 layer-2): every retrieved edge
-    # that's currently ``status='tentative'`` gets promoted to
-    # ``active`` inline, and every retrieved edge bumps its
-    # warm-context hit counter. Fire-and-forget so the chat turn
-    # never blocks on Redis or FalkorDB writes.
-    if edges:
-        _spawn_ratification_hits(scope, edges)
+    async def _fetch_one(target: TierTarget):
+        client = await get_graphiti_client(target.group_id)
+        if target.tier == MemoryTier.personal:
+            edge_results, episodes = await asyncio.gather(
+                client.search_(
+                    query=message,
+                    config=search_config,
+                    group_ids=[target.group_id],
+                ),
+                client.retrieve_episodes(
+                    reference_time=now,
+                    group_ids=[target.group_id],
+                    last_n=5,
+                ),
+            )
+            edges = edge_results.edges if edge_results is not None else []
+            return edges, episodes
+        edge_results = await client.search_(
+            query=message,
+            config=shared_search_config,
+            group_ids=[target.group_id],
+            search_filter=active_shared_search_filter(),
+        )
+        edges = edge_results.edges if edge_results is not None else []
+        active_edges = await filter_active_shared_edges(
+            target.group_id,
+            edges,
+            driver=getattr(client, "graph_driver", None)
+            or getattr(client, "driver", None),
+        )
+        return active_edges, []
 
-    if not edges and not episodes:
+    # Per-tier failures are non-fatal: a flaky org/team graph must not
+    # nuke the personal warm context. Collect exceptions and skip that tier.
+    results = await asyncio.gather(
+        *(_fetch_one(t) for t in targets), return_exceptions=True
+    )
+
+    personal_edges: list = []
+    personal_eps: list = []
+    shared_edges: list[tuple[str | None, list]] = []
+    shared_eps: list[tuple[str | None, list]] = []
+
+    for target, res in zip(targets, results):
+        if isinstance(res, BaseException):
+            logger.warning(
+                "Warm context tier %s failed — skipping",
+                target.group_id[:20],
+                exc_info=res,
+            )
+            continue
+        edges, episodes = res
+        if target.tier == MemoryTier.personal:
+            personal_edges = edges
+            personal_eps = episodes
+        else:
+            shared_edges.append((target.label, edges))
+            shared_eps.append((target.label, episodes))
+
+    # Ratification sync hit-hook (P0.4 layer-2): promotes tentative edges to
+    # active inline + bumps warm-context hit counters. It keys off
+    # Only personal edges may reach assistant-specific ratification; shared-tier
+    # ratification is an admin concern. Fire-and-forget keeps chat non-blocking.
+    if personal_edges:
+        _spawn_ratification_hits(scope, personal_edges)
+
+    merged_facts = merge_tiered(
+        personal_edges, shared_edges, graphiti_config.context_max_facts
+    )
+    merged_episodes = merge_tiered(personal_eps, shared_eps, _WARM_EPISODE_BUDGET)
+
+    if not merged_facts and not merged_episodes:
         return None
 
-    return _format_context(edges, episodes)
+    return _format_context(merged_facts, merged_episodes)
 
 
 # Strong refs to in-flight hit tasks — the event loop holds only weak
@@ -137,20 +252,34 @@ def _spawn_ratification_hits(scope: MemoryScope, edges) -> None:
     task.add_done_callback(_on_hit_task_done)
 
 
-def _format_context(edges, episodes) -> str | None:
+def _label_prefix(label: str | None) -> str:
+    """Render a provenance label as a bracketed prefix (empty for personal)."""
+    return f"[{label}] " if label else ""
+
+
+def _format_context(labeled_facts, labeled_episodes) -> str | None:
+    """Render merged, provenance-labelled facts + episodes.
+
+    ``labeled_facts`` / ``labeled_episodes`` are ``[(item, label)]`` pairs
+    where ``label`` is ``None`` for personal (rendered plain) or a shared-
+    tier label like ``"org memory"`` / ``"team memory (Platform)"`` that is
+    prefixed so the model can weigh provenance.
+    """
     sections: list[str] = []
 
-    if edges:
+    if labeled_facts:
         fact_lines = []
-        for e in edges:
+        for e, label in labeled_facts:
             valid_from, valid_to = extract_temporal_validity(e)
             fact = extract_fact(e)
-            fact_lines.append(f"  - {fact} ({valid_from} — {valid_to})")
+            fact_lines.append(
+                f"  - {_label_prefix(label)}{fact} ({valid_from} — {valid_to})"
+            )
         sections.append("<FACTS>\n" + "\n".join(fact_lines) + "\n</FACTS>")
 
-    if episodes:
+    if labeled_episodes:
         ep_lines = []
-        for ep in episodes:
+        for ep, label in labeled_episodes:
             # Use raw body (no truncation) for scope parsing — truncated
             # JSON from extract_episode_body() would fail json.loads().
             raw_body = extract_episode_body_raw(ep)
@@ -158,7 +287,7 @@ def _format_context(edges, episodes) -> str | None:
                 continue
             display_body = extract_episode_body(ep)
             ts = extract_episode_timestamp(ep)
-            ep_lines.append(f"  - [{ts}] {display_body}")
+            ep_lines.append(f"  - {_label_prefix(label)}[{ts}] {display_body}")
         if ep_lines:
             sections.append(
                 "<RECENT_EPISODES>\n" + "\n".join(ep_lines) + "\n</RECENT_EPISODES>"

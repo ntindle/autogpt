@@ -13,18 +13,27 @@ from backend.api.features.experts import experts_db
 from backend.data.graph import get_graph
 from backend.data.integrations import get_webhook
 from backend.data.model import CredentialsMetaInput, GraphInput
+from backend.data.tenancy import (
+    agent_graph_attachment_barrier,
+    live_resource_access_barrier,
+)
 from backend.executor.utils import make_node_credentials_input_map
-from backend.integrations.creds_manager import IntegrationCredentialsManager
-from backend.integrations.webhooks import get_webhook_manager
-from backend.integrations.webhooks.utils import setup_webhook_for_block
-from backend.util.exceptions import InvalidInputError, MissingConfigError, NotFoundError
+from backend.integrations.webhooks.utils import (
+    prune_webhook_with_credential_lease,
+    setup_webhook_for_block,
+)
+from backend.util.exceptions import (
+    InvalidInputError,
+    MissingConfigError,
+    NotAuthorizedError,
+    NotFoundError,
+)
 
 from . import db
 from . import model as models
 
 logger = logging.getLogger(__name__)
 
-credentials_manager = IntegrationCredentialsManager()
 
 _EXPERT_WORKSPACE_UNAVAILABLE = (
     "Your expert workspace is still being set up. Try again shortly."
@@ -52,6 +61,41 @@ async def setup_triggered_preset(
     trigger_config: dict[str, Any],
     agent_credentials: dict[str, CredentialsMetaInput],
     expert_id: str | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> models.LibraryAgentPreset:
+    async with live_resource_access_barrier(
+        user_id, organization_id, team_id, "create"
+    ) as allowed:
+        if not allowed:
+            raise NotAuthorizedError("Resource scope is inactive")
+        async with agent_graph_attachment_barrier(graph_id):
+            return await _setup_triggered_preset_locked(
+                user_id=user_id,
+                graph_id=graph_id,
+                graph_version=graph_version,
+                name=name,
+                description=description,
+                trigger_config=trigger_config,
+                agent_credentials=agent_credentials,
+                expert_id=expert_id,
+                organization_id=organization_id,
+                team_id=team_id,
+            )
+
+
+async def _setup_triggered_preset_locked(
+    *,
+    user_id: str,
+    graph_id: str,
+    graph_version: int,
+    name: str,
+    description: str,
+    trigger_config: dict[str, Any],
+    agent_credentials: dict[str, CredentialsMetaInput],
+    expert_id: str | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> models.LibraryAgentPreset:
     """Create a webhook-triggered ``LibraryAgentPreset`` for the given graph.
 
@@ -70,13 +114,55 @@ async def setup_triggered_preset(
         InvalidInputError: if the graph has no webhook node, or the webhook
             backend rejects the trigger config / credentials.
     """
-    graph = await get_graph(graph_id, version=graph_version, user_id=user_id)
+    graph = await get_graph(
+        graph_id,
+        version=graph_version,
+        user_id=user_id,
+        organization_id=organization_id,
+        team_id=team_id,
+    )
     if not graph:
         raise NotFoundError(f"Graph #{graph_id} is not accessible (anymore)")
     if not (trigger_node := graph.webhook_input_node):
         raise InvalidInputError(
             f"Graph #{graph_id} does not have a webhook trigger node"
         )
+
+    if expert_id:
+        expert_scope = await _resolve_private_expert_tenancy(
+            user_id,
+            expert_id,
+            not_found_message=f"Expert #{expert_id} not found",
+        )
+        if organization_id is not None and expert_scope != (
+            organization_id,
+            team_id,
+        ):
+            raise NotFoundError(f"Expert #{expert_id} not found")
+        organization_id, team_id = expert_scope
+
+    # A Marketplace fallback returns the publisher's GraphModel. Tenant IDs
+    # alone cannot identify ownership for personal resources because both the
+    # publisher and consumer have a ``(None, None)`` scope. Require the exact
+    # consumer library wrapper whenever the graph is not caller-owned, even
+    # when those scalar scope values happen to match.
+    if graph.user_id != user_id or (graph.organization_id, graph.team_id) != (
+        organization_id,
+        team_id,
+    ):
+        scoped_library_agent = await db.get_library_agent_by_graph_id(
+            user_id,
+            graph.id,
+            graph.version,
+            organization_id=organization_id,
+            team_id_restriction=team_id,
+            exact_scope=True,
+        )
+        if scoped_library_agent is None or (
+            scoped_library_agent.organization_id,
+            scoped_library_agent.team_id,
+        ) != (organization_id, team_id):
+            raise NotFoundError(f"Graph #{graph_id} is not accessible (anymore)")
 
     # ``expert_id`` is the calling context's authoritative scope: a session
     # expert for expert-scoped copilot sessions, ``None`` for Otto
@@ -96,15 +182,6 @@ async def setup_triggered_preset(
         ),
     }
 
-    if expert_id:
-        organization_id, team_id = await _resolve_private_expert_tenancy(
-            user_id,
-            expert_id,
-            not_found_message=f"Expert #{expert_id} not found",
-        )
-    else:
-        organization_id, team_id = graph.organization_id, graph.team_id
-
     new_webhook, feedback = await setup_webhook_for_block(
         user_id=user_id,
         trigger_block=trigger_node.block,
@@ -115,20 +192,27 @@ async def setup_triggered_preset(
     if not new_webhook:
         raise InvalidInputError(f"Could not set up webhook: {feedback}")
 
-    return await db.create_preset(
-        user_id=user_id,
-        preset=models.LibraryAgentPresetCreatable(
-            graph_id=graph.id,
-            graph_version=graph.version,
-            name=name,
-            description=description,
-            inputs=trigger_config_with_credentials,
-            credentials=agent_credentials,
-            is_active=True,
-        ),
-        webhook_id=new_webhook.id,
-        expert_id=expert_id,
-    )
+    try:
+        return await db.create_preset(
+            user_id=user_id,
+            preset=models.LibraryAgentPresetCreatable(
+                graph_id=graph.id,
+                graph_version=graph.version,
+                name=name,
+                description=description,
+                inputs=trigger_config_with_credentials,
+                credentials=agent_credentials,
+                is_active=True,
+            ),
+            webhook_id=new_webhook.id,
+            expert_id=expert_id,
+            organization_id=organization_id,
+            team_id=team_id,
+            enforce_scope=True,
+        )
+    except Exception:
+        await _prune_dangling_webhook(user_id, new_webhook.id)
+        raise
 
 
 async def update_triggered_preset(
@@ -140,6 +224,51 @@ async def update_triggered_preset(
     name: str | None = None,
     description: str | None = None,
     is_active: bool | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    enforce_team_scope: bool = False,
+) -> models.LibraryAgentPreset:
+    async with live_resource_access_barrier(
+        user_id, organization_id, team_id, "create"
+    ) as allowed:
+        if not allowed:
+            raise NotAuthorizedError("Resource scope is inactive")
+        current = await db.get_preset(
+            user_id,
+            preset_id,
+            organization_id,
+            team_id,
+            enforce_team_scope,
+        )
+        if not current:
+            raise NotFoundError(f"Preset #{preset_id} not found")
+        async with agent_graph_attachment_barrier(current.graph_id):
+            return await _update_triggered_preset_locked(
+                user_id=user_id,
+                preset_id=preset_id,
+                inputs=inputs,
+                credentials=credentials,
+                name=name,
+                description=description,
+                is_active=is_active,
+                organization_id=organization_id,
+                team_id=team_id,
+                enforce_team_scope=enforce_team_scope,
+            )
+
+
+async def _update_triggered_preset_locked(
+    *,
+    user_id: str,
+    preset_id: str,
+    inputs: GraphInput | None = None,
+    credentials: dict[str, CredentialsMetaInput] | None = None,
+    name: str | None = None,
+    description: str | None = None,
+    is_active: bool | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    enforce_team_scope: bool = False,
 ) -> models.LibraryAgentPreset:
     """Update a preset, re-registering its webhook if the trigger config changed.
 
@@ -154,14 +283,24 @@ async def update_triggered_preset(
         MissingConfigError: if the private expert workspace is unavailable.
         InvalidInputError: if the webhook backend rejects the new trigger config.
     """
-    current = await db.get_preset(user_id, preset_id)
+    current = await db.get_preset(
+        user_id,
+        preset_id,
+        organization_id,
+        team_id,
+        enforce_team_scope,
+    )
     if not current:
         raise NotFoundError(f"Preset #{preset_id} not found")
 
     trigger_inputs_updated, new_webhook = False, None
     if inputs is not None and credentials is not None:
         graph = await get_graph(
-            current.graph_id, current.graph_version, user_id=user_id
+            current.graph_id,
+            current.graph_version,
+            user_id=user_id,
+            organization_id=current.organization_id,
+            team_id=current.team_id,
         )
         if not graph:
             raise NotFoundError(
@@ -175,7 +314,10 @@ async def update_triggered_preset(
                     not_found_message=f"Preset #{preset_id} not found",
                 )
             else:
-                organization_id, team_id = graph.organization_id, graph.team_id
+                organization_id, team_id = (
+                    current.organization_id,
+                    current.team_id,
+                )
             trigger_config_with_credentials = {
                 **inputs,
                 **(
@@ -199,27 +341,80 @@ async def update_triggered_preset(
                     f"Could not update trigger configuration: {feedback}"
                 )
 
-    updated = await db.update_preset(
-        user_id=user_id,
-        preset_id=preset_id,
-        inputs=inputs,
-        credentials=credentials,
-        name=name,
-        description=description,
-        is_active=is_active,
-    )
+    try:
+        updated = await db.update_preset(
+            user_id=user_id,
+            preset_id=preset_id,
+            inputs=inputs,
+            credentials=credentials,
+            name=name,
+            description=description,
+            is_active=is_active,
+            organization_id=organization_id,
+            team_id=team_id,
+            enforce_team_scope=enforce_team_scope,
+        )
 
-    if trigger_inputs_updated:
-        new_webhook_id = new_webhook.id if new_webhook else None
-        updated = await db.set_preset_webhook(user_id, preset_id, new_webhook_id)
-        # Clean up the old webhook if it's no longer referenced.
-        if current.webhook_id and current.webhook_id != new_webhook_id:
-            await _prune_dangling_webhook(user_id, current.webhook_id)
+        if trigger_inputs_updated:
+            new_webhook_id = new_webhook.id if new_webhook else None
+            updated = await db.set_preset_webhook(
+                user_id,
+                preset_id,
+                new_webhook_id,
+                organization_id,
+                team_id,
+                enforce_team_scope,
+            )
+            if current.webhook_id and current.webhook_id != new_webhook_id:
+                await _prune_dangling_webhook(user_id, current.webhook_id)
+    except Exception:
+        if new_webhook and new_webhook.id != current.webhook_id:
+            await _prune_dangling_webhook(user_id, new_webhook.id)
+        raise
 
     return updated
 
 
-async def delete_preset_with_webhook_cleanup(*, user_id: str, preset_id: str) -> None:
+async def delete_preset_with_webhook_cleanup(
+    *,
+    user_id: str,
+    preset_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    enforce_team_scope: bool = False,
+) -> None:
+    async with live_resource_access_barrier(
+        user_id, organization_id, team_id, "delete"
+    ) as allowed:
+        if not allowed:
+            raise NotAuthorizedError("Resource scope is inactive")
+        preset = await db.get_preset(
+            user_id,
+            preset_id,
+            organization_id,
+            team_id,
+            enforce_team_scope,
+        )
+        if not preset:
+            raise NotFoundError(f"Preset #{preset_id} not found")
+        async with agent_graph_attachment_barrier(preset.graph_id):
+            await _delete_preset_with_webhook_cleanup_locked(
+                user_id=user_id,
+                preset_id=preset_id,
+                organization_id=organization_id,
+                team_id=team_id,
+                enforce_team_scope=enforce_team_scope,
+            )
+
+
+async def _delete_preset_with_webhook_cleanup_locked(
+    *,
+    user_id: str,
+    preset_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    enforce_team_scope: bool = False,
+) -> None:
     """Delete a preset and prune its webhook if it becomes dangling.
 
     Shared by the ``DELETE /presets/{id}`` route and the copilot ``delete_preset``
@@ -229,15 +424,34 @@ async def delete_preset_with_webhook_cleanup(*, user_id: str, preset_id: str) ->
     Raises:
         NotFoundError: if the preset doesn't exist for this user.
     """
-    preset = await db.get_preset(user_id, preset_id)
+    preset = await db.get_preset(
+        user_id,
+        preset_id,
+        organization_id,
+        team_id,
+        enforce_team_scope,
+    )
     if not preset:
         raise NotFoundError(f"Preset #{preset_id} not found")
 
     if preset.webhook_id:
-        await db.set_preset_webhook(user_id, preset_id, None)
+        await db.set_preset_webhook(
+            user_id,
+            preset_id,
+            None,
+            organization_id,
+            team_id,
+            enforce_team_scope,
+        )
         await _prune_dangling_webhook(user_id, preset.webhook_id)
 
-    await db.delete_preset(user_id, preset_id)
+    await db.delete_preset(
+        user_id,
+        preset_id,
+        organization_id,
+        team_id,
+        enforce_team_scope,
+    )
 
 
 async def _prune_dangling_webhook(user_id: str, webhook_id: str) -> None:
@@ -250,13 +464,6 @@ async def _prune_dangling_webhook(user_id: str, webhook_id: str) -> None:
     """
     try:
         webhook = await get_webhook(webhook_id)
-        credentials = (
-            await credentials_manager.get(user_id, webhook.credentials_id)
-            if webhook.credentials_id
-            else None
-        )
-        await get_webhook_manager(webhook.provider).prune_webhook_if_dangling(
-            user_id, webhook.id, credentials
-        )
+        await prune_webhook_with_credential_lease(user_id, webhook)
     except Exception as e:
         logger.warning(f"Best-effort prune of webhook #{webhook_id} failed: {e}")

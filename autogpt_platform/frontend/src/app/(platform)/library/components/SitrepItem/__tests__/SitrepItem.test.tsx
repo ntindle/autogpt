@@ -5,6 +5,8 @@ import { SitrepItem } from "../SitrepItem";
 import type { SitrepItemData } from "../../../types";
 
 const ITEM: SitrepItemData = {
+  organizationId: null,
+  teamId: null,
   id: "run-1",
   agentID: "agent-1",
   agentName: "Daily digest",

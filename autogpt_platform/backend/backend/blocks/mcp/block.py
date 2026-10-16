@@ -24,6 +24,7 @@ from backend.blocks.mcp.helpers import (
     mcp_authorization_header,
     normalize_mcp_url,
     parse_mcp_content,
+    release_mcp_credential_leases,
 )
 from backend.data.block import BlockInput, BlockOutput
 from backend.data.model import (
@@ -31,6 +32,10 @@ from backend.data.model import (
     CredentialsMetaInput,
     OAuth2Credentials,
     SchemaField,
+)
+from backend.integrations.credential_lease import (
+    CredentialLease,
+    run_with_credential_lease_guard,
 )
 from backend.integrations.providers import ProviderName
 from backend.util.json import validate_with_jsonschema
@@ -183,31 +188,33 @@ class MCPToolBlock(Block):
             result = await client.call_tool(
                 tool_name, arguments, input_schema=input_schema
             )
+
+            if result.is_error:
+                error_text = ""
+                for item in result.content:
+                    if item.get("type") == "text":
+                        error_text += item.get("text", "")
+                raise MCPClientError(
+                    f"MCP tool '{tool_name}' returned an error: "
+                    f"{error_text or 'Unknown error'}"
+                )
+
+            return parse_mcp_content(result.content)
         finally:
             await client.close()
 
-        if result.is_error:
-            error_text = ""
-            for item in result.content:
-                if item.get("type") == "text":
-                    error_text += item.get("text", "")
-            raise MCPClientError(
-                f"MCP tool '{tool_name}' returned an error: "
-                f"{error_text or 'Unknown error'}"
-            )
-
-        return parse_mcp_content(result.content)
-
     @staticmethod
     async def _auto_lookup_credential(
-        user_id: str, server_url: str
+        user_id: str,
+        server_url: str,
+        lease_sink: list[CredentialLease],
     ) -> "OAuth2Credentials | None":
         """Auto-lookup stored MCP credential for a server URL.
 
         Delegates to :func:`~backend.blocks.mcp.helpers.auto_lookup_mcp_credential`.
         The caller should pass a normalized URL.
         """
-        return await auto_lookup_mcp_credential(user_id, server_url)
+        return await auto_lookup_mcp_credential(user_id, server_url, lease_sink)
 
     async def run(
         self,
@@ -245,20 +252,26 @@ class MCPToolBlock(Block):
         # If no credentials were injected by the executor (e.g. legacy nodes
         # that don't have the credentials field set), try to auto-lookup
         # the stored MCP credential for this server URL.
+        mcp_leases: list[CredentialLease] = []
         if credentials is None:
             credentials = await self._auto_lookup_credential(
-                user_id, normalize_mcp_url(input_data.server_url)
+                user_id,
+                normalize_mcp_url(input_data.server_url),
+                mcp_leases,
             )
 
         authorization = mcp_authorization_header(credentials) if credentials else None
 
         try:
-            result = await self._call_mcp_tool(
-                server_url=input_data.server_url,
-                tool_name=input_data.selected_tool,
-                arguments=input_data.tool_arguments,
-                authorization=authorization,
-                input_schema=input_data.tool_input_schema or None,
+            result = await run_with_credential_lease_guard(
+                self._call_mcp_tool(
+                    server_url=input_data.server_url,
+                    tool_name=input_data.selected_tool,
+                    arguments=input_data.tool_arguments,
+                    authorization=authorization,
+                    input_schema=input_data.tool_input_schema or None,
+                ),
+                mcp_leases,
             )
             yield "result", result
         except MCPClientError as e:
@@ -266,3 +279,5 @@ class MCPToolBlock(Block):
         except Exception as e:
             logger.exception(f"MCP tool call failed: {e}")
             yield "error", f"MCP tool call failed: {str(e)}"
+        finally:
+            await release_mcp_credential_leases(mcp_leases)

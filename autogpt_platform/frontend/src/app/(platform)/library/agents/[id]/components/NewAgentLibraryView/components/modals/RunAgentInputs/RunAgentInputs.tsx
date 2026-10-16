@@ -37,6 +37,8 @@ interface Props {
   placeholder?: string;
   onChange: (value: any) => void;
   readOnly?: boolean;
+  organizationId?: string | null;
+  teamId?: string | null;
 }
 
 /**
@@ -50,9 +52,18 @@ export function RunAgentInputs({
   placeholder,
   onChange,
   readOnly = false,
+  organizationId,
+  teamId,
   ...props
 }: Props & React.HTMLAttributes<HTMLElement>) {
-  const { handleUploadFile, uploadProgress } = useRunAgentInputs();
+  const scope =
+    organizationId !== undefined || teamId !== undefined
+      ? {
+          organizationId: organizationId ?? null,
+          teamId: teamId ?? null,
+        }
+      : undefined;
+  const { handleUploadFile, uploadProgress } = useRunAgentInputs(scope);
 
   // Options and keys come from the schema the type was judged by: an optional
   // field keeps them on its anyOf member, not on the field itself.
@@ -212,6 +223,8 @@ export function RunAgentInputs({
           onChange={onChange}
           onUploadFile={handleUploadFile}
           uploadProgress={uploadProgress}
+          organizationId={organizationId}
+          teamId={teamId}
           {...props}
         />
       );

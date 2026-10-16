@@ -64,6 +64,12 @@ const MAIN: Surface = {
   mount: (messages) =>
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         messages={messages}
         status="ready"
         error={undefined}

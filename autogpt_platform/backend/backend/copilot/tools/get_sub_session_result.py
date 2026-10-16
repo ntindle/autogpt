@@ -34,8 +34,10 @@ from backend.copilot.sdk.session_waiter import (
 from backend.copilot.sdk.stream_accumulator import ToolCallEntry
 from backend.copilot.turn_queue import cancel_queued_turn, queued_turn_refusal
 from backend.data.db_accessors import experts_db
+from backend.data.tenancy import ResourceAccess
 
 from .base import BaseTool
+from .expert_delegation import expert_matches_session_workspace
 from .models import (
     DelegatedExpertInfo,
     ErrorResponse,
@@ -68,6 +70,13 @@ class GetSubSessionResultTool(BaseTool):
     @property
     def requires_auth(self) -> bool:
         return True
+
+    @property
+    def resource_access(self) -> ResourceAccess:
+        return "view"
+
+    def additional_resource_accesses(self, **kwargs) -> tuple[ResourceAccess, ...]:
+        return ("execute",) if kwargs.get("cancel") else ()
 
     @property
     def description(self) -> str:
@@ -191,7 +200,11 @@ class GetSubSessionResultTool(BaseTool):
                     status="cancelled",
                     sub_session_id=inner_session_id,
                     sub_autopilot_session_id=inner_session_id,
-                    sub_autopilot_session_link=_sub_session_link(inner_session_id),
+                    sub_autopilot_session_link=_sub_session_link(
+                        inner_session_id,
+                        sub.organization_id,
+                        sub.team_id,
+                    ),
                     elapsed_seconds=0.0,
                 ).from_outside(),
                 delegate,
@@ -237,7 +250,11 @@ class GetSubSessionResultTool(BaseTool):
             # with the progress snapshot attached. response_from_outcome
             # doesn't carry progress, so we build the response here.
             progress = await _build_progress_snapshot(inner_session_id)
-            link = _sub_session_link(inner_session_id)
+            link = _sub_session_link(
+                inner_session_id,
+                sub.organization_id,
+                sub.team_id,
+            )
             return apply_delegated_expert(
                 SubSessionStatusResponse(
                     message=(
@@ -273,6 +290,8 @@ class GetSubSessionResultTool(BaseTool):
                 parent_session_id=session.session_id,
                 elapsed=elapsed,
                 workspace_files=workspace_files,
+                organization_id=sub.organization_id,
+                team_id=sub.team_id,
                 actor=actor,
             ),
             delegate,
@@ -296,6 +315,11 @@ def _in_caller_scope(sub: ChatSession, session: ChatSession) -> bool:
     restriction that stops a session steering a sub it did not open lives on
     the resume path in ``run_sub_session``, where the prompt is written.
     """
+    if (sub.organization_id, sub.team_id) != (
+        session.organization_id,
+        session.team_id,
+    ):
+        return False
     if sub.expert_id == session.expert_id:
         return True
     return (
@@ -334,7 +358,9 @@ async def _delegated_expert_info(
     except Exception as e:
         logger.warning(f"Delegated expert lookup failed for {sub.expert_id}: {e}")
         return None
-    if expert is None:
+    if expert is None or not await expert_matches_session_workspace(
+        user_id, expert, session
+    ):
         return None
     return DelegatedExpertInfo(
         id=expert.id,

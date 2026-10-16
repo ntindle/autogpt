@@ -1,10 +1,14 @@
+import asyncio
 import base64
 import time
 from collections import defaultdict
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Annotated
 
-from autogpt_libs.auth import get_request_context, get_user_id, requires_user
+from autogpt_libs.auth import get_user_id, requires_user
 from autogpt_libs.auth.models import RequestContext
+from autogpt_libs.auth.permissions import OrgAction, TeamAction
 from fastapi import (
     APIRouter,
     Depends,
@@ -18,11 +22,15 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from starlette.status import HTTP_402_PAYMENT_REQUIRED
 
+from backend.api.live_auth import (
+    requires_live_resource_permission as requires_resource_permission,
+)
 from backend.api.model import CloudStorageUploadResponse
 from backend.blocks import get_block, get_blocks
 from backend.copilot.rate_limit import enforce_payment_paywall
 from backend.data.block import BlockInput, CompletedBlockOutput
 from backend.data.execution import ExecutionContext
+from backend.data.tenancy import live_resource_permission_barrier
 from backend.data.user import get_user_by_id
 from backend.executor import utils as execution_utils
 from backend.monitoring.instrumentation import record_block_execution
@@ -39,6 +47,25 @@ settings = Settings()
 # Tags stay per-route: two are "blocks" and the upload is "files".
 # execute_graph_block keeps its extra Depends(enforce_payment_paywall).
 router = APIRouter(dependencies=[Security(requires_user)])
+
+
+@asynccontextmanager
+async def _live_resource_action(
+    user_id: str,
+    ctx: RequestContext,
+    org_action: OrgAction,
+    team_action: TeamAction,
+) -> AsyncIterator[None]:
+    async with live_resource_permission_barrier(
+        user_id,
+        ctx.org_id,
+        ctx.team_id,
+        org_action,
+        team_action,
+    ) as allowed:
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Resource scope is inactive")
+        yield
 
 
 def _compute_blocks_sync() -> str:
@@ -118,7 +145,12 @@ async def execute_graph_block(
     block_id: str,
     data: BlockInput,
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(
+            OrgAction.EXECUTE_RESOURCES, TeamAction.EXECUTE_AGENTS
+        ),
+    ],
 ) -> CompletedBlockOutput:
     obj = get_block(block_id)
     if not obj:
@@ -130,45 +162,59 @@ async def execute_graph_block(
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
 
-    try:
-        await execution_utils.charge_for_direct_block_execution(
-            user_id=user_id, block=obj, input_data=data, source="internal"
-        )
-    except InsufficientBalanceError as e:
-        raise HTTPException(status_code=HTTP_402_PAYMENT_REQUIRED, detail=str(e)) from e
+    async with _live_resource_action(
+        user_id,
+        ctx,
+        OrgAction.EXECUTE_RESOURCES,
+        TeamAction.EXECUTE_AGENTS,
+    ):
+        try:
+            await execution_utils.charge_for_direct_block_execution(
+                user_id=user_id, block=obj, input_data=data, source="internal"
+            )
+        except InsufficientBalanceError as e:
+            raise HTTPException(
+                status_code=HTTP_402_PAYMENT_REQUIRED, detail=str(e)
+            ) from e
 
-    # Direct block execution has no graph; build a minimal ExecutionContext
-    # carrying the caller's identity + timezone so blocks that depend on
-    # those (e.g. time blocks) get correct data.
-    execution_context = ExecutionContext(
-        user_id=user_id,
-        user_timezone=get_user_timezone_or_utc(user.timezone),
-    )
-
-    start_time = time.time()
-    try:
-        output = defaultdict(list)
-        async for name, data in obj.execute(
-            data,
+        execution_context = ExecutionContext(
             user_id=user_id,
-            execution_context=execution_context,
-        ):
-            output[name].append(data)
-
-        # Record successful block execution with duration
-        duration = time.time() - start_time
-        block_type = obj.__class__.__name__
-        record_block_execution(
-            block_type=block_type, status="success", duration=duration
+            user_timezone=get_user_timezone_or_utc(user.timezone),
+            organization_id=ctx.org_id,
+            team_id=ctx.team_id,
         )
 
-        return output
-    except Exception:
-        # Record failed block execution
-        duration = time.time() - start_time
-        block_type = obj.__class__.__name__
-        record_block_execution(block_type=block_type, status="error", duration=duration)
-        raise
+        start_time = time.time()
+        try:
+            output = defaultdict(list)
+            configured_timeout = getattr(obj, "execution_timeout_seconds", None)
+            block_timeout = (
+                min(configured_timeout, 30 * 60)
+                if isinstance(configured_timeout, (int, float))
+                and configured_timeout > 0
+                else 30 * 60
+            )
+            async with asyncio.timeout(block_timeout):
+                async for name, data in obj.execute(
+                    data,
+                    user_id=user_id,
+                    execution_context=execution_context,
+                ):
+                    output[name].append(data)
+
+            duration = time.time() - start_time
+            block_type = obj.__class__.__name__
+            record_block_execution(
+                block_type=block_type, status="success", duration=duration
+            )
+            return output
+        except Exception:
+            duration = time.time() - start_time
+            block_type = obj.__class__.__name__
+            record_block_execution(
+                block_type=block_type, status="error", duration=duration
+            )
+            raise
 
 
 @router.post(
@@ -178,7 +224,12 @@ async def execute_graph_block(
 )
 async def upload_file(
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[RequestContext, Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_resource_permission(
+            OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS
+        ),
+    ],
     file: UploadFile = File(...),
     expiration_hours: int = 24,
 ) -> CloudStorageUploadResponse:

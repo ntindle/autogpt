@@ -33,7 +33,7 @@ export function useExpertAvatarPicker({
   const generation = useAvatarGeneration();
   const upload = useMutation({
     mutationFn: (file: File) =>
-      uploadSubmissionMediaDirect(file, "expert-avatar"),
+      uploadSubmissionMediaDirect(file, undefined, "expert-avatar"),
   });
 
   const generatedUrl =

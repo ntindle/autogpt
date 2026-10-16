@@ -1,5 +1,8 @@
 import datetime
+import io
 import json
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock
 
 import fastapi
 import fastapi.testclient
@@ -27,13 +30,13 @@ client = fastapi.testclient.TestClient(app)
 TEST_ORG_ID = "test-org-id"
 
 
-def _test_request_context():
+def _test_request_context(team_id: str | None = None, org_id: str = TEST_ORG_ID):
     from autogpt_libs.auth.models import RequestContext
 
     return RequestContext(
         user_id="test-user-id",
-        org_id=TEST_ORG_ID,
-        team_id=None,
+        org_id=org_id,
+        team_id=team_id,
         is_org_owner=True,
         is_org_admin=True,
         is_org_billing_manager=False,
@@ -43,8 +46,259 @@ def _test_request_context():
     )
 
 
+@pytest.mark.asyncio
+async def test_submission_media_rechecks_live_workspace_before_upload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def denied(*_args, **_kwargs):
+        yield False
+
+    upload = AsyncMock()
+    monkeypatch.setattr(store_routes, "live_resource_lease", denied)
+    monkeypatch.setattr(store_routes.store_media, "upload_media", upload)
+
+    with pytest.raises(fastapi.HTTPException) as exc:
+        await store_routes.upload_submission_media(
+            file=MagicMock(),
+            user_id="test-user-id",
+            ctx=_test_request_context(),
+        )
+
+    assert exc.value.status_code == 403
+    upload.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", [None, "team-456"])
+async def test_submission_media_holds_live_workspace_through_upload(
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str | None,
+) -> None:
+    active = False
+
+    @asynccontextmanager
+    async def lease(user_id, organization_id, team_id, access):
+        nonlocal active
+        assert (user_id, organization_id, team_id, access) == (
+            "test-user-id",
+            TEST_ORG_ID,
+            team_id,
+            "create",
+        )
+        active = True
+        try:
+            yield True
+        finally:
+            active = False
+
+    async def upload(**kwargs):
+        assert active is True
+        assert kwargs["organization_id"] == TEST_ORG_ID
+        assert kwargs["team_id"] == team_id
+        assert kwargs["local_store_media"] is True
+        return "https://example.test/media.png"
+
+    monkeypatch.setattr(store_routes, "live_resource_lease", lease)
+    monkeypatch.setattr(
+        store_routes.store_media, "upload_media", AsyncMock(side_effect=upload)
+    )
+
+    result = await store_routes.upload_submission_media(
+        file=MagicMock(),
+        user_id="test-user-id",
+        ctx=_test_request_context(team_id),
+    )
+
+    assert result == "https://example.test/media.png"
+    assert active is False
+
+
+@pytest.mark.asyncio
+async def test_submission_media_personal_context_uses_personal_org_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    @asynccontextmanager
+    async def lease(user_id, organization_id, team_id, access):
+        assert (user_id, organization_id, team_id, access) == (
+            "test-user-id",
+            "personal-org-id",
+            None,
+            "create",
+        )
+        yield True
+
+    async def upload(**kwargs):
+        assert kwargs["organization_id"] == "personal-org-id"
+        assert kwargs["team_id"] is None
+        assert kwargs["local_store_media"] is True
+        return "/api/store/media/orgs/personal-org-id/images/personal.png"
+
+    monkeypatch.setattr(store_routes, "live_resource_lease", lease)
+    monkeypatch.setattr(
+        store_routes.store_media, "upload_media", AsyncMock(side_effect=upload)
+    )
+
+    result = await store_routes.upload_submission_media(
+        file=MagicMock(),
+        user_id="test-user-id",
+        ctx=_test_request_context(org_id="personal-org-id"),
+    )
+
+    assert result == "/api/store/media/orgs/personal-org-id/images/personal.png"
+
+
+@pytest.mark.parametrize(
+    ("team_id", "request_path", "storage_parts"),
+    [
+        (
+            None,
+            "/media/orgs/test-org-id/images/listing.png",
+            ("store", "orgs", "test-org-id", "home", "images", "listing.png"),
+        ),
+        (
+            "team-id",
+            "/media/orgs/test-org-id/teams/team-id/images/listing.png",
+            (
+                "store",
+                "orgs",
+                "test-org-id",
+                "teams",
+                "team-id",
+                "images",
+                "listing.png",
+            ),
+        ),
+    ],
+)
+def test_local_submission_media_is_publicly_served_from_exact_scope(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str | None,
+    request_path: str,
+    storage_parts: tuple[str, ...],
+) -> None:
+    monkeypatch.setattr(
+        store_routes.store_media, "get_local_media_root", lambda: str(tmp_path)
+    )
+    path = tmp_path.joinpath(*storage_parts)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"\x89PNG\r\n\x1a\nlocal")
+
+    response = client.get(request_path)
+
+    assert response.status_code == 200
+    assert response.content == b"\x89PNG\r\n\x1a\nlocal"
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "public, max-age=86400"
+
+    other_scope_path = (
+        "/media/orgs/test-org-id/teams/other-team/images/listing.png"
+        if team_id
+        else "/media/orgs/other-org/images/listing.png"
+    )
+    assert client.get(other_scope_path).status_code == 404
+
+
+def test_local_submission_media_rejects_non_media_files(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        store_routes.store_media, "get_local_media_root", lambda: str(tmp_path)
+    )
+    path = tmp_path / "store" / "orgs" / TEST_ORG_ID / "home" / "images" / "x.txt"
+    path.parent.mkdir(parents=True)
+    path.write_text("not public", encoding="utf-8")
+
+    response = client.get(f"/media/orgs/{TEST_ORG_ID}/images/x.txt")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", [None, "team-456"])
+async def test_generate_image_uses_exact_local_store_scope(
+    monkeypatch: pytest.MonkeyPatch,
+    team_id: str | None,
+) -> None:
+    @asynccontextmanager
+    async def lease(user_id, organization_id, leased_team_id, access):
+        assert (user_id, organization_id, leased_team_id, access) == (
+            "test-user-id",
+            TEST_ORG_ID,
+            team_id,
+            "create",
+        )
+        yield True
+
+    graph = MagicMock()
+    get_graph = AsyncMock(return_value=graph)
+    check_media_exists = AsyncMock(return_value=None)
+    generate_agent_image = AsyncMock(return_value=io.BytesIO(b"\xff\xd8\xffimage"))
+    upload_media = AsyncMock(return_value="/api/store/media/generated.jpeg")
+    monkeypatch.setattr(store_routes, "live_resource_lease", lease)
+    monkeypatch.setattr(store_routes.backend.data.graph, "get_graph", get_graph)
+    monkeypatch.setattr(
+        store_routes.store_media, "check_media_exists", check_media_exists
+    )
+    monkeypatch.setattr(
+        store_routes.store_image_gen, "generate_agent_image", generate_agent_image
+    )
+    monkeypatch.setattr(store_routes.store_media, "upload_media", upload_media)
+
+    result = await store_routes.generate_image(
+        graph_id="graph-123",
+        user_id="test-user-id",
+        ctx=_test_request_context(team_id),
+    )
+
+    assert result.image_url == "/api/store/media/generated.jpeg"
+    get_graph.assert_awaited_once_with(
+        graph_id="graph-123",
+        version=None,
+        user_id="test-user-id",
+        organization_id=TEST_ORG_ID,
+        team_id=team_id,
+    )
+    check_media_exists.assert_awaited_once_with(
+        "test-user-id",
+        "agent_graph-123.jpeg",
+        organization_id=TEST_ORG_ID,
+        team_id=team_id,
+        local_store_media=True,
+    )
+    upload_media.assert_awaited_once()
+    assert upload_media.await_args.kwargs["organization_id"] == TEST_ORG_ID
+    assert upload_media.await_args.kwargs["team_id"] == team_id
+    assert upload_media.await_args.kwargs["local_store_media"] is True
+
+
+@pytest.mark.parametrize(
+    "content_type",
+    [
+        prisma.enums.ContentType.INTEGRATION,
+        prisma.enums.ContentType.LIBRARY_AGENT,
+        prisma.enums.ContentType.WORKSPACE_FILE,
+        prisma.enums.ContentType.CHAT_SESSION,
+    ],
+)
+def test_store_search_rejects_non_public_content_types(mocker, content_type):
+    search = mocker.patch(
+        "backend.api.features.store.routes.search_engine.unified_hybrid_search",
+        new_callable=AsyncMock,
+    )
+
+    response = client.get(
+        "/search",
+        params={"query": "private", "content_types": content_type.value},
+    )
+
+    assert response.status_code == 422
+    search.assert_not_awaited()
+
+
 @pytest.fixture(autouse=True)
-def setup_app_auth(mock_jwt_user):
+def setup_app_auth(mock_jwt_user, monkeypatch):
     """Setup auth overrides for all tests in this module.
 
     ``get_request_context`` is overridden with a deterministic context —
@@ -55,9 +309,24 @@ def setup_app_auth(mock_jwt_user):
     from autogpt_libs.auth.dependencies import get_request_context
     from autogpt_libs.auth.jwt_utils import get_jwt_payload
 
+    import backend.util.cache
+
+    redis = MagicMock()
+    redis.get.return_value = None
+    redis.getex.return_value = None
+    redis.scan_iter.return_value = iter(())
+    redis.delete.return_value = 0
+    redis.setex.return_value = True
+    monkeypatch.setattr(backend.util.cache, "_get_redis", lambda: redis)
     store_routes.store_cache.clear_all_caches()
     app.dependency_overrides[get_jwt_payload] = mock_jwt_user["get_jwt_payload"]
     app.dependency_overrides[get_request_context] = _test_request_context
+
+    @asynccontextmanager
+    async def allow(*_args):
+        yield True
+
+    monkeypatch.setattr("backend.api.live_auth.live_resource_permission_barrier", allow)
     yield
     app.dependency_overrides.clear()
     store_routes.store_cache.clear_all_caches()
@@ -586,6 +855,7 @@ def test_get_submissions_success(
                 run_count=50,
                 review_count=5,
                 review_avg_rating=4.2,
+                organization_id="test-org",
             )
         ],
         pagination=store_model.Pagination(
@@ -611,6 +881,9 @@ def test_get_submissions_success(
     data = store_model.StoreSubmissionsResponse.model_validate(response.json())
     assert len(data.submissions) == 1
     assert data.submissions[0].name == "Test Agent"
+    # Org tenancy surfaced for creator-dashboard badges/filters (team_id is
+    # unavailable for submissions — the view has no teamId column).
+    assert data.submissions[0].organization_id == "test-org"
     assert data.pagination.current_page == 1
     assert data.stats.total == 1
     assert data.stats.total_runs == 50
@@ -625,6 +898,7 @@ def test_get_submissions_success(
         statuses=None,
         sort_key=None,
         sort_dir="desc",
+        team_id_restriction=None,
     )
 
 
@@ -669,6 +943,7 @@ def test_get_submissions_pagination(
         statuses=None,
         sort_key=None,
         sort_dir="desc",
+        team_id_restriction=None,
     )
 
 
@@ -702,6 +977,7 @@ def test_get_submissions_forwards_search_query(
         statuses=None,
         sort_key=None,
         sort_dir="desc",
+        team_id_restriction=None,
     )
 
 
@@ -738,6 +1014,7 @@ def test_get_submissions_forwards_statuses(
         ],
         sort_key=None,
         sort_dir="desc",
+        team_id_restriction=None,
     )
 
 
@@ -771,6 +1048,7 @@ def test_get_submissions_forwards_sort(
         statuses=None,
         sort_key="runs",
         sort_dir="asc",
+        team_id_restriction=None,
     )
 
 
@@ -827,6 +1105,8 @@ def test_get_my_unpublished_agents_forwards_search_query(
         page_size=10,
         sort_by=store_model.MyAgentsSortBy.MOST_RECENT,
         search_query="scraper",
+        organization_id=TEST_ORG_ID,
+        team_id_restriction=None,
     )
 
 

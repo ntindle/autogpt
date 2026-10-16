@@ -108,7 +108,7 @@ export function TaskQuestionRecipient({
               {consultation?.session_id ? (
                 <Link
                   className="ml-2 underline"
-                  href={`/copilot?sessionId=${encodeURIComponent(consultation.session_id)}`}
+                  href={`/tasks/chat/${encodeURIComponent(consultation.session_id)}`}
                 >
                   Open question chat
                 </Link>

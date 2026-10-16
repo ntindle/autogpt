@@ -179,6 +179,10 @@ class MockResizeObserver {
 }
 
 const baseProps = {
+  createTeamId: null,
+  onCreateTeamChange: vi.fn(),
+  isTeamContextReady: true,
+  canSelectCreateTeam: false,
   messages: [] as never[],
   status: "ready",
   error: undefined,
@@ -258,13 +262,33 @@ describe("ChatContainer", () => {
   it("keeps usage tooltips hoverable and dismissible as the limit changes", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { rerender } = render(<ChatContainer {...baseProps} />);
+    const { rerender } = render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     const input = screen.getByTestId("chat-input");
     fireEvent.change(input, { target: { value: "Unsent draft" } });
     expect(screen.queryByRole("tooltip")).toBeNull();
 
     mockIsUsageLimitReached.mockReturnValue(true);
-    rerender(<ChatContainer {...baseProps} />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     expect(screen.getByTestId("chat-input")).toBe(input);
     expect((input as HTMLInputElement).value).toBe("Unsent draft");
     expect(screen.queryByRole("tooltip")).toBeNull();
@@ -275,7 +299,17 @@ describe("ChatContainer", () => {
     expect(screen.queryByRole("tooltip")).toBeNull();
 
     mockIsUsageLimitReached.mockReturnValue(false);
-    rerender(<ChatContainer {...baseProps} />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     expect(screen.queryByRole("tooltip")).toBeNull();
     expect(consoleWarn.mock.calls.flat().join(" ")).not.toMatch(
       /controlled|uncontrolled/,
@@ -285,24 +319,64 @@ describe("ChatContainer", () => {
 
   it("opens the usage tooltip only for a hover made while the limit is reached", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const { rerender } = render(<ChatContainer {...baseProps} />);
+    const { rerender } = render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     const trigger = screen.getByTestId("chat-input").parentElement!;
 
     // Hovering the composer before the limit is reached.
     await hoverUsageTooltipTrigger(trigger);
     fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
     mockIsUsageLimitReached.mockReturnValue(true);
-    rerender(<ChatContainer {...baseProps} />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     expect(screen.queryByRole("tooltip")).toBeNull();
 
     // The limit lifting while the tooltip shows.
     await hoverUsageTooltipTrigger(trigger);
     expect(screen.getByRole("tooltip")).toBeDefined();
     mockIsUsageLimitReached.mockReturnValue(false);
-    rerender(<ChatContainer {...baseProps} />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
     mockIsUsageLimitReached.mockReturnValue(true);
-    rerender(<ChatContainer {...baseProps} />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
@@ -310,14 +384,35 @@ describe("ChatContainer", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     mockIsUsageLimitReached.mockReturnValue(true);
     const atReset = { ...baseProps, ...sendAtResetProps };
-    const { rerender } = render(<ChatContainer {...atReset} />);
+    const { rerender } = render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...atReset}
+      />,
+    );
     const trigger = screen.getByTestId("chat-input").parentElement!;
 
     await hoverUsageTooltipTrigger(trigger);
     expect(screen.queryByRole("tooltip")).toBeNull();
     fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
     // A running turn ends Send at reset while the limit still holds.
-    rerender(<ChatContainer {...atReset} status="streaming" />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...atReset}
+        status="streaming"
+      />,
+    );
 
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
@@ -325,22 +420,63 @@ describe("ChatContainer", () => {
   it("doesn't reopen a usage tooltip Send at reset closed once a turn starts", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     mockIsUsageLimitReached.mockReturnValue(true);
-    const { rerender } = render(<ChatContainer {...baseProps} />);
+    const { rerender } = render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     const trigger = screen.getByTestId("chat-input").parentElement!;
     await hoverUsageTooltipTrigger(trigger);
     expect(screen.getByRole("tooltip")).toBeDefined();
 
     const atReset = { ...baseProps, ...sendAtResetProps };
-    rerender(<ChatContainer {...atReset} />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...atReset}
+      />,
+    );
     fireEvent.pointerLeave(trigger, { pointerType: "mouse" });
-    rerender(<ChatContainer {...atReset} status="streaming" />);
+    rerender(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...atReset}
+        status="streaming"
+      />,
+    );
 
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 
   it("keeps the draft editable while the usage notice pauses sending", () => {
     mockIsUsageLimitReached.mockReturnValue(true);
-    render(<ChatContainer {...baseProps} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
     expect(screen.getByRole("alert")).toBeDefined();
     const input = screen.getByTestId("chat-input") as HTMLInputElement;
     expect(input.disabled).toBe(false);
@@ -355,6 +491,12 @@ describe("ChatContainer", () => {
     const onSend = vi.fn();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         messages={[
@@ -381,14 +523,35 @@ describe("ChatContainer", () => {
   });
 
   it("does not render the usage-limit backdrop while usage is still available", () => {
-    render(<ChatContainer {...baseProps} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
 
     expect(screen.queryByTestId("usage-limit-backdrop")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("keeps the session composer disabled while expert kickoff is starting", () => {
-    render(<ChatContainer {...baseProps} isKickoffStarting />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+        isKickoffStarting
+      />,
+    );
 
     expect(
       (screen.getByTestId("chat-input") as HTMLInputElement).disabled,
@@ -401,6 +564,12 @@ describe("ChatContainer", () => {
     const attemptToken = "attempt-1";
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         messages={[
@@ -465,6 +634,12 @@ describe("ChatContainer", () => {
       const onSend = vi.fn((_message: string) => failure);
       render(
         <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
           {...baseProps}
           error={new Error("The model returned an empty response.")}
           onSend={onSend}
@@ -505,6 +680,12 @@ describe("ChatContainer", () => {
     });
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         messages={[
@@ -541,6 +722,12 @@ describe("ChatContainer", () => {
       .mockResolvedValue(undefined);
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         error={new Error("The model returned an empty response.")}
         onSend={onSend}
@@ -570,7 +757,17 @@ describe("ChatContainer", () => {
   });
 
   it("does not render the shared-chat notice for unshared chats", async () => {
-    render(<ChatContainer {...baseProps} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
 
     await waitFor(() => {
       expect(screen.queryByText("This chat is shared")).toBeNull();
@@ -580,7 +777,17 @@ describe("ChatContainer", () => {
   it("renders the shared-chat notice for chats the user has shared", async () => {
     mockShareState({ is_shared: true, share_token: SHARED_TOKEN });
 
-    render(<ChatContainer {...baseProps} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
 
     expect(await screen.findByText("This chat is shared")).toBeDefined();
     expect(screen.getByRole("button", { name: /copy link/i })).toBeDefined();
@@ -589,7 +796,17 @@ describe("ChatContainer", () => {
   it("copies the shared-chat link from the owner notice", async () => {
     mockShareState({ is_shared: true, share_token: SHARED_TOKEN });
 
-    render(<ChatContainer {...baseProps} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...baseProps}
+      />,
+    );
 
     fireEvent.click(await screen.findByRole("button", { name: /copy link/i }));
 
@@ -614,15 +831,45 @@ describe("ChatContainer", () => {
     }
 
     it("does not auto-open the artifact panel on initial render", () => {
-      render(<ChatContainer {...baseProps} />);
+      render(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+        />,
+      );
 
       expect(useCopilotUIStore.getState().artifactPanel.isOpen).toBe(false);
       expectChatColumnIsCapped();
     });
 
     it("does not auto-open when rerendering within the same session", () => {
-      const { rerender } = render(<ChatContainer {...baseProps} />);
-      rerender(<ChatContainer {...baseProps} />);
+      const { rerender } = render(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+        />,
+      );
+      rerender(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+        />,
+      );
 
       expect(useCopilotUIStore.getState().artifactPanel.isOpen).toBe(false);
       expectChatColumnIsCapped();
@@ -637,7 +884,16 @@ describe("ChatContainer", () => {
         .openArtifact(makeArtifact(ARTIFACT_B_ID, "b.txt"));
 
       const { rerender } = render(
-        <ChatContainer {...baseProps} sessionId="s1" />,
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+          sessionId="s1"
+        />,
       );
 
       // The preview drawer is driven by activeArtifact, not `isOpen`.
@@ -645,7 +901,18 @@ describe("ChatContainer", () => {
         useCopilotUIStore.getState().artifactPanel.activeArtifact?.id,
       ).toBe(ARTIFACT_B_ID);
 
-      rerender(<ChatContainer {...baseProps} sessionId="s2" />);
+      rerender(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+          sessionId="s2"
+        />,
+      );
 
       // `isOpen` is shared with ContextPanel and intentionally left alone
       // on session switches; the drawer hides via activeArtifact being null.
@@ -664,9 +931,29 @@ describe("ChatContainer", () => {
         .openArtifact(makeArtifact(ARTIFACT_B_ID, "b.txt"));
 
       const { rerender } = render(
-        <ChatContainer {...baseProps} sessionId="s1" />,
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+          sessionId="s1"
+        />,
       );
-      rerender(<ChatContainer {...baseProps} sessionId="s2" />);
+      rerender(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+          sessionId="s2"
+        />,
+      );
 
       useCopilotUIStore.getState().openArtifact(makeArtifact("c", "c.txt"));
 
@@ -683,7 +970,17 @@ describe("ChatContainer", () => {
         useCopilotUIStore.getState().artifactPanel.activeArtifact?.id,
       ).toBe(ARTIFACT_A_ID);
 
-      const { unmount } = render(<ChatContainer {...baseProps} />);
+      const { unmount } = render(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+        />,
+      );
       unmount();
 
       // The drawer's visibility is gated on activeArtifact, so clearing it
@@ -708,10 +1005,30 @@ describe("ChatContainer", () => {
         },
       });
 
-      const { unmount } = render(<ChatContainer {...baseProps} />);
+      const { unmount } = render(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+        />,
+      );
       unmount();
 
-      render(<ChatContainer {...baseProps} />);
+      render(
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...baseProps}
+        />,
+      );
 
       // The drawer is gated on activeArtifact — clearing it is enough to
       // suppress the stale preview. `isOpen` is owned by ContextPanel and

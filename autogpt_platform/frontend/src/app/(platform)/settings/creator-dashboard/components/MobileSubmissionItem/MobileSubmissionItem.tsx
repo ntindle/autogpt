@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { isLocalStoreMediaUrl } from "@/lib/store-media";
+import { shouldBypassImageOptimization } from "@/lib/utils/image";
 import Link from "next/link";
 import { motion, useReducedMotion } from "framer-motion";
 import type { StoreSubmission } from "@/app/api/__generated__/models/storeSubmission";
@@ -35,7 +35,7 @@ interface Props {
   rowIndex?: number;
   onView: (submission: StoreSubmission) => void;
   onEdit: (payload: EditPayload) => void;
-  onDelete: (submissionId: string) => Promise<void>;
+  onDelete: (submission: StoreSubmission) => Promise<void>;
   creatorUsername?: string;
 }
 
@@ -98,10 +98,10 @@ export function MobileSubmissionItem({
           {thumbnail ? (
             <Image
               src={thumbnail}
-              unoptimized={isLocalStoreMediaUrl(thumbnail)}
               alt={submission.name}
               fill
               sizes="64px"
+              unoptimized={shouldBypassImageOptimization(thumbnail)}
               style={{ objectFit: "cover" }}
               draggable={false}
               className="pointer-events-none"

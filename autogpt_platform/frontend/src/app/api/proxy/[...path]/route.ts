@@ -53,6 +53,10 @@ const FORWARDED_REQUEST_HEADERS: ReadonlyArray<string> = [
   "baggage",
   "x-datafast-visitor-id",
   "x-datafast-session-id",
+  // Org/team tenancy context — the backend validates membership server-side,
+  // so forwarding these is scoping, not trust.
+  "x-org-id",
+  "x-team-id",
 ];
 
 // Browsers advertise `zstd` in Accept-Encoding, but undici (Node 22's fetch)
@@ -147,12 +151,10 @@ const METHODS_WITHOUT_BODY: ReadonlySet<string> = new Set([
 
 async function handleWorkspaceDownload(
   backendUrl: string,
+  request: NextRequest,
   token: string | null,
 ): Promise<NextResponse> {
-  const headers: Record<string, string> = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
+  const headers = await buildForwardHeaders(request, token);
 
   const response = await fetchWorkspaceDownloadWithRetry(
     backendUrl,
@@ -236,7 +238,7 @@ async function handler(
     const token = await getServerAuthToken();
 
     if (method === "GET" && isWorkspaceDownloadRequest(path)) {
-      return await handleWorkspaceDownload(backendUrl, token);
+      return await handleWorkspaceDownload(backendUrl, req, token);
     }
 
     const headers = await buildForwardHeaders(req, token);

@@ -44,7 +44,11 @@ function serve(reviews: PendingHumanReviewModel[], status = 200) {
 function renderQueue() {
   return render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
-      <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT_SESSION}
+      />
     </CopilotChatActionsProvider>,
   );
 }
@@ -72,7 +76,11 @@ function renderQueueAndRow() {
   return render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
       <ToolChain parts={[HELD_ROW]} isStreaming={false} />
-      <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT_SESSION}
+      />
     </CopilotChatActionsProvider>,
   );
 }

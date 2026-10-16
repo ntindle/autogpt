@@ -51,7 +51,11 @@ test("each held call is its own card, oldest first, and answering one follows th
 
   render(
     <CopilotChatActionsProvider onSend={onSend} onBackendTurn={onBackendTurn}>
-      <CopilotPendingReviews chatSessionId={CHAT} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT}
+      />
     </CopilotChatActionsProvider>,
   );
 

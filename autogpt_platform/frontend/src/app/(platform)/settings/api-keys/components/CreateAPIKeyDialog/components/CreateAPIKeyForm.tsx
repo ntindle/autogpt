@@ -14,14 +14,26 @@ import {
 
 import type { CreateAPIKeyFormValues } from "../schema";
 import { PermissionsCheckboxGroup } from "./PermissionsCheckboxGroup";
+import { TeamPicker } from "@/components/contextual/TeamPicker/TeamPicker";
+import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
 
 interface Props {
   form: UseFormReturn<CreateAPIKeyFormValues>;
   onSubmit: (values: CreateAPIKeyFormValues) => Promise<void> | void;
   isPending: boolean;
+  teamId: string | null;
+  setTeamId: (teamId: string | null) => void;
+  isReady: boolean;
 }
 
-export function CreateAPIKeyForm({ form, onSubmit, isPending }: Props) {
+export function CreateAPIKeyForm({
+  form,
+  onSubmit,
+  isPending,
+  teamId,
+  setTeamId,
+  isReady,
+}: Props) {
   return (
     <Form form={form} onSubmit={onSubmit} className="flex flex-col gap-4 px-1">
       <FormField
@@ -62,6 +74,14 @@ export function CreateAPIKeyForm({ form, onSubmit, isPending }: Props) {
         )}
       />
 
+      <TeamPicker
+        surfaceKey={CreateSurface.ApiKey}
+        value={teamId}
+        onChange={setTeamId}
+        label="Restrict to team"
+        wrapperClassName="!mb-0"
+      />
+
       <FormField
         control={form.control}
         name="permissions"
@@ -82,7 +102,7 @@ export function CreateAPIKeyForm({ form, onSubmit, isPending }: Props) {
         type="submit"
         variant="primary"
         size="large"
-        disabled={!form.formState.isValid || isPending}
+        disabled={!form.formState.isValid || isPending || !isReady}
         loading={isPending}
       >
         Create Key

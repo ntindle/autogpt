@@ -20,7 +20,11 @@ test.each(cards.map((card) => [card.story, card] as const))(
     );
     render(
       <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
-        <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+        <CopilotPendingReviews
+          organizationId={null}
+          teamId={null}
+          chatSessionId={CHAT_SESSION}
+        />
       </CopilotChatActionsProvider>,
     );
 
@@ -63,7 +67,11 @@ test("a code block's step renders as code", async () => {
   );
   render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
-      <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT_SESSION}
+      />
     </CopilotChatActionsProvider>,
   );
   const code = await screen.findByText(/import pandas as pd/);
@@ -79,7 +87,11 @@ test("a held command reads as its text, not as a JSON string", async () => {
   );
   render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
-      <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT_SESSION}
+      />
     </CopilotChatActionsProvider>,
   );
   const command = (card.review.payload as { arguments: { command: string } })
@@ -106,7 +118,11 @@ test("a long body opens whole, in a box that scrolls", async () => {
   );
   render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
-      <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT_SESSION}
+      />
     </CopilotChatActionsProvider>,
   );
   const body = (card.review.payload as { arguments: { body: string } })

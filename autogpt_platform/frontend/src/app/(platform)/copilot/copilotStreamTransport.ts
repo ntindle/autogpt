@@ -8,7 +8,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getAutopilotModeChoice } from "./autopilotModeStore";
 import { createSmoothingTransform } from "./copilotStreamSmoothing";
 import { getKickoffExpertIdFromMetadata } from "./expertKickoff";
-import { getCopilotAuthHeaders } from "./helpers";
+import { getCopilotAuthHeaders, type CopilotTenantScope } from "./helpers";
 import { createShadowFetch } from "./stream/turnShadow";
 import { isVoiceTurn } from "./voice/pendingVoiceStart";
 import { isTokenDevtoolEnabled } from "./tokenDevtool/gate";
@@ -26,6 +26,7 @@ interface CreateTransportArgs {
    * mid-session change is picked up on the next send.
    */
   copilotModelRef: MutableValue<CopilotLlmModel | undefined>;
+  tenantScopeRef: MutableValue<CopilotTenantScope | undefined>;
 }
 
 /**
@@ -60,6 +61,7 @@ class SmoothedCopilotChatTransport extends DefaultChatTransport<UIMessage> {
 export function createCopilotTransport({
   sessionId,
   copilotModelRef,
+  tenantScopeRef,
 }: CreateTransportArgs) {
   const baseUrl = `${environment.getAGPTServerBaseUrl()}/api/chat/sessions/${sessionId}/stream`;
 
@@ -81,7 +83,7 @@ export function createCopilotTransport({
         messages[messages.length - 1],
         copilotModelRef.current,
       ),
-      headers: await getCopilotAuthHeaders(),
+      headers: await getCopilotAuthHeaders(tenantScopeRef.current),
     }),
     prepareReconnectToStreamRequest: async () => {
       // Always replay from "0-0" (no ?last_chunk_id). AI SDK v5's
@@ -95,7 +97,7 @@ export function createCopilotTransport({
       // consumer side.
       return {
         api: baseUrl,
-        headers: await getCopilotAuthHeaders(),
+        headers: await getCopilotAuthHeaders(tenantScopeRef.current),
       };
     },
   });

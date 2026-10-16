@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.copilot.model import ChatSession
 from backend.copilot.tracking import track_library_check_outcome
+from backend.data.tenancy import ResourceAccess
 
 from .agent_generator.pipeline import fetch_library_agents, fix_validate_and_save
 from .agent_json_input import (
@@ -39,6 +40,10 @@ class CreateAgentTool(BaseTool):
     @property
     def requires_auth(self) -> bool:
         return True
+
+    @property
+    def resource_access(self) -> ResourceAccess:
+        return "create"
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -155,7 +160,12 @@ class CreateAgentTool(BaseTool):
             agent_json["is_active"] = True
 
         # Fetch library agents for AgentExecutorBlock validation
-        library_agents = await fetch_library_agents(user_id, library_agent_ids)
+        library_agents = await fetch_library_agents(
+            user_id,
+            library_agent_ids,
+            session.organization_id,
+            session.team_id,
+        )
 
         saved = await fix_validate_and_save(
             agent_json,
@@ -164,6 +174,8 @@ class CreateAgentTool(BaseTool):
             save=save,
             is_update=False,
             default_name="Generated Workflow",
+            organization_id=session.organization_id,
+            team_id=session.team_id,
             library_agents=library_agents,
             folder_id=folder_id,
             is_hidden=is_hidden,

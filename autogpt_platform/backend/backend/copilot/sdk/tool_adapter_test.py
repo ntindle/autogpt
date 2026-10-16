@@ -2,11 +2,12 @@
 
 import asyncio
 import json
+from contextvars import Context
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from mcp.types import ListToolsRequest, ToolAnnotations
+from mcp.types import CallToolRequest, ListToolsRequest, ToolAnnotations
 
 from backend.copilot.builder_context import BUILDER_BLOCKED_TOOLS
 from backend.copilot.context import get_sdk_cwd
@@ -422,6 +423,39 @@ class TestCreateToolHandler:
         await handler({"block_id": "b2"})
 
         assert mock_tool.execute.await_count == 2
+
+
+class TestMcpServerExecutionContext:
+    @pytest.mark.asyncio
+    async def test_tool_call_in_empty_sdk_context_uses_bound_chat_session(
+        self, monkeypatch
+    ):
+        session = _make_test_session()
+        set_execution_context(
+            user_id="bound-user",
+            session=session,
+            sandbox=None,
+            sdk_cwd="/tmp/bound-session",
+        )
+        mock_tool = _make_mock_tool("context_probe", output="bound result")
+        mock_tool.description = "Probe bound MCP execution context"
+        monkeypatch.setitem(TOOL_REGISTRY, "context_probe", mock_tool)
+        server = create_copilot_mcp_server()
+
+        request_handler = server["instance"].request_handlers[CallToolRequest]
+        request = CallToolRequest(params={"name": "context_probe", "arguments": {}})
+        sdk_task = asyncio.create_task(
+            request_handler(request),
+            context=Context(),
+        )
+        result = (await sdk_task).root
+
+        assert result.isError is False
+        mock_tool.execute.assert_awaited_once()
+        call_kwargs = mock_tool.execute.await_args.kwargs
+        assert call_kwargs["user_id"] == "bound-user"
+        assert call_kwargs["session"] is session
+        assert pop_pending_tool_output("context_probe", {}) == "bound result"
 
 
 class TestToolInlineExecution:

@@ -11,18 +11,20 @@ import asyncio
 import logging
 import time
 from typing import Any
-from urllib.parse import quote
 from uuid import uuid4
 
+from backend.copilot.model import get_chat_session
 from backend.copilot.prompting import NO_REPLY
 from backend.data.redis_client import get_redis_async
 from backend.data.sharing.workspace_refs import (
     WorkspaceArtifactLink,
     extract_artifact_links,
 )
+from backend.data.tenancy import live_resource_access_barrier
 from backend.platform_linking.models import ChatTurnHandle, TurnDenial
 from backend.util.exceptions import DuplicateChatMessageError, NotFoundError
 from backend.util.settings import Settings
+from backend.util.tenancy_urls import copilot_path
 
 from . import choices, sessions
 from .adapters.base import (
@@ -31,7 +33,13 @@ from .adapters.base import (
     PlatformAdapter,
     StreamDraftOutcome,
 )
-from .bot_backend import BotBackend, BotStreamError, ChatTurnDeniedError
+from .bot_backend import (
+    PLATFORM_LINK_REVOKED_CANCEL_MESSAGE,
+    BotBackend,
+    BotStreamError,
+    ChatTurnDeniedError,
+    PlatformLinkRevokedError,
+)
 from .config import SESSION_TTL
 from .prompt import clamp_thread_name
 from .text import format_batch, iter_chunks, split_at_boundary
@@ -163,6 +171,7 @@ class TurnStreamer:
                 if isinstance(cached_session_id, bytes)
                 else cached_session_id
             )
+        active_owner_user_id: str | None = None
 
         async def _on_session_id(sid: str) -> None:
             nonlocal active_session_id
@@ -172,10 +181,16 @@ class TurnStreamer:
             except Exception:
                 logger.warning("Failed to cache session id for target %s", target_id)
 
+        async def _on_owner_user_id(user_id: str) -> None:
+            nonlocal active_owner_user_id
+            active_owner_user_id = user_id
+
         flush_at = adapter.chunk_flush_at
         buffer = ""
         sent_any_content = False
         setup_prompt_sent = False
+        finish_flushed = False
+        empty_reply_sent = False
         clarification_prompt_sent = False
 
         async def _on_setup_required(
@@ -200,7 +215,12 @@ class TurnStreamer:
                     sent_any_content = True
                 buffer = ""
             sent_any_content = True
-            session_url = copilot_session_url(session_id)
+            linked_session = await get_chat_session(session_id, active_owner_user_id)
+            session_url = copilot_session_url(
+                session_id,
+                linked_session.organization_id if linked_session else None,
+                linked_session.team_id if linked_session else None,
+            )
             message = _setup_required_message(setup_output)
             if session_url is None:
                 # No base URL configured — fall back to plain text since
@@ -240,6 +260,38 @@ class TurnStreamer:
                 _setup_dropped_message(),
                 mentionable_users=ctx.mentionable_users,
             )
+
+        async def _on_finish() -> None:
+            nonlocal buffer, sent_any_content, finish_flushed, empty_reply_sent
+            if not sent_any_content and buffer.strip() == NO_REPLY:
+                buffer = ""
+                finish_flushed = True
+                self._api.track_event(
+                    platform=ctx.platform,
+                    event_type="reply_suppressed",
+                    server_id=ctx.server_id,
+                    channel_type=ctx.channel_type,
+                    duration_ms=int((time.monotonic() - started_at) * 1000),
+                )
+                return
+            if buffer.strip():
+                if await self._send_text_and_artifacts(
+                    adapter,
+                    target_id,
+                    buffer,
+                    ctx,
+                    active_session_id,
+                ):
+                    sent_any_content = True
+                buffer = ""
+            if not sent_any_content:
+                await adapter.send_message(
+                    target_id,
+                    "AutoGPT didn't produce a response. Try rephrasing your question.",
+                )
+                self._track_stream_error(ctx, "empty_reply")
+                empty_reply_sent = True
+            finish_flushed = True
 
         async def _on_clarification_needed(
             session_id: str,
@@ -281,15 +333,21 @@ class TurnStreamer:
         reply_chars = 0
         draft = DraftStreamer(adapter, target_id)
         typing_task = asyncio.create_task(_keep_typing(adapter, target_id))
+        link_revoked = False
         try:
             if turn is not None:
                 await _on_session_id(turn.session_id)
+                await _on_owner_user_id(turn.user_id)
                 chunks = self._api.stream_turn(
                     turn,
+                    platform=ctx.platform,
+                    platform_user_id=ctx.user_id,
+                    platform_server_id=ctx.server_id,
                     on_setup_required=_on_setup_required,
                     on_setup_dropped=_on_setup_dropped,
                     on_clarification_needed=_on_clarification_needed,
                     on_approval_needed=_on_approval_needed,
+                    on_finish=_on_finish,
                 )
             else:
                 chunks = self._api.stream_chat(
@@ -300,10 +358,12 @@ class TurnStreamer:
                     platform_server_id=ctx.server_id,
                     file_ids=file_ids,
                     on_session_id=_on_session_id,
+                    on_owner_user_id=_on_owner_user_id,
                     on_setup_required=_on_setup_required,
                     on_setup_dropped=_on_setup_dropped,
                     on_clarification_needed=_on_clarification_needed,
                     on_approval_needed=_on_approval_needed,
+                    on_finish=_on_finish,
                 )
             async for chunk in chunks:
                 buffer += chunk
@@ -325,6 +385,15 @@ class TurnStreamer:
             # Another in-flight turn is already processing this exact message —
             # stay quiet so the user doesn't get a double response.
             logger.info("Duplicate message dropped for target %s", target_id)
+            return
+        except PlatformLinkRevokedError:
+            logger.info("Platform link revoked while streaming to %s", target_id)
+            return
+        except asyncio.CancelledError as error:
+            if error.args != (PLATFORM_LINK_REVOKED_CANCEL_MESSAGE,):
+                raise
+            link_revoked = True
+            logger.info("Platform link lease lost while streaming to %s", target_id)
             return
         except BotStreamError as exc:
             # Stream couldn't complete (timeout, subscribe fail, backend stream
@@ -365,36 +434,15 @@ class TurnStreamer:
                 await typing_task
             except asyncio.CancelledError:
                 pass
-            await adapter.stop_typing(target_id)
+            if not link_revoked:
+                await adapter.stop_typing(target_id)
 
-        if not sent_any_content and buffer.strip() == NO_REPLY:
-            # The model chose silence, as its system prompt allows. This is
-            # not the "didn't produce a response" case below: that exists for
-            # a model that emitted nothing, and this one said so. Whole message
-            # only, and only when nothing was already flushed mid-stream, so a
-            # long reply that happens to contain the word is still delivered.
-            logger.info("Reply suppressed by NO_REPLY for target %s", target_id)
-            self._api.track_event(
-                platform=ctx.platform,
-                event_type="reply_suppressed",
-                server_id=ctx.server_id,
-                channel_type=ctx.channel_type,
-                duration_ms=int((time.monotonic() - started_at) * 1000),
+        if not finish_flushed:
+            logger.warning(
+                "Stream ended without an authorized finish for %s", target_id
             )
             return
-
-        if buffer.strip():
-            if await self._send_text_and_artifacts(
-                adapter, target_id, buffer, ctx, active_session_id
-            ):
-                sent_any_content = True
-
-        if not sent_any_content:
-            await adapter.send_message(
-                target_id,
-                "AutoGPT didn't produce a response. Try rephrasing your question.",
-            )
-            self._track_stream_error(ctx, "empty_reply")
+        if empty_reply_sent:
             return
 
         self._api.track_event(
@@ -410,11 +458,18 @@ class TurnStreamer:
             ctx.channel_type == "channel"
             and target_id != ctx.channel_id
             and active_session_id
+            and active_owner_user_id
         ):
             # Fire-and-forget so the rename poll doesn't stall follow-up turns.
             task = asyncio.create_task(
                 self._rename_thread_from_session_title(
-                    adapter, target_id, active_session_id
+                    adapter,
+                    target_id,
+                    active_session_id,
+                    ctx.platform,
+                    ctx.server_id,
+                    ctx.user_id,
+                    active_owner_user_id,
                 )
             )
             self._rename_tasks.add(task)
@@ -515,7 +570,12 @@ class TurnStreamer:
     ) -> None:
         """Link the user to the chat when the file can't be attached here —
         covers missing, unavailable, errored and too-large cases alike."""
-        session_url = copilot_session_url(session_id)
+        linked_session = await get_chat_session(session_id)
+        session_url = copilot_session_url(
+            session_id,
+            linked_session.organization_id if linked_session else None,
+            linked_session.team_id if linked_session else None,
+        )
         if session_url is None:
             logger.warning(
                 "No base URL configured; can't render fallback link for %s",
@@ -548,24 +608,74 @@ class TurnStreamer:
         adapter: PlatformAdapter,
         thread_id: str,
         session_id: str,
+        platform: str,
+        platform_server_id: str | None,
+        platform_user_id: str,
+        expected_owner_user_id: str,
     ) -> None:
         for attempt in range(TITLE_RENAME_ATTEMPTS):
+            lease_id: str | None = None
             try:
-                title = await self._api.get_session_title(session_id)
+                lease_id = await self._api.acquire_platform_link_lease(
+                    platform,
+                    platform_server_id,
+                    platform_user_id,
+                )
+                if not await self._api.is_platform_link_owner(
+                    platform,
+                    platform_server_id,
+                    platform_user_id,
+                    expected_owner_user_id,
+                ):
+                    return
+                session = await get_chat_session(session_id, expected_owner_user_id)
+                if session is None:
+                    return
+                scope = (session.organization_id, session.team_id)
+                async with live_resource_access_barrier(
+                    expected_owner_user_id,
+                    scope[0],
+                    scope[1],
+                    "view",
+                ) as allowed:
+                    if not allowed:
+                        return
+                    session = await get_chat_session(session_id, expected_owner_user_id)
+                    if (
+                        session is None
+                        or (
+                            session.organization_id,
+                            session.team_id,
+                        )
+                        != scope
+                    ):
+                        return
+                    if session.title:
+                        await adapter.rename_thread(
+                            thread_id,
+                            clamp_thread_name(
+                                session.title, adapter.max_thread_name_length
+                            ),
+                        )
+                        return
+            except (PlatformLinkRevokedError, ValueError):
+                return
             except Exception:
                 logger.warning(
-                    "Failed to fetch generated title for %s (attempt %d/%d)",
+                    "Failed to fetch or apply generated title for %s (attempt %d/%d)",
                     session_id,
                     attempt + 1,
                     TITLE_RENAME_ATTEMPTS,
                     exc_info=True,
                 )
-                title = None
-            if title:
-                await adapter.rename_thread(
-                    thread_id, clamp_thread_name(title, adapter.max_thread_name_length)
-                )
-                return
+            finally:
+                if lease_id is not None:
+                    try:
+                        released = await self._api.release_platform_link_lease(lease_id)
+                    except Exception:
+                        return
+                    if not released:
+                        return
             if attempt < TITLE_RENAME_ATTEMPTS - 1:
                 await asyncio.sleep(TITLE_RENAME_INTERVAL_SECONDS)
 
@@ -595,13 +705,17 @@ async def _keep_typing(adapter: PlatformAdapter, target_id: str) -> None:
         logger.debug("Typing loop error", exc_info=True)
 
 
-def copilot_session_url(session_id: str) -> str | None:
+def copilot_session_url(
+    session_id: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> str | None:
     """Absolute URL to the live copilot session, or None if no base URL set."""
     config = Settings().config
     base_url = (config.frontend_base_url or config.platform_base_url).rstrip("/")
     if not base_url:
         return None
-    return f"{base_url}/copilot?sessionId={quote(session_id, safe='')}"
+    return f"{base_url}{copilot_path(session_id, organization_id, team_id)}"
 
 
 def _setup_dropped_message() -> str:

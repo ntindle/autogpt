@@ -1,6 +1,8 @@
 "use client";
 
 import {
+  getGetV2GetSessionQueryKey,
+  getGetV2ListSessionsQueryKey,
   useGetV2GetSession,
   useGetV2ListSessions,
 } from "@/app/api/__generated__/endpoints/chat/chat";
@@ -24,6 +26,12 @@ import { asObject, str } from "./resultHelpers";
 import { RowIcon } from "./RowIcon";
 import { SwapText } from "./SwapText";
 import { getCatalogLabel } from "./toolCatalog";
+import { useCopilotTenantScope } from "../../CopilotTenantScopeContext";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
+import { getCopilotHref } from "@/services/org-team/builder";
 
 interface Props {
   subSessionId: string;
@@ -51,6 +59,7 @@ interface LiveStep {
  *  once it goes idle, polling stops and the last state stays up as the
  *  delegate's final answer. */
 export function SubSessionLive({ subSessionId, active }: Props) {
+  const scope = useCopilotTenantScope();
   const { session, isError, isPaused } = useLiveSubSession(
     subSessionId,
     active,
@@ -76,7 +85,9 @@ export function SubSessionLive({ subSessionId, active }: Props) {
           {latestText}
         </p>
       )}
-      {notice && <LiveNotice text={notice} subSessionId={subSessionId} />}
+      {notice && (
+        <LiveNotice text={notice} subSessionId={subSessionId} scope={scope} />
+      )}
     </div>
   );
 }
@@ -86,6 +97,7 @@ export function SubSessionLive({ subSessionId, active }: Props) {
  *  is still live. Both stop the polling, so both have to be visible —
  *  otherwise a dead card is indistinguishable from a working one. */
 function useLiveSubSession(subSessionId: string, active: boolean) {
+  const scope = useCopilotTenantScope();
   const [isCapped, setIsCapped] = useState(false);
   useEffect(
     function stopPollingAfterCap() {
@@ -98,6 +110,11 @@ function useLiveSubSession(subSessionId: string, active: boolean) {
   const { data, isError } = useGetV2GetSession(subSessionId, undefined, {
     query: {
       enabled: active && !!subSessionId,
+      queryKey: getTeamScopedQueryKey(
+        getGetV2GetSessionQueryKey(subSessionId),
+        scope.organizationId,
+        scope.teamId,
+      ),
       refetchInterval: (query) => {
         if (query.state.status === "error" || isCapped) return false;
         const raw = query.state.data;
@@ -106,6 +123,7 @@ function useLiveSubSession(subSessionId: string, active: boolean) {
       },
       select: (res) => (res.status === 200 ? res.data : null),
     },
+    request: getTenantRequestInit(scope.organizationId, scope.teamId),
   });
   const session = data ?? null;
   return {
@@ -134,15 +152,17 @@ function getLiveNotice({
 function LiveNotice({
   text,
   subSessionId,
+  scope,
 }: {
   text: string;
   subSessionId: string;
+  scope: { organizationId: string | null; teamId: string | null };
 }) {
   return (
     <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-zinc-400">
       {text}
       <Link
-        href={`/copilot?sessionId=${subSessionId}`}
+        href={getCopilotHref(subSessionId, scope.organizationId, scope.teamId)}
         className="underline underline-offset-2 hover:text-zinc-600"
       >
         Open sub-session
@@ -262,6 +282,7 @@ export function SubSessionPendingCard({
   input,
   minimal = false,
 }: PendingCardProps) {
+  const scope = useCopilotTenantScope();
   const { expertsById } = useExpertMap();
   const args = asObject(input) ?? {};
   const inputExpertId = str(args, "expert_id");
@@ -305,7 +326,11 @@ export function SubSessionPendingCard({
         />
         {liveSessionId && (
           <Link
-            href={`/copilot?sessionId=${liveSessionId}`}
+            href={getCopilotHref(
+              liveSessionId,
+              liveSession?.organization_id ?? scope.organizationId,
+              liveSession?.team_id ?? scope.teamId,
+            )}
             aria-label="Open sub-session"
             className="shrink-0 rounded-full p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700"
           >
@@ -331,15 +356,26 @@ export function SubSessionPendingCard({
  *  their live status, and the exact session takes over once the tool
  *  returns. */
 function useDelegatedSessionId(expertId: string | null) {
+  const scope = useCopilotTenantScope();
   const mountedAtRef = useRef(Date.now());
+  const filters = {
+    expert_id: expertId ?? undefined,
+    limit: 5,
+    pinned_first: false,
+  };
   const { data } = useGetV2ListSessions(
     // Strict recency: the default puts pinned sessions first, so an expert
     // with a handful of pinned threads would push the running one out of
     // the window and the live view would never find it.
-    { expert_id: expertId ?? undefined, limit: 5, pinned_first: false },
+    filters,
     {
       query: {
         enabled: !!expertId,
+        queryKey: getTeamScopedQueryKey(
+          getGetV2ListSessionsQueryKey(filters),
+          scope.organizationId,
+          scope.teamId,
+        ),
         refetchInterval: (query) => {
           if (query.state.status === "error") return false;
           if (Date.now() - mountedAtRef.current > POLL_CAP_MS) return false;
@@ -354,6 +390,7 @@ function useDelegatedSessionId(expertId: string | null) {
         },
         select: (res) => (res.status === 200 ? res.data.sessions : []),
       },
+      request: getTenantRequestInit(scope.organizationId, scope.teamId),
     },
   );
   const live = (data ?? []).find(

@@ -42,6 +42,8 @@ class LibraryFolder(pydantic.BaseModel):
     updated_at: datetime.datetime
     agent_count: int = 0  # Direct agents in folder
     subfolder_count: int = 0  # Direct child folders
+    organization_id: str | None = None
+    team_id: str | None = None
 
     @staticmethod
     def from_db(
@@ -61,6 +63,8 @@ class LibraryFolder(pydantic.BaseModel):
             updated_at=folder.updatedAt,
             agent_count=agent_count,
             subfolder_count=subfolder_count,
+            organization_id=folder.organizationId,
+            team_id=folder.teamId,
         )
 
 
@@ -143,6 +147,8 @@ class LibraryAgentRef(pydantic.BaseModel):
     id: str
     graph_id: str
     name: str
+    organization_id: str | None = None
+    team_id: str | None = None
     # The agent's own picture, so a surface listing runs can show the agent
     # instead of a generic glyph.
     image_url: str | None = None
@@ -162,7 +168,7 @@ class RecentExecution(pydantic.BaseModel):
     activity_summary: str | None = None
 
 
-def _parse_settings(settings: dict | str | None) -> GraphSettings:
+def parse_settings(settings: dict | str | None) -> GraphSettings:
     """Parse settings from database, handling both dict and string formats."""
     if settings is None:
         return GraphSettings()
@@ -232,6 +238,9 @@ class LibraryAgent(pydantic.BaseModel):
     folder_id: str | None = None
     folder_name: str | None = None  # Denormalized for display
 
+    organization_id: str | None = None
+    team_id: str | None = None
+
     is_hidden: bool = False
 
     recommended_schedule_cron: str | None = None
@@ -245,6 +254,7 @@ class LibraryAgent(pydantic.BaseModel):
     )
     settings: GraphSettings = pydantic.Field(default_factory=GraphSettings)
     marketplace_listing: Optional["MarketplaceListing"] = None
+    store_listing_version_id: str | None = None
 
     @staticmethod
     def from_db(
@@ -253,7 +263,10 @@ class LibraryAgent(pydantic.BaseModel):
         store_listing: Optional[prisma.models.StoreListing] = None,
         profile: Optional[prisma.models.Profile] = None,
         execution_count_override: Optional[int] = None,
-        schedule_info: Optional[dict[str, str]] = None,
+        schedule_info: Optional[
+            dict[str | tuple[str, int, str | None, str | None], str]
+        ] = None,
+        store_listing_version_id: Optional[str] = None,
     ) -> "LibraryAgent":
         """
         Factory method that constructs a LibraryAgent from a Prisma LibraryAgent
@@ -363,6 +376,19 @@ class LibraryAgent(pydantic.BaseModel):
                 creator=creator_data,
             )
 
+        schedule_scope_key = (
+            agent.agentGraphId,
+            agent.agentGraphVersion,
+            agent.organizationId,
+            agent.teamId,
+        )
+        next_scheduled_run = (
+            schedule_info.get(schedule_scope_key)
+            or schedule_info.get(agent.agentGraphId)
+            if schedule_info
+            else None
+        )
+
         return LibraryAgent(
             id=agent.id,
             graph_id=agent.agentGraphId,
@@ -405,13 +431,14 @@ class LibraryAgent(pydantic.BaseModel):
             is_hidden=agent.isHidden,
             folder_id=agent.folderId,
             folder_name=agent.Folder.name if agent.Folder else None,
+            organization_id=agent.organizationId,
+            team_id=agent.teamId,
             recommended_schedule_cron=agent.AgentGraph.recommendedScheduleCron,
-            is_scheduled=bool(schedule_info and agent.agentGraphId in schedule_info),
-            next_scheduled_run=(
-                schedule_info.get(agent.agentGraphId) if schedule_info else None
-            ),
-            settings=_parse_settings(agent.settings),
+            is_scheduled=next_scheduled_run is not None,
+            next_scheduled_run=next_scheduled_run,
+            settings=parse_settings(agent.settings),
             marketplace_listing=marketplace_listing_data,
+            store_listing_version_id=store_listing_version_id,
         )
 
 

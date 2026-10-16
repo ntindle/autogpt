@@ -76,7 +76,7 @@ describe("uploadSubmissionMediaDirect", () => {
       status: 200,
       json: () => "https://cdn.test/approved.png",
     });
-    await uploadSubmissionMediaDirect(makeFile(10), "expert-avatar");
+    await uploadSubmissionMediaDirect(makeFile(10), undefined, "expert-avatar");
     expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "http://backend.test/api/store/submissions/media?purpose=expert-avatar",
     );
@@ -183,7 +183,10 @@ describe("uploadFileDirect (workspace)", () => {
       }),
     });
 
-    const result = await uploadFileDirect(makeFile(10), "sess-1");
+    const result = await uploadFileDirect(makeFile(10), "sess-1", {
+      organizationId: "org-1",
+      teamId: "team-a",
+    });
 
     expect(result.file_id).toBe("f1");
     const calledUrl = fetchMock.mock.calls[0]?.[0] as string;
@@ -192,6 +195,11 @@ describe("uploadFileDirect (workspace)", () => {
     );
     expect(calledUrl).toContain("overwrite=true");
     expect(calledUrl).toContain("session_id=sess-1");
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toEqual({
+      Authorization: "Bearer test-token",
+      "X-Org-Id": "org-1",
+      "X-Team-Id": "team-a",
+    });
   });
 });
 

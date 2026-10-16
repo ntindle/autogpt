@@ -8,6 +8,9 @@ import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { uploadAgentFormSchema } from "./LibraryUploadAgentDialog";
+import { useCreateTeamSelection } from "@/components/contextual/TeamPicker/useCreateTeamSelection";
+import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
+import { getBuilderHref } from "@/services/org-team/builder";
 
 export function useLibraryUploadAgentDialog(options?: {
   onSuccess?: () => void;
@@ -15,9 +18,12 @@ export function useLibraryUploadAgentDialog(options?: {
   const [isOpen, setIsOpen] = useState(false);
   const { toast } = useToast();
   const [agentObject, setAgentObject] = useState<Graph | null>(null);
+  const { teamId, setTeamId, teamRequestInit, isReady } =
+    useCreateTeamSelection(CreateSurface.LibraryUpload);
 
   const { mutateAsync: createGraph, isPending: isUploading } =
     usePostV1CreateNewGraph({
+      request: teamRequestInit,
       mutation: {
         onSuccess: ({ data }) => {
           setIsOpen(false);
@@ -27,8 +33,13 @@ export function useLibraryUploadAgentDialog(options?: {
             description: "Workflow uploaded successfully",
             variant: "default",
           });
-          const qID = "flowID";
-          window.location.href = `/build?${qID}=${(data as GraphModel).id}`;
+          const graph = data as GraphModel;
+          window.location.href = getBuilderHref({
+            graphId: graph.id,
+            graphVersion: graph.version,
+            organizationId: graph.organization_id ?? null,
+            teamId: graph.team_id ?? null,
+          });
         },
         onError: () => {
           toast({
@@ -145,5 +156,8 @@ export function useLibraryUploadAgentDialog(options?: {
     setIsOpen,
     form,
     agentObject,
+    teamId,
+    setTeamId,
+    isReady,
   };
 }

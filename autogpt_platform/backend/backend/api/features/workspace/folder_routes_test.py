@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock
 
@@ -46,11 +47,28 @@ client = fastapi.testclient.TestClient(app)
 
 @pytest.fixture(autouse=True)
 def setup_app_auth(mock_jwt_user):
+    from autogpt_libs.auth.dependencies import get_request_context
     from autogpt_libs.auth.jwt_utils import get_jwt_payload
 
     app.dependency_overrides[get_jwt_payload] = mock_jwt_user["get_jwt_payload"]
+    app.dependency_overrides[get_request_context] = mock_jwt_user["get_request_context"]
     yield
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def mock_live_resource_lease(mocker):
+    class Guard:
+        async def run(self, action):
+            return await action
+
+    @asynccontextmanager
+    async def lease(*args, **kwargs):
+        yield Guard()
+
+    mocker.patch(
+        "backend.api.features.workspace.folder_routes.live_resource_lease", new=lease
+    )
 
 
 def _make_workspace() -> Workspace:
@@ -124,7 +142,12 @@ def test_create_folder_success(mocker):
     assert response.status_code == 201
     assert response.json()["name"] == "Invoices"
     create.assert_awaited_once_with(
-        workspace_id="ws-001", name="Invoices", icon=None, parent_id=None
+        workspace_id="ws-001",
+        name="Invoices",
+        icon=None,
+        organization_id="test-org",
+        team_id="test-team",
+        parent_id=None,
     )
 
 
@@ -158,9 +181,11 @@ def test_update_folder_success(mocker):
     update.assert_awaited_once_with(
         folder_id="fld-1",
         workspace_id="ws-001",
-        parent_id=UNCHANGED,
         name="Renamed",
         icon=None,
+        organization_id="test-org",
+        team_id="test-team",
+        parent_id=UNCHANGED,
     )
 
 
@@ -190,7 +215,12 @@ def test_delete_folder_returns_204(mocker):
 
     response = client.delete("/folders/fld-1")
     assert response.status_code == 204
-    delete.assert_awaited_once_with(folder_id="fld-1", workspace_id="ws-001")
+    delete.assert_awaited_once_with(
+        folder_id="fld-1",
+        workspace_id="ws-001",
+        organization_id="test-org",
+        team_id="test-team",
+    )
 
 
 def test_bulk_move_files_returns_updated_files(mocker):
@@ -212,7 +242,11 @@ def test_bulk_move_files_returns_updated_files(mocker):
     assert data[0]["id"] == "f1"
     assert data[0]["folder_id"] == "fld-1"
     move.assert_awaited_once_with(
-        workspace_id="ws-001", file_ids=["f1"], folder_id="fld-1"
+        workspace_id="ws-001",
+        file_ids=["f1"],
+        folder_id="fld-1",
+        organization_id="test-org",
+        team_id="test-team",
     )
 
 
@@ -240,7 +274,11 @@ def test_bulk_move_files_to_root(mocker):
     response = client.post("/folders/files/bulk-move", json={"file_ids": ["f1"]})
     assert response.status_code == 200
     move.assert_awaited_once_with(
-        workspace_id="ws-001", file_ids=["f1"], folder_id=None
+        workspace_id="ws-001",
+        file_ids=["f1"],
+        folder_id=None,
+        organization_id="test-org",
+        team_id="test-team",
     )
 
 
@@ -258,7 +296,12 @@ def test_create_folder_under_a_parent(mocker):
 
     assert response.status_code == 201
     create.assert_awaited_once_with(
-        workspace_id="ws-001", name="2026", icon=None, parent_id="invoices"
+        workspace_id="ws-001",
+        name="2026",
+        icon=None,
+        parent_id="invoices",
+        organization_id="test-org",
+        team_id="test-team",
     )
 
 
@@ -300,6 +343,8 @@ def test_update_folder_moves_it_when_parent_id_is_present(mocker, destination):
         parent_id=destination,
         name=None,
         icon=None,
+        organization_id="test-org",
+        team_id="test-team",
     )
 
 

@@ -267,8 +267,8 @@ from ._test_data import make_session
 #     dev 583fc0bb4e                              76,975 (89 tools)
 #     + this PR's connect_integration  +200       77,175 (89 tools)
 # Plus one.
-# Tasks adds durable task management and question-routing arguments.
-_CHAR_BUDGET = 84_600
+# Tasks management plus Orgs tenant arguments on the combined branch.
+_CHAR_BUDGET = 85_800
 
 
 @pytest.fixture(scope="module")

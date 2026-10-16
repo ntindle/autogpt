@@ -257,7 +257,7 @@ test("skips remaining kit steps, posts null budget and empty attachments, and op
   });
   await waitFor(() =>
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=raised-1&kickoff=1",
+      "/copilot?expertId=raised-1&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     ),
   );
 });
@@ -324,7 +324,7 @@ test("posts a chosen weekly budget", async () => {
   });
   await waitFor(() =>
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=raised-1&kickoff=1",
+      "/copilot?expertId=raised-1&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     ),
   );
 });
@@ -435,7 +435,7 @@ test("toasts failed attachments and still opens copilot", async () => {
   expect(await screen.findByText(/some tools didn't attach/)).toBeDefined();
   await waitFor(() =>
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=raised-1&kickoff=1",
+      "/copilot?expertId=raised-1&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     ),
   );
 });

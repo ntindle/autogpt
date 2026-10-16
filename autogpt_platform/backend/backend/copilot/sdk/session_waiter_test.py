@@ -12,6 +12,7 @@ Focuses on the queue-on-busy fallback:
 """
 
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -38,11 +39,18 @@ _QR = type(
 )
 
 
+@asynccontextmanager
+async def _allow_live_resource_lease(*_args, **_kwargs):
+    yield True
+
+
 @pytest.fixture(autouse=True)
 def mock_session_lookup():
     session = MagicMock()
     session.metadata.llm_auth_provider = "platform"
     session.metadata.llm_credential_id = None
+    session.organization_id = None
+    session.team_id = None
     session.metadata.delegated_by_session_id = None
     with patch(
         "backend.copilot.sdk.session_waiter.get_chat_session",
@@ -98,7 +106,12 @@ async def test_queue_branch_timeout_zero_returns_immediately():
     enqueue.assert_not_awaited()
     wait_result.assert_not_awaited()
     queue_mock.assert_awaited_once_with(
-        session_id="sess-busy", message="follow-up", metadata=None
+        session_id="sess-busy",
+        user_id="u1",
+        organization_id=None,
+        team_id=None,
+        message="follow-up",
+        metadata=None,
     )
 
 
@@ -218,6 +231,10 @@ async def test_idle_session_enqueues_normally():
         ),
         patch.object(active_turns, "chat_db", return_value=idle_db),
         patch(
+            "backend.copilot.sdk.session_waiter.live_resource_lease",
+            _allow_live_resource_lease,
+        ),
+        patch(
             "backend.copilot.sdk.session_waiter.stream_registry.create_session",
             new=create_session,
         ),
@@ -330,6 +347,10 @@ async def test_idle_session_concurrent_turn_cap_returns_rejected_outcome():
         patch(
             "backend.copilot.turn_queue.count_inflight_turns",
             new=AsyncMock(return_value=0),
+        ),
+        patch(
+            "backend.copilot.sdk.session_waiter.live_resource_lease",
+            _allow_live_resource_lease,
         ),
         patch(
             "backend.copilot.sdk.session_waiter.stream_registry.create_session",

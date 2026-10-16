@@ -20,8 +20,10 @@ from backend.blocks._base import (
     BlockType,
 )
 from backend.blocks.llm import LLMModel
+from backend.data.tenancy import get_user_team_ids, visibility_filter
 from backend.integrations.providers import ProviderName
 from backend.util.cache import cached
+from backend.util.exceptions import NotFoundError
 from backend.util.models import Pagination
 from backend.util.text import split_camelcase
 
@@ -205,16 +207,22 @@ def get_block_by_id(block_id: str) -> BlockInfo | None:
 
 
 async def update_search(
-    user_id: str, search: SearchEntry, organization_id: str | None = None
+    user_id: str,
+    search: SearchEntry,
+    organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> str:
     """
     Upsert a search request for the user and return the search ID.
     """
     if search.search_id:
         # Update existing search
-        await prisma.models.BuilderSearchHistory.prisma().update(
+        updated = await prisma.models.BuilderSearchHistory.prisma().update_many(
             where={
                 "id": search.search_id,
+                "userId": user_id,
+                "organizationId": organization_id,
+                "teamId": team_id_restriction,
             },
             data={
                 "searchQuery": search.search_query or "",
@@ -222,6 +230,8 @@ async def update_search(
                 "byCreator": search.by_creator or [],
             },
         )
+        if updated != 1:
+            raise NotFoundError(f"Search #{search.search_id} not found")
         return search.search_id
     else:
         # Create new search
@@ -232,19 +242,36 @@ async def update_search(
                 "filter": search.filter or [],  # type: ignore
                 "byCreator": search.by_creator or [],
                 **({"organizationId": organization_id} if organization_id else {}),
+                **({"teamId": team_id_restriction} if team_id_restriction else {}),
             }
         )
         return new_search.id
 
 
-async def get_recent_searches(user_id: str, limit: int = 5) -> list[SearchEntry]:
+async def get_recent_searches(
+    user_id: str,
+    limit: int = 5,
+    organization_id: str | None = None,
+    team_id_restriction: str | None = None,
+) -> list[SearchEntry]:
     """
     Get the user's most recent search requests.
     """
+    where: prisma.types.BuilderSearchHistoryWhereInput = {
+        "userId": user_id,
+        "organizationId": organization_id,
+    }
+    if team_id_restriction is not None:
+        where["teamId"] = team_id_restriction
+    elif organization_id is not None:
+        team_ids = await get_user_team_ids(user_id, organization_id)
+        where["OR"] = [
+            {"teamId": None},
+            {"teamId": {"in": team_ids}},
+        ]
+
     searches = await prisma.models.BuilderSearchHistory.prisma().find_many(
-        where={
-            "userId": user_id,
-        },
+        where=where,
         order={
             "updatedAt": "desc",
         },
@@ -268,6 +295,7 @@ async def get_sorted_search_results(
     filters: Sequence[FilterType],
     by_creator: Sequence[str] | None = None,
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> _SearchCacheEntry:
     normalized_filters: tuple[FilterType, ...] = tuple(sorted(set(filters or [])))
     normalized_creators: tuple[str, ...] = tuple(sorted(set(by_creator or [])))
@@ -280,6 +308,7 @@ async def get_sorted_search_results(
         filters=normalized_filters,
         by_creator=normalized_creators,
         organization_id=organization_id,
+        team_id_restriction=team_id_restriction,
     )
 
 
@@ -290,6 +319,7 @@ async def _build_cached_search_results(
     filters: tuple[FilterType, ...],
     by_creator: tuple[str, ...],
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> _SearchCacheEntry:
     normalized_query = (search_query or "").strip().lower()
 
@@ -321,7 +351,13 @@ async def _build_cached_search_results(
         )
     if include_library_agents:
         branches.append(
-            _search_library(user_id, search_query, normalized_query, organization_id)
+            _search_library(
+                user_id,
+                search_query,
+                normalized_query,
+                organization_id,
+                team_id_restriction,
+            )
         )
     if include_marketplace_agents:
         branches.append(
@@ -374,6 +410,7 @@ async def _search_library(
     search_query: str,
     normalized_query: str,
     organization_id: str | None = None,
+    team_id_restriction: str | None = None,
 ) -> _SearchBranchResult:
     library_response = await library_db.list_library_agents(
         user_id=user_id,
@@ -384,6 +421,7 @@ async def _search_library(
         # generally reusable as a sub-agent block.
         is_hidden=False,
         organization_id=organization_id,
+        team_id_restriction=team_id_restriction,
     )
     items = _build_library_items(
         agents=library_response.agents,
@@ -627,16 +665,30 @@ def get_providers(
     )
 
 
-async def get_counts(user_id: str, organization_id: str | None = None) -> CountResponse:
+async def get_counts(
+    user_id: str,
+    organization_id: str | None = None,
+    team_id_restriction: str | None = None,
+) -> CountResponse:
     where: prisma.types.LibraryAgentWhereInput = {
         "userId": user_id,
         "isDeleted": False,
         "isArchived": False,
     }
     if organization_id is not None:
-        where["AND"] = [
-            {"OR": [{"organizationId": organization_id}, {"organizationId": None}]}
-        ]
+        team_ids = await get_user_team_ids(user_id, organization_id)
+        where = {
+            "isDeleted": False,
+            "isArchived": False,
+            "AND": [
+                visibility_filter(
+                    user_id,
+                    organization_id,
+                    team_ids,
+                    team_id_restriction=team_id_restriction,
+                )
+            ],
+        }
     my_agents = await prisma.models.LibraryAgent.prisma().count(where=where)
     counts = await _get_static_counts()
     return CountResponse(

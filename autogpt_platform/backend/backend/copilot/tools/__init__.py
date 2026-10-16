@@ -9,6 +9,7 @@ from openai.types.chat import ChatCompletionToolParam
 from backend.copilot.capabilities.dispatch import resolve_tool_dispatch
 from backend.copilot.capabilities.registry import configure_tools
 from backend.copilot.capabilities.sources import EAGER_CORE
+from backend.copilot.graphiti.rollout import memory_tool_parameters
 from backend.copilot.response_model import StreamToolOutputAvailable
 from backend.copilot.tracking import track_tool_called
 
@@ -388,6 +389,7 @@ def kickoff_turn_disabled_tools() -> frozenset[str]:
 def get_available_tools(
     *,
     disabled_groups: Iterable[ToolGroup] = (),
+    shared_memory: bool = False,
     disabled_tools: Iterable[str] = (),
     include_deferred: bool = False,
 ) -> list[ChatCompletionToolParam]:
@@ -407,7 +409,16 @@ def get_available_tools(
     if not include_deferred:
         hidden |= DEFERRED_TOOL_NAMES
     return [
-        tool.as_openai_tool()
+        ChatCompletionToolParam(
+            type="function",
+            function={
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": memory_tool_parameters(
+                    name, tool.parameters, shared_memory=shared_memory
+                ),
+            },
+        )
         for name, tool in TOOL_REGISTRY.items()
         if tool.is_available and name not in hidden
     ]

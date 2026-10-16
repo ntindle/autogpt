@@ -11,7 +11,8 @@ from urllib.parse import quote
 
 import aiohttp
 import fastapi
-from autogpt_libs.auth.dependencies import get_user_id, requires_user
+from autogpt_libs.auth.dependencies import get_request_context, requires_user
+from autogpt_libs.auth.models import RequestContext
 from fastapi import Query, UploadFile
 from fastapi.responses import Response
 from prisma.errors import UniqueViolationError
@@ -21,13 +22,13 @@ from backend.api.features.store.exceptions import VirusDetectedError, VirusScanE
 from backend.api.features.workspace.preview import build_preview_response
 from backend.copilot.db import get_chat_session_expert_ids
 from backend.copilot.rate_limit import get_workspace_storage_limit_bytes
+from backend.data.db_accessors import LiveResourceAccessRevoked, live_resource_lease
 from backend.data.skill_capacity import SkillLimitError
 from backend.data.workspace import (
     WorkspaceFile,
     count_workspace_files,
     get_or_create_workspace,
     get_workspace,
-    get_workspace_file,
     get_workspace_total_size,
     rename_workspace_file,
 )
@@ -189,6 +190,8 @@ class WorkspaceFileItem(BaseModel):
     metadata: dict = Field(default_factory=dict)
     origin: Literal["uploaded", "generated"]
     created_at: str
+    organization_id: str | None = None
+    team_id: str | None = None
     # Hired expert whose conversation the file lives in; None for personal
     # Otto chats, Builder output and uploads outside a chat.
     expert_id: str | None = None
@@ -217,6 +220,23 @@ class RenameFileRequest(BaseModel):
 _UPLOADED_METADATA = {"origin": "user-upload"}
 
 
+def _manager(
+    ctx: RequestContext,
+    workspace_id: str,
+    *,
+    session_id: str | None = None,
+    access: Literal["view", "create", "execute", "delete"],
+) -> WorkspaceManager:
+    return WorkspaceManager(
+        ctx.user_id,
+        workspace_id,
+        session_id,
+        organization_id=ctx.org_id,
+        team_id=ctx.team_id,
+        access=access,
+    )
+
+
 def _derive_origin(metadata: dict | None) -> Literal["uploaded", "generated"]:
     """Classify a file as user-uploaded vs agent/block-generated."""
     if (metadata or {}).get("origin") == "user-upload":
@@ -230,7 +250,7 @@ def _derive_origin(metadata: dict | None) -> Literal["uploaded", "generated"]:
     operation_id="getWorkspaceDownloadFileById",
 )
 async def download_file(
-    user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
     file_id: str,
 ) -> Response:
     """
@@ -238,15 +258,29 @@ async def download_file(
 
     Returns the file content directly or redirects to a signed URL for GCS.
     """
-    workspace = await get_workspace(user_id)
+    workspace = await get_workspace(ctx.user_id)
     if workspace is None:
         raise fastapi.HTTPException(status_code=404, detail="Workspace not found")
 
-    file = await get_workspace_file(file_id, workspace.id)
-    if file is None:
-        raise fastapi.HTTPException(status_code=404, detail="File not found")
+    manager = _manager(ctx, workspace.id, access="view")
+    try:
+        async with live_resource_lease(
+            ctx.user_id, ctx.org_id, ctx.team_id, "view"
+        ) as guard:
+            if not guard:
+                raise LiveResourceAccessRevoked("workspace_access_revoked")
 
-    return await create_file_download_response(file)
+            async def create_response():
+                file = await manager.get_file_info(file_id)
+                if file is None:
+                    raise fastapi.HTTPException(
+                        status_code=404, detail="File not found"
+                    )
+                return await create_file_download_response(file)
+
+            return await guard.run(create_response())
+    except LiveResourceAccessRevoked as exc:
+        raise fastapi.HTTPException(status_code=404, detail="File not found") from exc
 
 
 @router.get(
@@ -255,7 +289,7 @@ async def download_file(
     operation_id="getWorkspaceFilePreview",
 )
 async def preview_file(
-    user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
     file_id: str,
     w: int = Query(default=400, ge=16, le=1024),
     bytes_: int = Query(default=4096, ge=256, le=131072, alias="bytes"),
@@ -267,15 +301,29 @@ async def preview_file(
     files return only their first ``bytes`` bytes. Used by the Artifacts page so
     a grid of files no longer downloads every file in full.
     """
-    workspace = await get_workspace(user_id)
+    workspace = await get_workspace(ctx.user_id)
     if workspace is None:
         raise fastapi.HTTPException(status_code=404, detail="Workspace not found")
 
-    file = await get_workspace_file(file_id, workspace.id)
-    if file is None:
-        raise fastapi.HTTPException(status_code=404, detail="File not found")
+    manager = _manager(ctx, workspace.id, access="view")
+    try:
+        async with live_resource_lease(
+            ctx.user_id, ctx.org_id, ctx.team_id, "view"
+        ) as guard:
+            if not guard:
+                raise LiveResourceAccessRevoked("workspace_access_revoked")
 
-    return await build_preview_response(file, width=w, max_bytes=bytes_)
+            async def create_response():
+                file = await manager.get_file_info(file_id)
+                if file is None:
+                    raise fastapi.HTTPException(
+                        status_code=404, detail="File not found"
+                    )
+                return await build_preview_response(file, width=w, max_bytes=bytes_)
+
+            return await guard.run(create_response())
+    except LiveResourceAccessRevoked as exc:
+        raise fastapi.HTTPException(status_code=404, detail="File not found") from exc
 
 
 @router.delete(
@@ -284,7 +332,7 @@ async def preview_file(
     operation_id="deleteWorkspaceFile",
 )
 async def delete_workspace_file(
-    user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
     file_id: str,
 ) -> DeleteFileResponse:
     """
@@ -292,12 +340,15 @@ async def delete_workspace_file(
 
     Used when a user clears a file input in the builder.
     """
-    workspace = await get_workspace(user_id)
+    workspace = await get_workspace(ctx.user_id)
     if workspace is None:
         raise fastapi.HTTPException(status_code=404, detail="Workspace not found")
 
-    manager = WorkspaceManager(user_id, workspace.id)
-    deleted = await manager.delete_file(file_id)
+    manager = _manager(ctx, workspace.id, access="create")
+    try:
+        deleted = await manager.delete_file(file_id)
+    except LiveResourceAccessRevoked as exc:
+        raise fastapi.HTTPException(status_code=404, detail="File not found") from exc
     if not deleted:
         raise fastapi.HTTPException(status_code=404, detail="File not found")
 
@@ -314,16 +365,31 @@ async def delete_workspace_file(
     },
 )
 async def rename_workspace_file_route(
-    user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
     file_id: str,
     payload: RenameFileRequest,
 ) -> WorkspaceFileItem:
     """Rename a file; it stays in its folder and conversation."""
-    workspace = await get_workspace(user_id)
+    workspace = await get_workspace(ctx.user_id)
     if workspace is None:
         raise fastapi.HTTPException(status_code=404, detail="Workspace not found")
     try:
-        renamed = await rename_workspace_file(file_id, workspace.id, payload.name)
+        async with live_resource_lease(
+            ctx.user_id, ctx.org_id, ctx.team_id, "create"
+        ) as guard:
+            if not guard:
+                raise LiveResourceAccessRevoked("workspace_access_revoked")
+            renamed = await guard.run(
+                rename_workspace_file(
+                    file_id,
+                    workspace.id,
+                    payload.name,
+                    organization_id=ctx.org_id,
+                    team_id=ctx.team_id,
+                )
+            )
+    except LiveResourceAccessRevoked as exc:
+        raise fastapi.HTTPException(status_code=404, detail="File not found") from exc
     except UniqueViolationError:
         raise fastapi.HTTPException(
             status_code=409, detail="A file with this name already exists here"
@@ -332,7 +398,7 @@ async def rename_workspace_file_route(
         raise fastapi.HTTPException(status_code=409, detail=str(exc))
     if renamed is None:
         raise fastapi.HTTPException(status_code=404, detail="File not found")
-    expert_by_session = await _expert_ids_by_session(user_id, [renamed])
+    expert_by_session = await _expert_ids_by_session(ctx.user_id, [renamed])
     return _to_file_item(renamed, expert_by_session)
 
 
@@ -342,7 +408,7 @@ async def rename_workspace_file_route(
     operation_id="uploadWorkspaceFile",
 )
 async def upload_file(
-    user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
     file: UploadFile,
     session_id: str | None = Query(default=None),
     overwrite: bool = Query(default=False),
@@ -376,11 +442,16 @@ async def upload_file(
     content = b"".join(chunks)
 
     # Get or create workspace
-    workspace = await get_or_create_workspace(user_id)
+    workspace = await get_or_create_workspace(ctx.user_id)
 
     # Write file via WorkspaceManager (handles virus scan, per-file size,
     # and per-user tier-based storage quota internally).
-    manager = WorkspaceManager(user_id, workspace.id, session_id)
+    manager = _manager(
+        ctx,
+        workspace.id,
+        session_id=session_id,
+        access="create",
+    )
     try:
         workspace_file = await manager.write_file(
             content, filename, overwrite=overwrite, metadata={"origin": "user-upload"}
@@ -399,8 +470,8 @@ async def upload_file(
 
     # Post-write storage check — eliminates TOCTOU race on the quota.
     # If a concurrent upload pushed us over the limit, undo this write.
-    storage_limit_bytes = await get_workspace_storage_limit_bytes(user_id)
-    new_total = await get_workspace_total_size(workspace.id)
+    storage_limit_bytes = await get_workspace_storage_limit_bytes(ctx.user_id)
+    new_total = await get_workspace_total_size(workspace.id, all_scopes=True)
     if storage_limit_bytes and new_total > storage_limit_bytes:
         try:
             # Route through WorkspaceManager so the storage backend blob is
@@ -436,18 +507,31 @@ async def upload_file(
     operation_id="getWorkspaceStorageUsage",
 )
 async def get_storage_usage(
-    user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
 ) -> StorageUsageResponse:
     """
     Get storage usage information for the user's workspace.
     """
-    workspace = await get_or_create_workspace(user_id)
+    workspace = await get_or_create_workspace(ctx.user_id)
 
-    used_bytes, file_count, limit_bytes = await asyncio.gather(
-        get_workspace_total_size(workspace.id),
-        count_workspace_files(workspace.id),
-        get_workspace_storage_limit_bytes(user_id),
-    )
+    async with live_resource_lease(
+        ctx.user_id, ctx.org_id, ctx.team_id, "view"
+    ) as guard:
+        if not guard:
+            raise fastapi.HTTPException(status_code=404, detail="Workspace not found")
+
+        async def load_usage():
+            return await asyncio.gather(
+                get_workspace_total_size(workspace.id, ctx.org_id, ctx.team_id),
+                count_workspace_files(
+                    workspace.id,
+                    organization_id=ctx.org_id,
+                    team_id=ctx.team_id,
+                ),
+                get_workspace_storage_limit_bytes(ctx.user_id),
+            )
+
+        used_bytes, file_count, limit_bytes = await guard.run(load_usage())
 
     return StorageUsageResponse(
         used_bytes=used_bytes,
@@ -489,6 +573,8 @@ def _to_file_item(
         metadata=f.metadata or {},
         origin=_derive_origin(f.metadata),
         created_at=f.created_at.isoformat(),
+        organization_id=f.organization_id,
+        team_id=f.team_id,
         expert_id=(
             expert_by_session.get(session_id_of_file) if session_id_of_file else None
         ),
@@ -502,7 +588,7 @@ def _to_file_item(
     responses={400: {"description": "Conflicting filters"}},
 )
 async def list_workspace_files(
-    user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
     session_id: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
@@ -611,8 +697,13 @@ async def list_workspace_files(
             detail="include_user_files requires expert_id",
         )
 
-    workspace = await get_or_create_workspace(user_id)
-    manager = WorkspaceManager(user_id, workspace.id, session_id)
+    workspace = await get_or_create_workspace(ctx.user_id)
+    manager = _manager(
+        ctx,
+        workspace.id,
+        session_id=session_id,
+        access="view",
+    )
     include_all = session_id is None
 
     # Origin → metadata filter. Uploads carry an exact ``{"origin":
@@ -644,17 +735,22 @@ async def list_workspace_files(
     if expert_id is not None:
         # Fails closed: an unowned or archived expert resolves to no sessions
         # and no user-file grant, so every branch of the filter matches nothing.
-        scope = await resolve_expert_workspace_scope(user_id, expert_id)
+        scope = await resolve_expert_workspace_scope(ctx.user_id, expert_id)
         list_kwargs["allowed_path_prefixes"] = [
             session_path_prefix(sid) for sid in scope.session_ids
         ]
         list_kwargs["include_user_files"] = (
             include_user_files and scope.reads_user_files
         )
-    files = await manager.list_files(**list_kwargs)
+    try:
+        files = await manager.list_files(**list_kwargs)
+    except LiveResourceAccessRevoked as exc:
+        raise fastapi.HTTPException(
+            status_code=404, detail="Workspace not found"
+        ) from exc
     has_more = len(files) > limit
     page = files[:limit]
-    expert_by_session = await _expert_ids_by_session(user_id, page)
+    expert_by_session = await _expert_ids_by_session(ctx.user_id, page)
 
     return ListFilesResponse(
         files=[_to_file_item(f, expert_by_session) for f in page],

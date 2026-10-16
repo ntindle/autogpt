@@ -3,6 +3,7 @@
 from typing import Any
 
 from backend.copilot.model import ChatSession
+from backend.data.tenancy import ResourceAccess
 
 from .agent_generator import get_agent_as_json
 from .agent_json_input import write_agent_json_to_workspace
@@ -86,6 +87,10 @@ class FindLibraryAgentTool(BaseTool):
     @property
     def requires_auth(self) -> bool:
         return True
+
+    @property
+    def resource_access(self) -> ResourceAccess:
+        return "view"
 
     async def _execute(
         self,
@@ -182,6 +187,8 @@ class FindLibraryAgentTool(BaseTool):
                 goal_summary=goal_summary,
                 session_id=session.session_id,
                 user_id=user_id,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
             )
         write_graph_to = write_graph_to.strip()
         if write_graph_to and not agent_id.strip():
@@ -199,10 +206,15 @@ class FindLibraryAgentTool(BaseTool):
                 session_id=session.session_id,
                 user_id=user_id,
                 include_graph=include_graph and not write_graph_to,
+                organization_id=session.organization_id,
+                team_id=session.team_id,
             )
             if write_graph_to and isinstance(result, AgentsFoundResponse):
                 note = await _write_graph_note(
-                    agent_id, write_graph_to, user_id, session.session_id
+                    agent_id,
+                    write_graph_to,
+                    user_id,
+                    session,
                 )
                 result.message = f"{result.message}\n\n{note.strip()}"
             return result
@@ -212,6 +224,8 @@ class FindLibraryAgentTool(BaseTool):
             session_id=session.session_id,
             user_id=user_id,
             include_graph=include_graph,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
         )
 
 
@@ -231,7 +245,10 @@ def _install_candidates(agents: list[AgentInfo]) -> str:
 
 
 async def _write_graph_note(
-    agent_id: str, write_to: str, user_id: str | None, session_id: str | None
+    agent_id: str,
+    write_to: str,
+    user_id: str | None,
+    session: ChatSession,
 ) -> str:
     """Write the agent's graph to a workspace file; return the message note.
 
@@ -241,7 +258,13 @@ async def _write_graph_note(
     to a note on that result, not replace it with a generic tool error.
     """
     try:
-        agent_json = await get_agent_as_json(agent_id, user_id)
+        agent_json = await get_agent_as_json(
+            agent_id,
+            user_id,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
+            exact_scope=True,
+        )
     except Exception:
         agent_json = None
     if agent_json is None:
@@ -253,7 +276,7 @@ async def _write_graph_note(
         agent_json,
         write_to,
         user_id,
-        session_id,
+        session.session_id,
         label="Workflow",
         pass_to="tool:edit_agent / tool:validate_agent_graph",
         fallback_note="retry with include_graph=true to inspect the graph inline.",

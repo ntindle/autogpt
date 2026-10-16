@@ -6,6 +6,7 @@ import { settingsNavItems } from "./helpers";
 export function useSettingsSidebar() {
   const pathname = usePathname();
   const isMemoryEnabled = useGetFlag(Flag.GRAPHITI_MEMORY);
+  const isOrgSettingsEnabled = useGetFlag(Flag.SHOW_ORG_SETTINGS);
   const isSkillLearningEnabled = useGetFlag(Flag.DREAM_SKILL_LEARNING_ENABLED);
   const isBillingEnabled = useIsBillingEnabled();
 
@@ -17,6 +18,9 @@ export function useSettingsSidebar() {
         isSkillLearningEnabled,
     )
     .filter((item) => item.href !== "/settings/billing" || isBillingEnabled)
+    .filter(
+      (item) => item.flag !== Flag.SHOW_ORG_SETTINGS || isOrgSettingsEnabled,
+    )
     .map((item) => ({
       ...item,
       isActive:

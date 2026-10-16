@@ -13,6 +13,11 @@ from backend.copilot.tools.graphiti_store import MemoryStoreTool
 from backend.copilot.tools.models import ErrorResponse, MemoryStoreResponse
 
 
+@pytest.fixture(autouse=True)
+def _enable_shared_memory_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "true")
+
+
 def _make_session(
     session_id: str = "test-session", *, expert_id: str | None = None
 ) -> ChatSession:
@@ -26,6 +31,25 @@ def _make_session(
         started_at=datetime.now(UTC),
         updated_at=datetime.now(UTC),
         expert_id=expert_id,
+    )
+
+
+def _org_session(
+    session_id: str = "test-session",
+    org_id: str | None = "org-1",
+    team_id: str | None = None,
+) -> ChatSession:
+    return ChatSession(
+        session_id=session_id,
+        user_id="test-user",
+        title=None,
+        messages=[],
+        usage=[],
+        credentials={},
+        started_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+        organization_id=org_id,
+        team_id=team_id,
     )
 
 
@@ -488,3 +512,258 @@ class TestMemoryStoreTool:
         assert isinstance(result, MemoryStoreResponse)
         envelope = json.loads(mock_enqueue.await_args.kwargs["episode_body"])
         assert envelope["scope"] == "project:crm"
+
+
+class TestMemoryStoreTierGovernance:
+    """Shared-tier writes route to the tier's group and land active or
+    tentative per the writer's role + the org hold-buffer setting."""
+
+    def _patches(
+        self,
+        *,
+        is_org_admin=None,
+        can_write_org_memory=None,
+        hold_buffer=None,
+        resolve_store_team=None,
+    ):
+        from contextlib import ExitStack
+
+        stack = ExitStack()
+
+        stack.enter_context(
+            patch(
+                "backend.copilot.tools.graphiti_store.is_enabled_for_user",
+                new_callable=AsyncMock,
+                return_value=True,
+            )
+        )
+        enqueue = stack.enter_context(
+            patch(
+                "backend.copilot.tools.graphiti_store.enqueue_episode",
+                new_callable=AsyncMock,
+                return_value=True,
+            )
+        )
+        if can_write_org_memory is not None:
+            stack.enter_context(
+                patch(
+                    "backend.copilot.tools.graphiti_store.can_write_org_memory",
+                    new_callable=AsyncMock,
+                    return_value=can_write_org_memory,
+                )
+            )
+        if is_org_admin is not None:
+            stack.enter_context(
+                patch(
+                    "backend.copilot.tools.graphiti_store.is_org_admin",
+                    new_callable=AsyncMock,
+                    return_value=is_org_admin,
+                )
+            )
+        if hold_buffer is not None:
+            stack.enter_context(
+                patch(
+                    "backend.copilot.tools.graphiti_store.hold_buffer_enabled",
+                    new_callable=AsyncMock,
+                    return_value=hold_buffer,
+                )
+            )
+        if resolve_store_team is not None:
+            stack.enter_context(
+                patch(
+                    "backend.copilot.tools.graphiti_store.resolve_store_team",
+                    resolve_store_team,
+                )
+            )
+        return stack, enqueue
+
+    @pytest.mark.asyncio
+    async def test_org_store_as_admin_lands_active(self) -> None:
+        tool = MemoryStoreTool()
+        stack, enqueue = self._patches(
+            is_org_admin=True, can_write_org_memory=True, hold_buffer=True
+        )
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(),
+                name="policy",
+                content="Refunds within 30 days.",
+                tier="org",
+            )
+
+        assert isinstance(result, MemoryStoreResponse)
+        kwargs = enqueue.await_args.kwargs
+        assert kwargs["group_id"] == "org_org-1"
+        assert kwargs["edge_metadata"]["status"] == "active"
+        envelope = json.loads(kwargs["episode_body"])
+        assert envelope["status"] == "active"
+        assert "queued for storage in org memory" in result.message
+
+    @pytest.mark.asyncio
+    async def test_org_store_non_member_rejected(self) -> None:
+        # A revoked/stale org membership must be blocked at the write path.
+        tool = MemoryStoreTool()
+        stack, enqueue = self._patches(can_write_org_memory=False, hold_buffer=True)
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(),
+                name="policy",
+                content="Refunds within 30 days.",
+                tier="org",
+            )
+
+        assert isinstance(result, ErrorResponse)
+        assert "resource access" in result.message
+        enqueue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_org_store_as_member_lands_tentative(self) -> None:
+        tool = MemoryStoreTool()
+        stack, enqueue = self._patches(
+            is_org_admin=False, can_write_org_memory=True, hold_buffer=True
+        )
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(),
+                name="policy",
+                content="Refunds within 30 days.",
+                tier="org",
+            )
+
+        assert isinstance(result, MemoryStoreResponse)
+        kwargs = enqueue.await_args.kwargs
+        assert kwargs["group_id"] == "org_org-1"
+        assert kwargs["edge_metadata"]["status"] == "tentative"
+        envelope = json.loads(kwargs["episode_body"])
+        assert envelope["status"] == "tentative"
+        assert "pending admin review" in result.message
+
+    @pytest.mark.asyncio
+    async def test_org_store_member_active_when_hold_buffer_disabled(self) -> None:
+        tool = MemoryStoreTool()
+        stack, enqueue = self._patches(
+            is_org_admin=False, can_write_org_memory=True, hold_buffer=False
+        )
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(),
+                name="policy",
+                content="Refunds within 30 days.",
+                tier="org",
+            )
+
+        assert isinstance(result, MemoryStoreResponse)
+        assert enqueue.await_args.kwargs["edge_metadata"]["status"] == "active"
+        assert "pending admin review" not in result.message
+
+    @pytest.mark.asyncio
+    async def test_org_store_without_org_context_errors(self) -> None:
+        tool = MemoryStoreTool()
+        stack, enqueue = self._patches(is_org_admin=True, hold_buffer=True)
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(org_id=None),
+                name="policy",
+                content="Refunds within 30 days.",
+                tier="org",
+            )
+
+        assert isinstance(result, ErrorResponse)
+        assert "organization" in result.message.lower()
+        enqueue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_team_store_as_team_admin_lands_active(self) -> None:
+        tool = MemoryStoreTool()
+        from types import SimpleNamespace
+
+        resolve = AsyncMock(
+            return_value=SimpleNamespace(team_id="team-1", is_admin=True)
+        )
+        stack, enqueue = self._patches(hold_buffer=True, resolve_store_team=resolve)
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(team_id="team-1"),
+                name="convention",
+                content="Deploys go out Tuesdays.",
+                tier="team",
+            )
+
+        assert isinstance(result, MemoryStoreResponse)
+        kwargs = enqueue.await_args.kwargs
+        assert kwargs["group_id"] == "team_team-1"
+        assert kwargs["edge_metadata"]["status"] == "active"
+        assert "queued for storage in team memory" in result.message
+
+    @pytest.mark.asyncio
+    async def test_team_store_as_non_admin_member_lands_tentative(self) -> None:
+        tool = MemoryStoreTool()
+        from types import SimpleNamespace
+
+        resolve = AsyncMock(
+            return_value=SimpleNamespace(team_id="team-1", is_admin=False)
+        )
+        stack, enqueue = self._patches(hold_buffer=True, resolve_store_team=resolve)
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(team_id="team-1"),
+                name="convention",
+                content="Deploys go out Tuesdays.",
+                tier="team",
+            )
+
+        assert isinstance(result, MemoryStoreResponse)
+        assert enqueue.await_args.kwargs["edge_metadata"]["status"] == "tentative"
+        assert "pending admin review" in result.message
+
+    @pytest.mark.asyncio
+    async def test_team_store_when_not_a_member_errors_clearly(self) -> None:
+        from backend.copilot.graphiti.tiers import TierError
+
+        tool = MemoryStoreTool()
+        resolve = AsyncMock(
+            side_effect=TierError(
+                "You are not an active member of the specified team, so you "
+                "cannot store to its team memory."
+            )
+        )
+        stack, enqueue = self._patches(hold_buffer=True, resolve_store_team=resolve)
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(team_id="team-1"),
+                name="convention",
+                content="Deploys go out Tuesdays.",
+                tier="team",
+            )
+
+        assert isinstance(result, ErrorResponse)
+        assert "not an active member" in result.message
+        enqueue.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_personal_tier_stamps_scope_metadata(self) -> None:
+        tool = MemoryStoreTool()
+        stack, enqueue = self._patches()
+        with stack:
+            result = await tool._execute(
+                user_id="user-1",
+                session=_org_session(org_id="org-1", team_id="team-1"),
+                name="pref",
+                content="likes python",
+            )
+
+        assert isinstance(result, MemoryStoreResponse)
+        kwargs = enqueue.await_args.kwargs
+        assert kwargs["group_id"] is None  # personal path
+        assert kwargs["edge_metadata"]["status"] == "active"
+        assert kwargs["edge_metadata"]["scope"] == "real:global"
+        assert kwargs["edge_metadata"]["source_kind"] == "user_asserted"
+        assert "queued for storage" in result.message

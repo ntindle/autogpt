@@ -263,9 +263,6 @@ async def test_manager_publishes_and_replaces_real_files_at_capacity(
             AsyncMock(return_value=1_000_000),
         ),
         patch("backend.util.workspace.scan_content_safe", AsyncMock()),
-        patch(
-            "backend.api.features.workspace.embeddings.schedule_workspace_file_embedding"
-        ),
     ):
         original = await manager.write_file(
             b"old", "SKILL.md", path="/skills/existing/SKILL.md", overwrite=True
@@ -425,6 +422,58 @@ async def live_paths(workspace_id: str, prefix: str) -> dict[str, str]:
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_package_replacement_preserves_other_team_files(workspace_id: str):
+    org = await db.prisma.organization.create(
+        data={"name": "Package scope", "slug": str(uuid.uuid4())}
+    )
+    try:
+        workspace = await db.prisma.userworkspace.find_unique(
+            where={"id": workspace_id}
+        )
+        assert workspace is not None
+        await db.prisma.orgmember.create(
+            data={"orgId": org.id, "userId": workspace.userId}
+        )
+        teams = [
+            await db.prisma.team.create(data={"orgId": org.id, "name": name})
+            for name in ("A", "B")
+        ]
+        originals = []
+        for team in teams:
+            await db.prisma.teammember.create(
+                data={"teamId": team.id, "userId": workspace.userId}
+            )
+            root = write(workspace_id, "shared-path").model_copy(
+                update={
+                    "organization_id": org.id,
+                    "team_id": team.id,
+                    "files": [sibling(workspace_id, "/skills/shared-path/helper.py")],
+                }
+            )
+            assert (await publish_workspace_skill_file(root)).status == "stored"
+            originals.append(root)
+        replacement = write(workspace_id, "shared-path").model_copy(
+            update={
+                "organization_id": org.id,
+                "team_id": teams[0].id,
+                "removed_paths": ["/skills/shared-path/helper.py"],
+            }
+        )
+        assert (await publish_workspace_skill_file(replacement)).status == "stored"
+        live = await db.prisma.userworkspacefile.find_many(
+            where={"workspaceId": workspace_id, "isDeleted": False}
+        )
+        assert {(row.id, row.teamId) for row in live} == {
+            (replacement.file_id, teams[0].id),
+            (originals[1].file_id, teams[1].id),
+            (originals[1].files[0].file_id, teams[1].id),
+        }
+        assert all(row.organizationId == org.id and row.scopeResolved for row in live)
+    finally:
+        await db.prisma.organization.delete(where={"id": org.id})
+
+
+@pytest.mark.asyncio(loop_scope="session")
 @pytest.mark.parametrize(
     "path",
     [
@@ -513,9 +562,6 @@ async def test_a_package_write_swaps_every_file_or_none(
             AsyncMock(return_value=1_000_000),
         ),
         patch("backend.util.workspace.scan_content_safe", AsyncMock()),
-        patch(
-            "backend.api.features.workspace.embeddings.schedule_workspace_file_embedding"
-        ),
         patch(
             "backend.api.features.workspace.embeddings.delete_workspace_file_embedding",
             AsyncMock(),

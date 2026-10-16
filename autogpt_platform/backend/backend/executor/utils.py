@@ -5,16 +5,18 @@ import threading
 import time
 from collections import defaultdict
 from concurrent.futures import Future
-from typing import Literal, Mapping, Optional, cast, get_args
+from typing import Any, Literal, Mapping, Optional, cast, get_args
 
 from prisma.enums import ReviewStatus
 from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from backend.api.features.experts import scheduling as experts_scheduling
+from backend.api.features.library import db as library_db
 from backend.blocks import get_block
 from backend.blocks._base import Block, BlockCostType, BlockSchema, BlockType
 from backend.copilot.rate_limit import UserPaywalledError, is_user_paywalled
 from backend.data import execution as execution_db
+from backend.data import grants as grants_db
 from backend.data import graph as graph_db
 from backend.data import human_review as human_review_db
 from backend.data import onboarding as onboarding_db
@@ -48,7 +50,10 @@ from backend.data.model import (
     NodeExecutionStats,
 )
 from backend.data.rabbitmq import Exchange, ExchangeType, Queue, RabbitMQConfig
-from backend.integrations.credentials_store import is_system_credential
+from backend.integrations.credentials_store import (
+    is_system_credential,
+    provider_matches,
+)
 from backend.monitoring.instrumentation import record_graph_execution
 from backend.util import product_analytics
 from backend.util.clients import (
@@ -61,6 +66,7 @@ from backend.util.exceptions import (
     ExpertNotFoundError,
     ExpertPrivateTenancyNotFoundError,
     GraphNotFoundError,
+    GraphNotInLibraryError,
     GraphValidationError,
     NotFoundError,
 )
@@ -406,6 +412,12 @@ CRED_ERR_INVALID_PREFIX = "Invalid credentials:"
 CRED_ERR_INVALID_TYPE_MISMATCH = "Invalid credentials: type/provider mismatch"
 CRED_ERR_NOT_AVAILABLE_PREFIX = "Credentials not available:"
 CRED_ERR_UNKNOWN_PREFIX = "Unknown credentials #"
+CRED_ERR_OWNER_REFERENCE_ONLY = (
+    "OWNER credential mode does not support runtime-managed credential references"
+)
+CRED_ERR_OWNER_UNSAFE_BLOCK = (
+    "OWNER credential mode is not allowed for blocks that execute user-controlled code"
+)
 
 # Markers used by ``is_credential_validation_error_message`` to classify a
 # message. Each entry is (match_mode, lowercased_marker) — "exact" means
@@ -420,6 +432,8 @@ _CREDENTIAL_ERROR_MARKERS: tuple[tuple[_MatchMode, str], ...] = (
     ("prefix", CRED_ERR_INVALID_PREFIX.lower()),
     ("prefix", CRED_ERR_NOT_AVAILABLE_PREFIX.lower()),
     ("prefix", CRED_ERR_UNKNOWN_PREFIX.lower()),
+    ("prefix", CRED_ERR_OWNER_REFERENCE_ONLY.lower()),
+    ("exact", CRED_ERR_OWNER_UNSAFE_BLOCK.lower()),
 )
 
 
@@ -451,10 +465,16 @@ async def _validate_node_input_credentials(
     graph: GraphModel,
     user_id: str,
     nodes_input_masks: Optional[NodesInputMasks] = None,
+    credentials_owner_id: Optional[str] = None,
 ) -> tuple[dict[str, dict[str, str]], set[str]]:
     """
     Checks all credentials for all nodes of the graph and returns structured errors
     and a set of nodes that should be skipped due to optional missing credentials.
+
+    When ``credentials_owner_id`` is set (OWNER-mode grant run), the graph's own
+    stored credential references validate against that user's (the graph owner's)
+    store instead of the executing ``user_id``, mirroring execution-time
+    resolution so validation doesn't reject credentials the run can actually use.
 
     Returns:
         tuple[
@@ -473,6 +493,17 @@ async def _validate_node_input_credentials(
         auto_credentials_fields = block.input_schema.get_auto_credentials_fields()
         if not credentials_fields and not auto_credentials_fields:
             continue
+        if credentials_owner_id and not block.allow_owner_credentials:
+            credential_errors[node.id]["credentials"] = CRED_ERR_OWNER_UNSAFE_BLOCK
+            continue
+
+        # Field-bound OWNER references. A credential id is trusted only for the
+        # exact field in which the graph owner baked it.
+        owner_references = (
+            owner_referenced_credentials(node.input_default, block.input_schema)
+            if credentials_owner_id
+            else {}
+        )
 
         # Track if any credential field is missing for this node
         has_missing_credentials = False
@@ -500,14 +531,30 @@ async def _validate_node_input_credentials(
         credentials_fields_info = block.input_schema.get_credentials_fields_info()
 
         for field_name, credentials_meta_type in credentials_fields.items():
-            reference_only = credentials_fields_info[
-                field_name
-            ].credential_reference_only
+            field_info = credentials_fields_info[field_name]
+            reference_only = field_info.credential_reference_only
             field_is_optional = is_creds_optional or field_name not in required_fields
+            if field_info.discriminator and field_name not in required_fields:
+                discriminator_value = node.input_default.get(field_info.discriminator)
+                if (
+                    nodes_input_masks
+                    and (node_input_mask := nodes_input_masks.get(node.id))
+                    and field_info.discriminator in node_input_mask
+                ):
+                    discriminator_value = node_input_mask[field_info.discriminator]
+                if not field_info.requires_credentials(discriminator_value):
+                    continue
             try:
-                # Check nodes_input_masks first, then input_default
+                # A baked OWNER reference is authoritative for this exact field.
+                # Fields without one retain the normal consumer override path.
                 field_value = None
                 if (
+                    credentials_owner_id
+                    and field_name in owner_references
+                    and field_name in node.input_default
+                ):
+                    field_value = node.input_default[field_name]
+                elif (
                     nodes_input_masks
                     and (node_input_mask := nodes_input_masks.get(node.id))
                     and field_name in node_input_mask
@@ -516,7 +563,7 @@ async def _validate_node_input_credentials(
                 elif field_name in node.input_default:
                     # For optional credentials, don't use input_default - treat as missing
                     # This prevents stale credential IDs from failing validation
-                    if field_is_optional:
+                    if field_is_optional and field_name not in owner_references:
                         field_value = None
                     else:
                         field_value = node.input_default[field_name]
@@ -537,6 +584,16 @@ async def _validate_node_input_credentials(
 
                 credentials_meta = credentials_meta_type.model_validate(field_value)
 
+                if (
+                    credentials_owner_id
+                    and field_name in owner_references
+                    and reference_only
+                ):
+                    credential_errors[node.id][
+                        field_name
+                    ] = CRED_ERR_OWNER_REFERENCE_ONLY
+                    continue
+
             except ValidationError as e:
                 # Validation error means credentials were provided but invalid
                 # This should always be an error, even if optional
@@ -546,9 +603,17 @@ async def _validate_node_input_credentials(
                 continue
 
             try:
-                # Fetch the corresponding Credentials and perform sanity checks
+                # Fetch the corresponding Credentials and perform sanity checks.
+                # OWNER mode resolves the graph's own referenced ids against the
+                # owner's store; anything else against the executing user.
+                resolve_user_id = (
+                    credentials_owner_id
+                    if credentials_owner_id
+                    and owner_references.get(field_name) == credentials_meta.id
+                    else user_id
+                )
                 credentials = await get_integration_credentials_store().get_creds_by_id(
-                    user_id, credentials_meta.id
+                    resolve_user_id, credentials_meta.id
                 )
             except Exception as e:
                 # Handle any errors fetching credentials
@@ -589,12 +654,16 @@ async def _validate_node_input_credentials(
                 field_is_optional = is_creds_optional or _is_optional_picker(
                     block.input_schema, field_name
                 )
-                # Check input_default and nodes_input_masks for the field value
-                field_value = node.input_default.get(field_name)
-                if nodes_input_masks and node.id in nodes_input_masks:
+                # A baked OWNER picker is authoritative as a whole (credential
+                # and resource id). Other picker fields may use consumer masks.
+                if credentials_owner_id and field_name in owner_references:
+                    field_value = node.input_default.get(field_name)
+                elif nodes_input_masks and node.id in nodes_input_masks:
                     field_value = nodes_input_masks[node.id].get(
-                        field_name, field_value
+                        field_name, node.input_default.get(field_name)
                     )
+                else:
+                    field_value = node.input_default.get(field_name)
 
                 if field_value is None:
                     # Sentry HIGH: an explicitly-None value (e.g. cleared by
@@ -669,7 +738,15 @@ async def _validate_node_input_credentials(
                         continue
                     try:
                         creds_store = get_integration_credentials_store()
-                        creds = await creds_store.get_creds_by_id(user_id, cred_id)
+                        resolve_user_id = (
+                            credentials_owner_id
+                            if credentials_owner_id
+                            and owner_references.get(field_name) == cred_id
+                            else user_id
+                        )
+                        creds = await creds_store.get_creds_by_id(
+                            resolve_user_id, cred_id
+                        )
                     except Exception as e:
                         if field_is_optional:
                             _mark_optional_skip()
@@ -690,6 +767,20 @@ async def _validate_node_input_credentials(
                             "(it was removed, or it belongs to someone else). "
                             "Please select the file again with your own account."
                         )
+                        continue
+                    expected_provider = info.get("config", {}).get("provider")
+                    if expected_provider and not provider_matches(
+                        creds.provider, expected_provider
+                    ):
+                        credential_errors[node.id][
+                            field_name
+                        ] = CRED_ERR_INVALID_TYPE_MISMATCH
+                        continue
+                    expected_type = info.get("config", {}).get("type")
+                    if expected_type and creds.type != expected_type:
+                        credential_errors[node.id][
+                            field_name
+                        ] = CRED_ERR_INVALID_TYPE_MISMATCH
 
         # If node has optional credentials and any are missing, skip the
         # node so the executor doesn't try to execute it with None creds.
@@ -707,6 +798,37 @@ async def _validate_node_input_credentials(
             nodes_to_skip.add(node.id)
 
     return credential_errors, nodes_to_skip
+
+
+def owner_referenced_credentials(
+    input_default: Mapping[str, Any],
+    input_model: type[BlockSchema],
+) -> dict[str, str]:
+    """Field-to-credential mapping baked into a graph node.
+
+    Collected from the owner's baked ``input_default`` — both regular
+    ``CredentialsMetaInput`` fields (``id``) and auto-credential file fields
+    (``_credentials_id``). Used as an allowlist so OWNER-mode credential
+    Keeping the field name bound to the id prevents a consumer from moving a
+    visible owner credential id into another picker field.
+    """
+    references: dict[str, str] = {}
+    for field_name in input_model.get_credentials_fields():
+        value = input_default.get(field_name)
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("id"), str)
+            and value["id"].strip()
+        ):
+            references[field_name] = value["id"]
+    for info in input_model.get_auto_credentials_fields().values():
+        field_name = info["field_name"]
+        value = input_default.get(field_name)
+        if isinstance(value, dict):
+            cred_id = value.get("_credentials_id")
+            if isinstance(cred_id, str) and cred_id.strip():
+                references[field_name] = cred_id
+    return references
 
 
 def _is_optional_picker(input_schema: type[BlockSchema], field_name: str) -> bool:
@@ -770,10 +892,15 @@ async def validate_graph_with_credentials(
     graph: GraphModel,
     user_id: str,
     nodes_input_masks: Optional[NodesInputMasks] = None,
+    credentials_owner_id: Optional[str] = None,
 ) -> tuple[Mapping[str, Mapping[str, str]], set[str]]:
     """
     Validate graph including credentials and return structured errors per node,
     along with a set of nodes that should be skipped due to optional missing credentials.
+
+    ``credentials_owner_id`` (OWNER-mode grant) validates the graph's own
+    credential references against the graph owner's store — see
+    :func:`_validate_node_input_credentials`.
 
     Returns:
         tuple[
@@ -790,7 +917,9 @@ async def validate_graph_with_credentials(
     (
         node_credential_input_errors,
         nodes_to_skip,
-    ) = await _validate_node_input_credentials(graph, user_id, nodes_input_masks)
+    ) = await _validate_node_input_credentials(
+        graph, user_id, nodes_input_masks, credentials_owner_id
+    )
 
     # Merge credential errors with structural errors
     for node_id, field_errors in node_credential_input_errors.items():
@@ -807,6 +936,7 @@ async def _construct_starting_node_execution_input(
     graph_inputs: GraphInput,
     nodes_input_masks: Optional[NodesInputMasks] = None,
     dry_run: bool = False,
+    credentials_owner_id: Optional[str] = None,
 ) -> tuple[list[tuple[str, BlockInput]], set[str]]:
     """
     Validates and prepares the input data for executing a graph.
@@ -830,7 +960,7 @@ async def _construct_starting_node_execution_input(
     """
     # Use new validation function that includes credentials
     validation_errors, nodes_to_skip = await validate_graph_with_credentials(
-        graph, user_id, nodes_input_masks
+        graph, user_id, nodes_input_masks, credentials_owner_id
     )
     # Dry runs simulate every block — missing credentials are irrelevant.
     # Strip credential-only errors so the graph can proceed.
@@ -913,6 +1043,9 @@ async def validate_and_construct_node_execution_input(
     nodes_input_masks: Optional[NodesInputMasks] = None,
     is_sub_graph: bool = False,
     dry_run: bool = False,
+    credentials_owner_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
+    team_id_restriction: Optional[str] = None,
 ) -> tuple[GraphModel, list[tuple[str, BlockInput]], NodesInputMasks, set[str]]:
     """
     Public wrapper that handles graph fetching, credential mapping, and validation+construction.
@@ -925,6 +1058,11 @@ async def validate_and_construct_node_execution_input(
         graph_version: The version of the graph to use.
         graph_credentials_inputs: Credentials inputs to use.
         nodes_input_masks: Node inputs to use.
+        credentials_owner_id: When set (OWNER-mode grant run), the run resolves
+            the graph's own stored credential references against this user's
+            (the graph owner's) store. Consumer-supplied ``graph_credentials_inputs``
+            are ignored so the consumer cannot substitute/redirect credentials;
+            validation is done against the owner's store to match execution.
 
     Returns:
         GraphModel: Full graph object for the given `graph_id`.
@@ -961,12 +1099,20 @@ async def validate_and_construct_node_execution_input(
         graph_id=graph.id,
         graph_version=graph.version,
         is_sub_graph=is_sub_graph,
+        organization_id=organization_id,
+        team_id_restriction=team_id_restriction,
     )
 
+    # In OWNER mode the graph runs on its owner's stored credentials, so any
+    # consumer-supplied credential inputs are dropped — they must not be able
+    # to substitute credentials or redirect resolution into the owner's store.
+    effective_credentials_inputs = (
+        None if credentials_owner_id else graph_credentials_inputs
+    )
     nodes_input_masks = _merge_nodes_input_masks(
         (
-            make_node_credentials_input_map(graph, graph_credentials_inputs)
-            if graph_credentials_inputs
+            make_node_credentials_input_map(graph, effective_credentials_inputs)
+            if effective_credentials_inputs
             else {}
         ),
         nodes_input_masks or {},
@@ -981,6 +1127,7 @@ async def validate_and_construct_node_execution_input(
         graph_inputs=graph_inputs,
         nodes_input_masks=nodes_input_masks,
         dry_run=dry_run,
+        credentials_owner_id=credentials_owner_id,
     )
 
     return graph, starting_nodes_input, nodes_input_masks, nodes_to_skip
@@ -1113,8 +1260,13 @@ async def stop_graph_execution(
         wait_timeout: Maximum time to wait for execution to stop (seconds)
         cascade: If True, recursively stop all child executions
     """
-    queue_client = await get_async_execution_queue()
     db = execution_db if prisma.is_connected() else get_database_manager_async_client()
+    graph_exec = await db.get_graph_execution_meta(
+        execution_id=graph_exec_id, user_id=user_id
+    )
+    if not graph_exec:
+        raise NotFoundError(f"Graph execution #{graph_exec_id} not found.")
+    queue_client = await get_async_execution_queue()
 
     # First, find and stop all child executions if cascading
     if cascade:
@@ -1225,6 +1377,33 @@ async def _resolve_expert_execution_tenancy(
     user_id: str, expert_id: str
 ) -> tuple[str, str | None]:
     return await get_experts_db().resolve_private_expert_tenancy(user_id, expert_id)
+
+
+async def _resolve_persisted_execution_root(
+    execution_store: Any,
+    user_id: str,
+    graph_exec: GraphExecutionMeta,
+) -> str:
+    """Walk persisted parents to the root, rejecting gaps and cycles."""
+    current = graph_exec
+    visited: set[str] = set()
+    while True:
+        if current.id in visited:
+            raise ValueError(f"Cycle detected in execution hierarchy at #{current.id}")
+        visited.add(current.id)
+        if current.parent_execution_id is None:
+            return current.id
+        parent = await execution_store.get_graph_execution(
+            user_id=user_id,
+            execution_id=current.parent_execution_id,
+            include_node_executions=False,
+        )
+        if parent is None:
+            raise ValueError(
+                f"Execution #{current.id} references missing parent "
+                f"#{current.parent_execution_id}"
+            )
+        current = parent
 
 
 async def _enforce_expert_credential_scope(
@@ -1422,12 +1601,35 @@ async def _add_graph_execution(
 
     if prisma.is_connected():
         edb = execution_db
+        ldb = library_db
         udb = user_db
         gdb = graph_db
         odb = onboarding_db
         wdb = workspace_db
     else:
-        edb = udb = gdb = odb = wdb = get_database_manager_async_client()
+        edb = ldb = udb = gdb = odb = wdb = get_database_manager_async_client()
+
+    # ``resolve_execution_credentials_owner`` lives in backend.data.grants (not
+    # backend.data.graph), so call it directly in-process; the DB-manager client
+    # re-exports it for the executor (out-of-process) path.
+    resolve_credentials_owner = (
+        grants_db.resolve_execution_credentials_owner
+        if prisma.is_connected()
+        else get_database_manager_async_client().resolve_execution_credentials_owner
+    )
+
+    # OWNER-mode credential resolution: does this run execute on the graph
+    # OWNER's credentials (consumer reaches it only via an OWNER-mode grant)?
+    # Resolved here for validation/queueing and revalidated by the executor at
+    # every node before any owner credential is touched.
+    # Only top-level runs qualify; sub-graphs (``parent_execution_id`` set) run
+    # in CONSUMER mode (see credential-mode notes in ``resolve_execution_credentials_owner``).
+    parent_exec_id = (
+        execution_context.parent_execution_id if execution_context else None
+    )
+    root_exec_id = execution_context.root_execution_id if execution_context else None
+    credentials_owner_id: Optional[str] = None
+    credentials_grant_id: Optional[str] = None
 
     # Get or create the graph execution
     if graph_exec_id:
@@ -1448,6 +1650,21 @@ async def _add_graph_execution(
             or await _started_from_attended_chat(graph_exec, user_id, edb)
         )
 
+        if graph_id != graph_exec.graph_id:
+            raise ValueError(
+                f"Graph #{graph_id} does not match persisted execution "
+                f"#{graph_exec.id} graph #{graph_exec.graph_id}"
+            )
+        if graph_version is not None and graph_version != graph_exec.graph_version:
+            raise ValueError(
+                f"Graph version {graph_version} does not match persisted execution "
+                f"#{graph_exec.id} version {graph_exec.graph_version}"
+            )
+        graph_id = graph_exec.graph_id
+        graph_version = graph_exec.graph_version
+        parent_exec_id = graph_exec.parent_execution_id
+        root_exec_id = await _resolve_persisted_execution_root(edb, user_id, graph_exec)
+
         # The persisted row is authoritative on resume. A caller cannot turn
         # an Otto run into an expert run or swap one expert for another.
         if expert_id is not None and expert_id != graph_exec.expert_id:
@@ -1455,6 +1672,20 @@ async def _add_graph_execution(
                 f"Expert scope does not match graph execution #{graph_exec.id}"
             )
         expert_id = graph_exec.expert_id
+
+        if expert_id is None:
+            if organization_id is not None and (
+                organization_id != graph_exec.organization_id
+            ):
+                raise ValueError(
+                    f"Organization scope does not match graph execution #{graph_exec.id}"
+                )
+            if team_id is not None and team_id != graph_exec.team_id:
+                raise ValueError(
+                    f"Team scope does not match graph execution #{graph_exec.id}"
+                )
+            organization_id = graph_exec.organization_id
+            team_id = graph_exec.team_id
 
         # A resumed expert execution respects the pause/budget gate too;
         # bypass_paywall marks admin recovery, which stays exempt.
@@ -1505,6 +1736,20 @@ async def _add_graph_execution(
         # TODO: Consider storing nodes_to_skip in DB if we need to preserve it across resumes
         nodes_to_skip: set[str] = set()
 
+        # Re-resolve OWNER credential mode on resume too (re-checks live team
+        # membership) so a consumer who lost access can't resume onto the
+        # owner's credentials. The persisted masks already exclude consumer
+        # credential overrides from the original OWNER-mode run.
+        if parent_exec_id is None:
+            owner_info = await resolve_credentials_owner(
+                user_id=user_id,
+                graph_id=graph_id,
+                graph_version=graph_exec.graph_version,
+                team_id_restriction=team_id,
+            )
+            if owner_info:
+                credentials_owner_id, credentials_grant_id = owner_info
+
         logger.info(f"Resuming graph execution #{graph_exec.id} for graph #{graph_id}")
     else:
         if expert_id:
@@ -1516,14 +1761,59 @@ async def _add_graph_execution(
                 user_id, expert_id, graph_credentials_inputs
             )
 
+        if not organization_id and team_id is None:
+            if parent_exec_id is not None:
+                parent = await edb.get_graph_execution(
+                    user_id=user_id,
+                    execution_id=parent_exec_id,
+                    include_node_executions=False,
+                )
+                if parent is not None and parent.organization_id:
+                    organization_id, team_id = (
+                        parent.organization_id,
+                        parent.team_id,
+                    )
+            elif preset_id is not None:
+                preset = await ldb.get_preset(user_id, preset_id)
+                if (
+                    preset is not None
+                    and preset.graph_id == graph_id
+                    and (graph_version is None or preset.graph_version == graph_version)
+                    and preset.organization_id is not None
+                ):
+                    organization_id, team_id = (
+                        preset.organization_id,
+                        preset.team_id,
+                    )
+            if not organization_id:
+                resolved_scope = await ldb.resolve_unique_library_agent_scope(
+                    user_id,
+                    graph_id,
+                    graph_version,
+                )
+                if resolved_scope is None:
+                    raise GraphNotInLibraryError(
+                        f"Graph #{graph_id} has no unique execution tenant"
+                    )
+                organization_id, team_id = resolved_scope
+
         parent_exec_id = (
             execution_context.parent_execution_id if execution_context else None
         )
-
         # When execution_context is provided (e.g. from AgentExecutorBlock),
         # inherit dry_run so child-graph validation skips credential checks.
         if execution_context and execution_context.dry_run:
             dry_run = True
+
+        if parent_exec_id is None:
+            owner_info = await resolve_credentials_owner(
+                user_id=user_id,
+                graph_id=graph_id,
+                graph_version=graph_version,
+                team_id_restriction=team_id,
+            )
+            if owner_info:
+                credentials_owner_id, credentials_grant_id = owner_info
 
         # Create new execution
         (
@@ -1540,40 +1830,22 @@ async def _add_graph_execution(
             nodes_input_masks=nodes_input_masks,
             is_sub_graph=parent_exec_id is not None,
             dry_run=dry_run,
+            credentials_owner_id=credentials_owner_id,
+            organization_id=organization_id,
+            team_id_restriction=team_id,
         )
 
-        # Tenant a NEW execution at creation: several callers arrive with a
-        # falsy organization_id — legacy schedules (empty organizationId),
-        # sub-graphs inheriting an untenanted parent's ExecutionContext (see
-        # AgentExecutorBlock), or any caller that omits tenancy. Resolve the
-        # user's default org/team so create_graph_execution gets a non-null
-        # value and the ExecutionContext built below inherits it.
-        #
-        # CREATE path only — resume/requeue backfills org/team from the
-        # persisted row (the graph_exec_id branch above and the
-        # execution_context backfill below), so re-resolving here would risk
-        # re-tenanting an existing row under a different org.
-        #
-        # Only resolve when NEITHER field was supplied — never overwrite an
-        # explicit team_id. resolve_default_tenancy is best-effort: an
-        # unresolvable org or a raised lookup yields (None, None) and the row
-        # is created untenanted rather than crashing the run.
-        if not organization_id and not team_id:
-            from backend.api.features.orgs.db import resolve_default_tenancy
-
-            # add_graph_execution runs in both the API server (direct prisma)
-            # and the scheduler/executor (no prisma — DB access via the RPC
-            # client). Dispatch the resolver the same way every other DB dep in
-            # this function does, or it silently no-ops in the scheduler
-            # process — exactly where scheduled executions are created.
-            resolve = (
-                resolve_default_tenancy
-                if prisma.is_connected()
-                else get_database_manager_async_client().resolve_default_tenancy
+        if parent_exec_id is not None:
+            parent = await edb.get_graph_execution(
+                user_id=user_id,
+                execution_id=parent_exec_id,
+                include_node_executions=False,
             )
-            default_org_id, default_team_id = await resolve(user_id)
-            if default_org_id:
-                organization_id, team_id = default_org_id, default_team_id
+            if parent is None:
+                raise ValueError(
+                    f"New execution references missing parent #{parent_exec_id}"
+                )
+            root_exec_id = await _resolve_persisted_execution_root(edb, user_id, parent)
 
         graph_exec = await edb.create_graph_execution(
             user_id=user_id,
@@ -1594,6 +1866,9 @@ async def _add_graph_execution(
             schedule_id=schedule_id,
             webhook_id=webhook_id,
         )
+
+        if parent_exec_id is None:
+            root_exec_id = graph_exec.id
 
         logger.info(
             f"Created graph execution #{graph_exec.id} for graph "
@@ -1624,6 +1899,8 @@ async def _add_graph_execution(
             user_id=user_id,
             graph_id=graph_id,
             graph_version=graph_exec.graph_version,
+            organization_id=graph_exec.organization_id,
+            team_id=graph_exec.team_id,
         )
         workspace = await wdb.get_or_create_workspace(user_id)
 
@@ -1642,7 +1919,8 @@ async def _add_graph_execution(
                 user.timezone if user.timezone != USER_TIMEZONE_NOT_SET else "UTC"
             ),
             # Execution hierarchy
-            root_execution_id=graph_exec.id,
+            root_execution_id=root_exec_id,
+            parent_execution_id=parent_exec_id,
             # File-storage workspace (UserWorkspace) — enables
             # workspace:// file resolution in blocks. Distinct from the
             # org/team tenancy ``team_id`` field on ExecutionContext.
@@ -1661,6 +1939,9 @@ async def _add_graph_execution(
             # Same recovery rule as org/team: explicit param on create,
             # persisted row on resume/requeue.
             expert_id=expert_id or graph_exec.expert_id,
+            # OWNER-mode credential resolution (None for normal runs).
+            credentials_owner_id=credentials_owner_id,
+            credentials_grant_id=credentials_grant_id,
         )
     elif expert_id:
         # Expert tenancy is authoritative even for caller-supplied contexts.
@@ -1668,20 +1949,52 @@ async def _add_graph_execution(
         # into a shared organization.
         execution_context = execution_context.model_copy(
             update={
+                "user_id": user_id,
+                "graph_id": graph_id,
+                "graph_exec_id": graph_exec.id,
+                "graph_version": graph_exec.graph_version,
+                "root_execution_id": root_exec_id,
                 "organization_id": organization_id,
                 "team_id": team_id,
                 "expert_id": expert_id,
+                "parent_execution_id": parent_exec_id,
+                "credentials_owner_id": credentials_owner_id,
+                "credentials_grant_id": credentials_grant_id,
             }
         )
-    elif execution_context.organization_id is None and graph_exec.organization_id:
-        # A caller-supplied context (e.g. review-resume, admin-requeue) may
-        # be built before org/team are known. Backfill from the persisted
-        # row so billing and sub-graph runs aren't tenant-blind on resume.
-        execution_context = execution_context.model_copy(
-            update={
-                "organization_id": graph_exec.organization_id,
-                "team_id": graph_exec.team_id,
-            }
+    else:
+        # A caller-supplied context (e.g. review-resume, sub-graph via
+        # AgentExecutorBlock, admin-requeue) is reused. Backfill org/team, and
+        # set the credential owner from THIS resolution — never inherit it from
+        # a parent context. Sub-graphs (parent_execution_id set) always run in
+        # CONSUMER mode; top-level resumes use the value re-resolved above.
+        context_updates: dict[str, Any] = {
+            "user_id": user_id,
+            "graph_id": graph_id,
+            "graph_exec_id": graph_exec.id,
+            "graph_version": graph_exec.graph_version,
+            "root_execution_id": root_exec_id,
+            "parent_execution_id": parent_exec_id,
+            "credentials_owner_id": (
+                None if parent_exec_id is not None else credentials_owner_id
+            ),
+            "credentials_grant_id": (
+                None if parent_exec_id is not None else credentials_grant_id
+            ),
+        }
+        if execution_context.organization_id is None and graph_exec.organization_id:
+            context_updates["organization_id"] = graph_exec.organization_id
+            context_updates["team_id"] = graph_exec.team_id
+        execution_context = execution_context.model_copy(update=context_updates)
+
+    # Audit: record when a run engages OWNER-mode credentials. No secrets —
+    # only ids — so this is safe to emit at info level for every such run.
+    if execution_context.credentials_owner_id:
+        logger.info(
+            "OWNER-mode credentials engaged for execution "
+            f"#{graph_exec.id}: graph #{graph_id} runs on owner "
+            f"#{execution_context.credentials_owner_id}'s credentials via grant "
+            f"#{credentials_grant_id}; executed by consumer #{user_id}"
         )
 
     if pause_irreversible_actions:

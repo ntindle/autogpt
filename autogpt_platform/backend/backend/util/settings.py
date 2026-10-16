@@ -539,6 +539,11 @@ class Config(UpdateTrackingModel["Config"], BaseSettings):
         "private_user_data_bucket.",
     )
 
+    media_storage_dir: str = Field(
+        default="",
+        description="Local media directory used when GCS is not configured",
+    )
+
     public_site_media_bucket: str = Field(
         default="",
         description="GCS bucket for approved marketplace media and OAuth app logos",

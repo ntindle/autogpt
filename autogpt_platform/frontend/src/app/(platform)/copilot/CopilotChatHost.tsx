@@ -44,6 +44,8 @@ function ChatHostBody({
 }: Props & { isStreamRuntime: boolean }) {
   const {
     sessionId,
+    sessionOrganizationId,
+    sessionTeamId,
     messages,
     status,
     error,
@@ -83,6 +85,10 @@ function ChatHostBody({
     isResolvingExpertIdentity,
     isAdoptingExpertSession,
     isKickoffStarting,
+    createTeamId,
+    setCreateTeamId,
+    isTeamContextReady,
+    canSelectCreateTeam,
     followBackendTurn,
   } = useCopilotPage({ isStreamRuntime });
   const usage = useUsageExperience();
@@ -118,6 +124,8 @@ function ChatHostBody({
           status={status}
           error={error}
           sessionId={sessionId}
+          sessionOrganizationId={sessionOrganizationId}
+          sessionTeamId={sessionTeamId}
           sessionChatStatus={sessionChatStatus}
           sessionSentFrom={sessionSentFrom}
           sessionAutopilotMode={sessionAutopilotMode}
@@ -148,6 +156,10 @@ function ChatHostBody({
           isResolvingExpertIdentity={isResolvingExpertIdentity}
           isAdoptingExpertSession={isAdoptingExpertSession}
           isKickoffStarting={isKickoffStarting}
+          createTeamId={createTeamId}
+          onCreateTeamChange={setCreateTeamId}
+          isTeamContextReady={isTeamContextReady}
+          canSelectCreateTeam={canSelectCreateTeam}
           onBackendTurn={followBackendTurn}
           floatingControls={floatingControls}
         />

@@ -8,6 +8,11 @@ import * as Sentry from "@sentry/nextjs";
 import { getSystemHeaders } from "@/lib/impersonation";
 import { getDatafastAttribution } from "@/services/analytics/datafast-attribution";
 import { environment } from "@/services/environment";
+import {
+  getOrgContextHeaders,
+  ORG_HEADER_NAME,
+  TEAM_HEADER_NAME,
+} from "@/services/org-team/headers";
 import { transformDates } from "./date-transformer";
 import {
   fetchWithFailureLog,
@@ -72,6 +77,24 @@ export const customMutator = async <
     ...((requestOptions.headers as Record<string, string>) || {}),
   };
 
+  // A create flow can pin an explicit team (X-Team-Id: <id>) or force org-home
+  // scope (X-Team-Id: "" sentinel) via Orval's request options. The empty
+  // sentinel means "ignore the active-team context and create in org-home";
+  // strip it here so an empty value never reaches the backend on any path.
+  const requestHeaders = requestOptions.headers as
+    | Record<string, string>
+    | undefined;
+  const perRequestOrgId = requestHeaders?.[ORG_HEADER_NAME];
+  const perRequestTeamId = requestHeaders?.[TEAM_HEADER_NAME];
+  const forcePersonalScope = perRequestOrgId === "";
+  const forceOrgHome = perRequestTeamId === "";
+  if (forcePersonalScope) {
+    delete headers[ORG_HEADER_NAME];
+  }
+  if (forceOrgHome) {
+    delete headers[TEAM_HEADER_NAME];
+  }
+
   if (environment.isClientSide()) {
     const traceData = Sentry.getTraceData?.() ?? {};
     for (const [key, value] of Object.entries(traceData)) {
@@ -81,6 +104,22 @@ export const customMutator = async <
     }
     Object.assign(headers, getSystemHeaders());
     Object.assign(headers, getDatafastAttribution());
+    // Active org/team context — the backend scopes tenancy by these headers
+    // (personal-org fallback when absent).
+    Object.assign(headers, getOrgContextHeaders());
+    // A per-request team choice wins over the store-derived context: an
+    // explicit id pins that team; the org-home sentinel drops the team header
+    // so the create lands in org-home even when a team is active in the nav.
+    if (forcePersonalScope) {
+      delete headers[ORG_HEADER_NAME];
+    } else if (perRequestOrgId) {
+      headers[ORG_HEADER_NAME] = perRequestOrgId;
+    }
+    if (forceOrgHome) {
+      delete headers[TEAM_HEADER_NAME];
+    } else if (perRequestTeamId) {
+      headers[TEAM_HEADER_NAME] = perRequestTeamId;
+    }
   }
 
   const isFormData = data instanceof FormData;

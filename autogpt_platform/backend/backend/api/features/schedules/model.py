@@ -21,6 +21,16 @@ class ScheduleCreationRequest(pydantic.BaseModel):
         description="Attribute this schedule (and every run it fires) to a hired expert owned by the caller. If omitted, resolved automatically when exactly one active hired expert has this graph installed as a workflow.",
     )
 
+    team_id: Optional[str] = pydantic.Field(
+        default=None,
+        description=(
+            "Team to create the schedule under. Must be a team in the caller's "
+            "org that the caller is an active member of. Omit to use the "
+            "active team from the request context, falling back to the "
+            "scheduled agent's team."
+        ),
+    )
+
 
 class ScheduleUpdateRequest(pydantic.BaseModel):
     """Fields to change on an existing schedule; omitted fields keep their value."""

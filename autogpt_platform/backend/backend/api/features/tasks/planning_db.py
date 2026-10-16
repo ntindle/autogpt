@@ -230,6 +230,7 @@ async def accept_workspace_task_breakdown(
                 id=step.id,
                 user_id=user_id,
                 organization_id=task.organization_id,
+                team_id=task.team_id,
                 title=selection.title,
                 description=(
                     step.description

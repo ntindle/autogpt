@@ -1,7 +1,7 @@
 import { useOrgTeamStore } from "@/services/org-team/store";
 import { render, screen, waitFor } from "@/tests/integrations/test-utils";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { OrgTeamSwitcher } from "../OrgTeamSwitcher";
 
@@ -64,7 +64,12 @@ async function openSwitcher() {
 
 describe("OrgTeamSwitcher", () => {
   beforeEach(() => {
+    process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS = "true";
     window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS;
   });
 
   it("renders nothing before the org context has loaded", () => {
@@ -102,31 +107,39 @@ describe("OrgTeamSwitcher", () => {
     expect(screen.getAllByText(COMPANY_ORG.name).length).toBeGreaterThan(0);
     expect(screen.getByText(PERSONAL_ORG.name)).toBeDefined();
     expect(screen.getByText("Personal")).toBeDefined();
-    // "Create organization" is hidden until the org management frontend
-    // ships (PR1 is backend-only; /org/settings does not exist yet).
-    expect(screen.queryByText("Create organization")).toBeNull();
+    expect(screen.getByTestId("org-switcher-create")).toBeDefined();
+    expect(screen.getByTestId("org-switcher-manage")).toBeDefined();
   });
 
-  it("lists teams with a Private badge on invite-only teams", async () => {
+  it("hides the entire switcher with existing organizations when the flag is off", () => {
+    process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS = "false";
+    seedStore();
+    render(<OrgTeamSwitcher />);
+
+    expect(screen.queryByTestId("org-switcher-trigger")).toBeNull();
+    expect(screen.queryByText(COMPANY_ORG.name)).toBeNull();
+    expect(screen.queryByTestId("org-switcher-create")).toBeNull();
+    expect(screen.queryByTestId("org-switcher-manage")).toBeNull();
+  });
+
+  it("hides the entire switcher when the flag is unavailable", () => {
+    delete process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS;
+    seedStore();
+    render(<OrgTeamSwitcher />);
+
+    expect(screen.queryByTestId("org-switcher-trigger")).toBeNull();
+  });
+
+  it("does not render a team-switching section (teams are badges, not context)", async () => {
     seedStore();
     render(<OrgTeamSwitcher />);
 
     await openSwitcher();
 
-    expect(screen.getByText(DEFAULT_TEAM.name)).toBeDefined();
-    expect(screen.getByText(PRIVATE_TEAM.name)).toBeDefined();
-    expect(screen.getByText("Private")).toBeDefined();
-    expect(screen.getByText("Manage teams")).toBeDefined();
-  });
-
-  it("hides the team section when the org has no teams", async () => {
-    seedStore({ teams: [] });
-    render(<OrgTeamSwitcher />);
-
-    await openSwitcher();
-
     expect(screen.queryByText("Teams")).toBeNull();
-    expect(screen.queryByText("Manage teams")).toBeNull();
+    expect(screen.queryByText(DEFAULT_TEAM.name)).toBeNull();
+    expect(screen.queryByText(PRIVATE_TEAM.name)).toBeNull();
+    expect(screen.getByText("Manage organization")).toBeDefined();
   });
 
   it("switching org updates the store and resets the active team", async () => {
@@ -138,17 +151,9 @@ describe("OrgTeamSwitcher", () => {
 
     expect(useOrgTeamStore.getState().activeOrgID).toBe(PERSONAL_ORG.id);
     expect(useOrgTeamStore.getState().activeTeamID).toBeNull();
-  });
-
-  it("switching team updates the store without touching the active org", async () => {
-    seedStore();
-    render(<OrgTeamSwitcher />);
-
-    await openSwitcher();
-    await userEvent.click(screen.getByText(PRIVATE_TEAM.name));
-
-    expect(useOrgTeamStore.getState().activeTeamID).toBe(PRIVATE_TEAM.id);
-    expect(useOrgTeamStore.getState().activeOrgID).toBe(COMPANY_ORG.id);
+    await waitFor(() =>
+      expect(screen.queryByTestId("org-switcher-popover")).toBeNull(),
+    );
   });
 
   it("re-selecting the already-active org leaves state untouched", async () => {

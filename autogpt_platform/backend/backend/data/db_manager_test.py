@@ -1,4 +1,8 @@
-from .db_manager import DatabaseManager, DatabaseManagerAsyncClient
+from .db_manager import (
+    DatabaseManager,
+    DatabaseManagerAsyncClient,
+    DatabaseManagerClient,
+)
 
 
 def test_async_client_exposes_chat_methods() -> None:
@@ -22,6 +26,24 @@ def test_bot_analytics_methods_registered() -> None:
 def test_add_store_agent_rpc_request_schema_is_constructible() -> None:
     manager = DatabaseManager()
     manager._create_fastapi_endpoint(manager.add_store_agent_to_library)
+
+
+def test_owner_grant_validator_is_registered_on_rpc_service_and_client() -> None:
+    assert hasattr(DatabaseManager, "validate_execution_credentials_owner")
+    assert hasattr(DatabaseManagerAsyncClient, "validate_execution_credentials_owner")
+    manager = DatabaseManager()
+    manager._create_fastapi_endpoint(manager.validate_execution_credentials_owner)
+
+
+def test_shared_memory_access_is_registered_on_rpc_clients() -> None:
+    for method in (
+        "get_shared_memory_org_access",
+        "list_shared_memory_team_access",
+        "get_shared_memory_hold_buffer",
+    ):
+        assert method in DatabaseManager.__dict__
+        assert method in DatabaseManagerClient.__dict__
+        assert method in DatabaseManagerAsyncClient.__dict__
 
 
 def test_the_audience_consumer_can_read_the_opt_out() -> None:

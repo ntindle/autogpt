@@ -10,13 +10,19 @@ import {
 
 interface Args {
   move: MoveSubject;
+  scope?: { organizationId: string | null; teamId: string | null };
   canMoveToRoot: boolean;
   onDone: () => void;
 }
 
-export function useMoveToFolderDialog({ move, canMoveToRoot, onDone }: Args) {
+export function useMoveToFolderDialog({
+  move,
+  scope,
+  canMoveToRoot,
+  onDone,
+}: Args) {
   const { folders, moveFilesToFolder, moveFolder, isMovingFolder } =
-    useArtifactsFolders();
+    useArtifactsFolders(scope);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   // Seeded from the subject's own location, then owned by the user; a later
   // folders refetch must not re-collapse what they opened. The seed waits for

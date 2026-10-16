@@ -40,7 +40,11 @@ test.each([1, 4])(
     render(
       <CopilotChatActionsProvider onSend={vi.fn()}>
         <ToolChain parts={[held]} isStreaming={false} />
-        <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+        <CopilotPendingReviews
+          organizationId={null}
+          teamId={null}
+          chatSessionId={CHAT_SESSION}
+        />
       </CopilotChatActionsProvider>,
     );
 

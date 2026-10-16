@@ -1,3 +1,4 @@
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
 import { useDeleteWorkspaceFile } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
 import { useToast } from "@/components/molecules/Toast/use-toast";
@@ -10,7 +11,11 @@ import {
 } from "./helpers";
 
 export function useFileActionsMenu(file: WorkspaceFileItem) {
-  const origin = deriveFileOrigin(file.path);
+  const origin = deriveFileOrigin(
+    file.path,
+    file.organization_id ?? null,
+    file.team_id ?? null,
+  );
   const [isMoveOpen, setIsMoveOpen] = useState(false);
   const [isRenameOpen, setIsRenameOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -18,6 +23,10 @@ export function useFileActionsMenu(file: WorkspaceFileItem) {
   const queryClient = useQueryClient();
   const { mutateAsync: deleteFile, isPending: isDeleting } =
     useDeleteWorkspaceFile({
+      request: getTenantRequestInit(
+        file.organization_id ?? null,
+        file.team_id ?? null,
+      ),
       mutation: {
         onSuccess: () => {
           invalidateWorkspaceFileQueries(queryClient);
@@ -38,7 +47,12 @@ export function useFileActionsMenu(file: WorkspaceFileItem) {
     if (isDownloading) return;
     setIsDownloading(true);
     try {
-      await downloadFileBlob(file.id, file.name);
+      await downloadFileBlob(
+        file.id,
+        file.name,
+        file.organization_id ?? null,
+        file.team_id ?? null,
+      );
     } catch (error) {
       toast({
         title: "Failed to download file",

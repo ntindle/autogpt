@@ -71,6 +71,12 @@ function renderEmptySession(searchParams: string, onSend = vi.fn()) {
   return render(
     <Wrapper>
       <EmptySession
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         isCreatingSession={false}
         onCreateSession={() => {}}
         onSend={onSend}
@@ -191,6 +197,12 @@ it("shows a named kickoff status and withholds the empty composer", () => {
   render(
     <Wrapper>
       <EmptySession
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         isCreatingSession={false}
         onCreateSession={() => {}}
         onSend={() => {}}

@@ -19,6 +19,8 @@ def _folder_record(**overrides):
     rec.workspaceId = overrides.get("workspaceId", "ws-001")
     rec.name = overrides.get("name", "Reports")
     rec.icon = overrides.get("icon", None)
+    rec.organizationId = overrides.get("organizationId", None)
+    rec.teamId = overrides.get("teamId", None)
     rec.parentId = overrides.get("parentId", None)
     rec.createdAt = datetime(2026, 1, 1, tzinfo=timezone.utc)
     rec.updatedAt = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -64,16 +66,29 @@ async def test_delete_folder_reparents_files_then_soft_deletes(mocker):
 
     mocker.patch.object(wf, "transaction", _fake_tx)
 
-    await wf.delete_folder("fld-1", "ws-001")
+    await wf.delete_folder("fld-1", "ws-001", "org-1", "team-1")
 
     assert calls == ["reparent_files", "soft_delete_folder"]
     # Files reparented to root (folderId=None) scoped to the workspace.
     _, kwargs = file_prisma.update_many.call_args
-    assert kwargs["where"] == {"folderId": {"in": ["fld-1"]}, "workspaceId": "ws-001"}
+    assert kwargs["where"] == {
+        "folderId": {"in": ["fld-1"]},
+        "workspaceId": "ws-001",
+        "organizationId": "org-1",
+        "teamId": "team-1",
+        "scopeResolved": True,
+    }
     assert kwargs["data"] == {"folderId": None}
     # Folder soft-deleted (not hard-deleted) with a TOCTOU-safe isDeleted guard.
     _, kwargs = folder_prisma.update_many.call_args
-    assert kwargs["where"] == {"id": {"in": ["fld-1"]}, "isDeleted": False}
+    assert kwargs["where"] == {
+        "id": {"in": ["fld-1"]},
+        "workspaceId": "ws-001",
+        "isDeleted": False,
+        "organizationId": "org-1",
+        "teamId": "team-1",
+        "scopeResolved": True,
+    }
     assert kwargs["data"] == {"isDeleted": True}
 
 
@@ -98,6 +113,9 @@ async def test_create_folder_rejects_duplicate_root_name(mocker):
         "name": "Reports",
         "parentId": None,
         "isDeleted": False,
+        "organizationId": None,
+        "teamId": None,
+        "scopeResolved": True,
     }
 
 
@@ -140,7 +158,14 @@ async def test_update_folder_raises_when_concurrently_deleted(mocker):
         await wf.update_folder("fld-1", "ws-001", name="Renamed")
 
     _, kwargs = folder_prisma.update_many.call_args
-    assert kwargs["where"] == {"id": "fld-1", "isDeleted": False}
+    assert kwargs["where"] == {
+        "id": "fld-1",
+        "workspaceId": "ws-001",
+        "isDeleted": False,
+        "organizationId": None,
+        "teamId": None,
+        "scopeResolved": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -165,12 +190,17 @@ async def test_bulk_move_validates_target_folder_ownership(mocker):
 
     mocker.patch.object(wf, "transaction", _fake_tx)
 
-    await wf.bulk_move_files_to_folder("ws-001", ["f1"], "fld-1")
+    await wf.bulk_move_files_to_folder("ws-001", ["f1"], "fld-1", "org-1", "team-1")
 
-    guard.assert_awaited_once_with("fld-1", "ws-001")
+    guard.assert_awaited_once_with(
+        "fld-1", "ws-001", organization_id="org-1", team_id="team-1"
+    )
     _, kwargs = file_prisma.update_many.call_args
     assert kwargs["data"] == {"folderId": "fld-1"}
     assert kwargs["where"]["workspaceId"] == "ws-001"
+    assert kwargs["where"]["organizationId"] == "org-1"
+    assert kwargs["where"]["teamId"] == "team-1"
+    assert kwargs["where"]["scopeResolved"] is True
 
 
 @pytest.mark.asyncio
@@ -193,7 +223,7 @@ async def test_bulk_move_to_root_skips_folder_lookup(mocker):
 
     mocker.patch.object(wf, "transaction", _fake_tx)
 
-    await wf.bulk_move_files_to_folder("ws-001", ["f1"], None)
+    await wf.bulk_move_files_to_folder("ws-001", ["f1"], None, "org-1", "team-1")
 
     guard.assert_not_awaited()
     _, kwargs = file_prisma.update_many.call_args
@@ -209,7 +239,7 @@ async def test_bulk_move_empty_file_ids_noop(mocker):
         wf.UserWorkspaceFile, "prisma", mocker.MagicMock(return_value=file_prisma)
     )
 
-    result = await wf.bulk_move_files_to_folder("ws-001", [], None)
+    result = await wf.bulk_move_files_to_folder("ws-001", [], None, "org-1", "team-1")
 
     assert result == []
     file_prisma.update_many.assert_not_awaited()
@@ -246,7 +276,7 @@ async def test_move_folder_refuses_a_move_into_its_own_subtree(mocker):
     mocker.patch.object(
         wf,
         "_get_folder_record",
-        mocker.AsyncMock(side_effect=lambda fid, ws: records[fid]),
+        mocker.AsyncMock(side_effect=lambda fid, ws, **scope: records[fid]),
     )
 
     for destination in ("grandchild", "child", "parent"):
@@ -272,7 +302,14 @@ async def test_move_folder_to_root_clears_the_parent(mocker):
 
     assert await wf.move_folder("child", "ws-001", None) is mocker.sentinel.moved
     _, kwargs = folder_prisma.update_many.call_args
-    assert kwargs["where"] == {"id": "child", "isDeleted": False}
+    assert kwargs["where"] == {
+        "id": "child",
+        "workspaceId": "ws-001",
+        "isDeleted": False,
+        "organizationId": None,
+        "teamId": None,
+        "scopeResolved": True,
+    }
     assert kwargs["data"] == {"parentId": None}
 
 

@@ -42,6 +42,8 @@ export function AgentInfoStep({
   onSuccess,
   selectedAgentId,
   selectedAgentVersion,
+  selectedAgentOrganizationId,
+  selectedAgentTeamId,
   initialData,
   isMarketplaceUpdate,
 }: Props) {
@@ -59,6 +61,8 @@ export function AgentInfoStep({
     onSuccess,
     selectedAgentId,
     selectedAgentVersion,
+    selectedAgentOrganizationId,
+    selectedAgentTeamId,
     initialData,
     isMarketplaceUpdate,
   });
@@ -309,6 +313,8 @@ export function AgentInfoStep({
               <AccordionContent className="px-1 pb-4 pt-0">
                 <ThumbnailImages
                   agentId={agentId}
+                  organizationId={selectedAgentOrganizationId}
+                  teamId={selectedAgentTeamId}
                   onImagesChange={handleImagesChange}
                   initialImages={initialImages}
                   initialSelectedImage={initialSelectedImage}

@@ -23,6 +23,11 @@ import { convertChatSessionMessagesToUiMessages } from "@/app/(platform)/copilot
 import { useCopilotStream } from "@/app/(platform)/copilot/useCopilotStream";
 import { useCopilotPendingChips } from "@/app/(platform)/copilot/useCopilotPendingChips";
 import { useGetV2GetSession } from "@/app/api/__generated__/endpoints/chat/chat";
+import { useBuilderTenantScope } from "../../hooks/useBuilderTenantScope";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
 import { isKey } from "@/lib/keyboard";
 import { retryUnlessClientError } from "../../helpers/graphLoadError";
 import { getDeploymentModelStatus, isNoModelError } from "./helpers";
@@ -89,6 +94,7 @@ export function useBuilderChatPanel({
   });
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const tenantScope = useBuilderTenantScope();
 
   // Checked before anything is created: with no model the chat can never
   // answer, so neither the blank agent nor the session below is worth making.
@@ -121,27 +127,65 @@ export function useBuilderChatPanel({
     {
       query: {
         select: okData,
-        enabled: !!flowID,
+        enabled: !!flowID && tenantScope.isReady,
+        queryKey: getTeamScopedQueryKey(
+          getGetV1GetSpecificGraphQueryKey(flowID ?? "", {}),
+          tenantScope.organizationId,
+          tenantScope.teamId,
+        ),
         retry: retryUnlessClientError,
       },
+      request: getTenantRequestInit(
+        tenantScope.organizationId,
+        tenantScope.teamId,
+        tenantScope.isReady,
+      ),
     },
   );
 
   // Unified /sessions endpoint: setting ``builder_graph_id`` routes the
   // request through the get-or-create path keyed on (user_id, graph_id)
   // so the panel re-binds to the same session across refreshes.
-  const { mutateAsync: createBuilderSession } = usePostV2CreateSession();
+  const { mutateAsync: createBuilderSession } = usePostV2CreateSession({
+    request: getTenantRequestInit(
+      tenantScope.organizationId,
+      tenantScope.teamId,
+      tenantScope.isReady,
+    ),
+  });
   const { mutateAsync: createNewGraph, isPending: isBootstrappingGraph } =
-    usePostV1CreateNewGraph();
-  const { mutateAsync: setActiveVersion } = usePutV1SetActiveGraphVersion();
+    usePostV1CreateNewGraph({
+      request: getTenantRequestInit(
+        tenantScope.organizationId,
+        tenantScope.teamId,
+        tenantScope.isReady,
+      ),
+    });
+  const { mutateAsync: setActiveVersion } = usePutV1SetActiveGraphVersion({
+    request: getTenantRequestInit(
+      tenantScope.organizationId,
+      tenantScope.teamId,
+      tenantScope.isReady,
+    ),
+  });
 
   const sessionQuery = useGetV2GetSession(sessionId ?? "", undefined, {
     query: {
-      enabled: !!sessionId,
+      enabled: !!sessionId && tenantScope.isReady,
+      queryKey: getTeamScopedQueryKey(
+        getGetV2GetSessionQueryKey(sessionId ?? "", undefined),
+        tenantScope.organizationId,
+        tenantScope.teamId,
+      ),
       staleTime: Infinity,
       refetchOnWindowFocus: false,
       refetchOnMount: true,
     },
+    request: getTenantRequestInit(
+      tenantScope.organizationId,
+      tenantScope.teamId,
+      tenantScope.isReady,
+    ),
   });
 
   const hasActiveStream =
@@ -168,6 +212,10 @@ export function useBuilderChatPanel({
       hasActiveStream,
       refetchSession: sessionQuery.refetch,
       copilotModel: undefined,
+      sessionTenantScope: {
+        organizationId: tenantScope.organizationId,
+        teamId: tenantScope.teamId,
+      },
     });
 
   const { queuedMessages, queueMessage } = useCopilotPendingChips({
@@ -235,7 +283,7 @@ export function useBuilderChatPanel({
   //      (`currentFlowIDRef`) — an older graph's response must NOT
   //      overwrite a newer graph's sessionId.
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !tenantScope.isReady) return;
     if (!flowID) return;
     if (isWaitingForModel) return;
     // A failed bind waits for Retry (which clears it) or a new graph, not for
@@ -305,7 +353,8 @@ export function useBuilderChatPanel({
   // return value) so the user can recover without closing the panel.
   const isBootstrappingRef = useRef(false);
   useEffect(() => {
-    if (!isOpen || flowID || isBootstrappingRef.current) return;
+    if (!isOpen || !tenantScope.isReady || flowID || isBootstrappingRef.current)
+      return;
     if (!canCreateAgent) return;
     // Likewise, a failed attempt waits for Retry.
     if (bootstrapError) return;
@@ -535,7 +584,10 @@ export function useBuilderChatPanel({
         const { queueFollowUpMessage } = await import(
           "@/app/(platform)/copilot/helpers/queueFollowUpMessage"
         );
-        await queueFollowUpMessage(sessionId, trimmed);
+        await queueFollowUpMessage(sessionId, trimmed, {
+          organizationId: tenantScope.organizationId,
+          teamId: tenantScope.teamId,
+        });
       } catch (err) {
         Sentry.captureException(err);
         // The composer restores the draft and shows the one toast for it.
@@ -595,6 +647,7 @@ export function useBuilderChatPanel({
     bootstrapError,
     retryBind,
     retryBootstrap,
+    tenantScope,
     transportCheckError,
     retryTransportCheck,
   };

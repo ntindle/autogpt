@@ -172,7 +172,7 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
           {task.previous_session_ids.map((id, index) => (
             <Link
               key={id}
-              href={`/copilot?sessionId=${encodeURIComponent(id)}`}
+              href={`/tasks/chat/${encodeURIComponent(id)}`}
               className="mr-3 text-sm underline"
             >
               Conversation {index + 1}

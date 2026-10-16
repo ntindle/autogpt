@@ -64,9 +64,6 @@ async def test_skill_publication_cleans_only_the_appropriate_blob(status: str):
             "backend.api.features.workspace.embeddings.delete_workspace_file_embedding",
             AsyncMock(),
         ) as delete_embedding,
-        patch(
-            "backend.api.features.workspace.embeddings.schedule_workspace_file_embedding"
-        ),
     ):
         manager = WorkspaceManager("user", "workspace")
         if status == "stored":
@@ -186,7 +183,7 @@ async def test_a_cancel_during_refusal_cleanup_still_drops_the_blobs():
     deletes everything it staged."""
     checking, release = asyncio.Event(), asyncio.Event()
 
-    async def held_check(*_args):
+    async def held_check(*_args, **_kwargs):
         checking.set()
         await release.wait()
 

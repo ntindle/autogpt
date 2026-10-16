@@ -21,6 +21,7 @@ from backend.data.notifications import (
     BriefingLedgerRow,
     BriefingTotals,
     NotificationEventModel,
+    NotificationScope,
 )
 from backend.notifications.alert_causes import SEVERITY, parse_cause
 from backend.notifications.briefing_period import period_window
@@ -28,6 +29,7 @@ from backend.notifications.gist import build_gist, fallback_gist
 from backend.util.clients import get_database_manager_async_client
 from backend.util.logging import TruncatedLogger
 from backend.util.settings import Settings
+from backend.util.tenancy_urls import builder_path, library_agent_path
 
 logger = TruncatedLogger(logging.getLogger(__name__), prefix="[Briefing]")
 settings = Settings()
@@ -54,26 +56,43 @@ def _db():
 
 class BuiltBriefing(BaseModel):
     """The briefing plus the alert conditions its attention block reported, so
-    only those are marked once the email is safely on the queue."""
+    only those are marked after the provider accepts the message."""
 
     data: BriefingData
     attention_condition_ids: list[str]
+    authorization_scopes: list[NotificationScope]
 
 
 async def build_briefing(
-    user_id: str, frequency: BriefingFrequency, timezone_name: str, now
+    user_id: str,
+    frequency: BriefingFrequency,
+    timezone_name: str,
+    now,
+    authorization_scopes: list[NotificationScope] | None = None,
 ) -> BuiltBriefing | None:
     """Assemble one user's briefing, or None when there is nothing to send."""
+    if authorization_scopes is None:
+        authorization_scopes = [NotificationScope()]
     window = period_window(frequency, timezone_name, now)
-    agents = await _db().get_agent_period_stats(user_id, window.start, window.end)
-    conditions = await _db().get_briefing_alert_conditions(user_id)
+    agents = await _db().get_agent_period_stats(
+        user_id, window.start, window.end, authorization_scopes
+    )
+    conditions = await _db().get_briefing_alert_conditions(
+        user_id, authorization_scopes
+    )
 
     if not agents and not conditions:
         # Never send empty — but a period with no runs can still carry an
         # unresolved condition, and the Briefing is the only place those show.
         return None
     attention, reported_condition_ids = _attention_block(conditions)
-    highlights = await _highlights(user_id, window.start, window.end, agents)
+    highlights = await _highlights(
+        user_id,
+        window.start,
+        window.end,
+        agents,
+        authorization_scopes,
+    )
     all_rows = [_ledger_row(agent, attention) for agent in agents]
     ledger, overflow = all_rows[:MAX_LEDGER_ROWS], all_rows[MAX_LEDGER_ROWS:]
 
@@ -86,7 +105,11 @@ async def build_briefing(
         # so the totals are taken before the cap.
         runs=runs,
         agents_active=len(all_rows),
-        agents_idle=max(await _db().count_active_agents(user_id) - len(agents), 0),
+        agents_idle=max(
+            await _db().count_active_agents(user_id, authorization_scopes)
+            - len(agents),
+            0,
+        ),
         failed=failed,
         credits_used=credits_used,
         credits_balance=await _db().get_briefing_credit_balance(user_id),
@@ -111,21 +134,23 @@ async def build_briefing(
             quiet_summary=_quiet_summary(totals) if quiet else None,
         ),
         attention_condition_ids=reported_condition_ids,
+        authorization_scopes=authorization_scopes,
     )
 
 
 def briefing_event(
-    user_id: str, data: BriefingData
+    user_id: str,
+    data: BriefingData,
+    authorization_scopes: list[NotificationScope],
+    event_id: str,
 ) -> NotificationEventModel[BriefingData]:
     return NotificationEventModel[BriefingData](
-        user_id=user_id, type=NotificationType.BRIEFING, data=data
+        id=event_id,
+        user_id=user_id,
+        type=NotificationType.BRIEFING,
+        data=data,
+        authorization_scopes=authorization_scopes,
     )
-
-
-async def mark_attention_reported(condition_ids: list[str]) -> None:
-    """Called once the briefing is actually queued, so the same conditions are
-    not reported again next period."""
-    await _db().mark_alert_conditions_briefed(condition_ids)
 
 
 def _attention_block(
@@ -152,22 +177,50 @@ def _attention_block(
 
 
 async def _highlights(
-    user_id: str, start, end, agents: list[AgentPeriodStats]
+    user_id: str,
+    start,
+    end,
+    agents: list[AgentPeriodStats],
+    authorization_scopes: list[NotificationScope],
 ) -> list[BriefingHighlight]:
     """At most three notable outputs from the whole period, each a gist and a
     deep link. This is what replaces the old per-run email."""
     base_url = settings.config.frontend_base_url or settings.config.platform_base_url
-    runs = await _db().get_top_scored_runs(user_id, start, end, limit=MAX_HIGHLIGHTS)
+    runs = await _db().get_top_scored_runs(
+        user_id,
+        start,
+        end,
+        limit=MAX_HIGHLIGHTS,
+        authorization_scopes=authorization_scopes,
+    )
     runs_by_graph = {agent.graph_id: agent.runs for agent in agents}
-    return [
-        BriefingHighlight(
-            agent=run.agent,
-            gist=await _gist_for(user_id, run, runs_by_graph.get(run.graph_id, 1)),
-            link_label="See the run",
-            url=f"{base_url}/library/agents/{run.graph_id}/runs/{run.execution_id}",
+    highlights: list[BriefingHighlight] = []
+    for run in runs:
+        if run.library_agent_id:
+            path = library_agent_path(
+                run.library_agent_id,
+                run.organization_id,
+                run.team_id,
+                active_tab="runs",
+                active_item=run.execution_id,
+            )
+        else:
+            path = builder_path(
+                run.graph_id,
+                run.graph_version,
+                run.organization_id,
+                run.team_id,
+                execution_id=run.execution_id,
+            )
+        highlights.append(
+            BriefingHighlight(
+                agent=run.agent,
+                gist=await _gist_for(user_id, run, runs_by_graph.get(run.graph_id, 1)),
+                link_label="See the run",
+                url=f"{base_url}{path}",
+            )
         )
-        for run in runs
-    ]
+    return highlights
 
 
 async def _gist_for(user_id: str, run: ScoredRun, agent_runs: int) -> str:

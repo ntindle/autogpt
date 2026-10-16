@@ -33,6 +33,9 @@ type SendMessageFn = (message: SendInput) => Promise<void>;
 
 interface Args {
   sessionId: string | null;
+  isSessionScopeReady: boolean;
+  sessionOrganizationId?: string | null;
+  sessionTeamId?: string | null;
   sendMessage: SendMessageFn;
   createSession: (options?: {
     expertKickoff?: boolean;
@@ -53,6 +56,9 @@ interface Args {
  */
 export function useSendMessage({
   sessionId,
+  isSessionScopeReady,
+  sessionOrganizationId,
+  sessionTeamId,
   sendMessage,
   createSession,
   isUserStoppingRef,
@@ -72,7 +78,10 @@ export function useSendMessage({
     const results = await Promise.allSettled(
       files.map(async (file) => {
         try {
-          const data = await uploadFileDirect(file, sid);
+          const data = await uploadFileDirect(file, sid, {
+            organizationId: sessionOrganizationId ?? null,
+            teamId: sessionTeamId ?? null,
+          });
           if (!data.file_id) throw new Error("No file_id returned");
           return {
             file_id: data.file_id,
@@ -195,7 +204,7 @@ export function useSendMessage({
   dispatchRef.current = dispatchToSession;
 
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !isSessionScopeReady) return;
     const { send, parts } = useCopilotStreamStore
       .getState()
       .takePendingFirstSend(sessionId);
@@ -209,7 +218,7 @@ export function useSendMessage({
       .catch((error: unknown) => {
         recoverFailedDeferredSend(send.text, parts, error);
       });
-  }, [sessionId]);
+  }, [isSessionScopeReady, sessionId]);
 
   async function onSend(
     message: string,

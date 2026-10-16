@@ -293,6 +293,7 @@ class ClaudeCodeBlock(Block):
                     "sandbox_id",  # sandbox_id
                 ),
             },
+            allow_owner_credentials=False,
         )
 
     async def execute_claude_code(
@@ -327,6 +328,7 @@ class ClaudeCodeBlock(Block):
 
         sandbox = None
         sandbox_id = ""
+        force_dispose = False
         egress_owner = EgressOwner(
             kind="block",
             id=execution_context.user_id or "anonymous",
@@ -446,6 +448,7 @@ class ClaudeCodeBlock(Block):
             result = await sandbox.commands.run(
                 claude_command,
                 timeout=0,  # No command timeout - let sandbox timeout handle it
+                envs={"ANTHROPIC_API_KEY": anthropic_api_key},
             )
 
             # Check for command failure
@@ -508,12 +511,17 @@ class ClaudeCodeBlock(Block):
             )
 
         except Exception as e:
+            force_dispose = True
             # Wrap exception with sandbox_id so caller can access/cleanup
             # the preserved sandbox when dispose_sandbox=False
             raise ClaudeCodeExecutionError(str(e), sandbox_id) from e
 
+        except BaseException:
+            force_dispose = True
+            raise
+
         finally:
-            if dispose_sandbox and sandbox:
+            if (dispose_sandbox or force_dispose) and sandbox:
                 await kill_sandbox(sandbox)
 
     def _escape_prompt(self, prompt: str) -> str:

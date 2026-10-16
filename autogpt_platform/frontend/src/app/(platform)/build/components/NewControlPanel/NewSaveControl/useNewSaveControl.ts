@@ -3,10 +3,20 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { parseAsInteger, parseAsString, useQueryStates } from "nuqs";
-import { useGetV1GetSpecificGraph } from "@/app/api/__generated__/endpoints/graphs/graphs";
+import {
+  getGetV1GetSpecificGraphQueryKey,
+  useGetV1GetSpecificGraph,
+} from "@/app/api/__generated__/endpoints/graphs/graphs";
 import { GraphModel } from "@/app/api/__generated__/models/graphModel";
 import { useControlPanelStore } from "../../../stores/controlPanelStore";
 import { useSaveGraph } from "../../../hooks/useSaveGraph";
+import { useCreateTeamSelection } from "@/components/contextual/TeamPicker/useCreateTeamSelection";
+import {
+  CreateSurface,
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
+import { useBuilderTenantScope } from "../../../hooks/useBuilderTenantScope";
 import { retryUnlessClientError } from "../../../helpers/graphLoadError";
 
 const formSchema = z.object({
@@ -17,6 +27,7 @@ const formSchema = z.object({
 type SaveableGraphFormValues = z.infer<typeof formSchema>;
 
 export const useNewSaveControl = () => {
+  const tenantScope = useBuilderTenantScope();
   const { setSaveControlOpen } = useControlPanelStore();
 
   const onSuccess = (graph: GraphModel) => {
@@ -27,9 +38,16 @@ export const useNewSaveControl = () => {
     });
   };
 
+  // Only a brand-new agent gets a team owner; saving over an existing graph
+  // (flowID present) reuses its ownership, so hide the picker then.
+  const { teamId, setTeamId, hasTeams, isReady } = useCreateTeamSelection(
+    CreateSurface.BuilderSave,
+  );
+
   const { saveGraph, isSaving } = useSaveGraph({
     showToast: true,
     onSuccess,
+    teamId,
   });
 
   const [{ flowID, flowVersion }] = useQueryStates({
@@ -43,9 +61,22 @@ export const useNewSaveControl = () => {
     {
       query: {
         select: (res) => res.data as GraphModel,
-        enabled: !!flowID,
+        enabled: !!flowID && tenantScope.isReady,
+        queryKey: getTeamScopedQueryKey(
+          getGetV1GetSpecificGraphQueryKey(
+            flowID ?? "",
+            flowVersion !== null ? { version: flowVersion } : {},
+          ),
+          tenantScope.organizationId,
+          tenantScope.teamId,
+        ),
         retry: retryUnlessClientError,
       },
+      request: getTenantRequestInit(
+        tenantScope.organizationId,
+        tenantScope.teamId,
+        tenantScope.isReady,
+      ),
     },
   );
 
@@ -59,9 +90,10 @@ export const useNewSaveControl = () => {
 
   const handleSave = useCallback(
     (values: SaveableGraphFormValues) => {
+      if (!isReady) return;
       saveGraph(values);
     },
-    [saveGraph],
+    [isReady, saveGraph],
   );
 
   useEffect(() => {
@@ -88,10 +120,18 @@ export const useNewSaveControl = () => {
     }
   }, [graph, form]);
 
+  // Show the picker only when creating a new agent (no flowID) and the user
+  // actually has teams to choose from.
+  const showTeamPicker = !flowID && hasTeams;
+
   return {
     form,
     isSaving: isSaving,
     graphVersion: graph?.version,
     handleSave,
+    teamId,
+    setTeamId,
+    showTeamPicker,
+    isReady,
   };
 };

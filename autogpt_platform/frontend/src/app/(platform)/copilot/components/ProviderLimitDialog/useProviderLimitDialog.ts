@@ -1,4 +1,6 @@
-"use client";
+import { useCopilotTenantScope } from "../../CopilotTenantScopeContext";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+("use client");
 
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -29,6 +31,7 @@ export function useProviderLimitDialog({
   eligible,
 }: Args) {
   const queryClient = useQueryClient();
+  const scope = useCopilotTenantScope();
 
   const connectionsQuery = useGetV2ListChatConnections({
     query: { enabled: Boolean(failure) },
@@ -54,6 +57,7 @@ export function useProviderLimitDialog({
 
   const { mutateAsync: changeConnection, isPending: isSwitching } =
     usePutV2ChangeTheConnectionAnExistingChatRunsOn({
+      request: getTenantRequestInit(scope.organizationId, scope.teamId),
       mutation: {
         onSuccess: async () => {
           // What follows the switch is the caller's: the limit dialog leaves

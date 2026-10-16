@@ -93,6 +93,7 @@ async def schedule_task(
         run_at=request.run_at,
         user_timezone=request.timezone,
         organization_id=task.organization_id,
+        team_id=task.team_id,
         expert_id=(
             task.assignee.id
             if task.assignee and task.assignee.kind == "expert"

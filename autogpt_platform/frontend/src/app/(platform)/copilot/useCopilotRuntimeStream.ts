@@ -1,3 +1,6 @@
+import { getCopilotAuthHeaders, type CopilotTenantScope } from "./helpers";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+import { getV2GetSession } from "@/app/api/__generated__/endpoints/chat/chat";
 import { getGetV2GetCopilotUsageQueryKey } from "@/app/api/__generated__/endpoints/chat/chat";
 import { useQueryClient } from "@tanstack/react-query";
 import type { UIMessage } from "ai";
@@ -63,6 +66,7 @@ const EMPTY_SNAPSHOT: RuntimeSnapshot = {
 interface Args {
   userId?: string | null;
   sessionId: string | null;
+  sessionTenantScope?: CopilotTenantScope;
   /** The fresh session GET: its rows are the history above the runtime's tail. */
   sessionView: SessionView | null;
   hydratedMessages: UIMessage[] | undefined;
@@ -81,6 +85,7 @@ interface Args {
 export function useCopilotRuntimeStream({
   userId = null,
   sessionId,
+  sessionTenantScope,
   sessionView,
   hydratedMessages,
   rawSessionMessages,
@@ -103,8 +108,26 @@ export function useCopilotRuntimeStream({
   } | null>(null);
 
   const runtime = useMemo(
-    () => (sessionId ? getTurnRuntime(sessionId) : null),
-    [sessionId],
+    () =>
+      sessionId && sessionTenantScope
+        ? getTurnRuntime(sessionId, {
+            headers: () => getCopilotAuthHeaders(sessionTenantScope),
+            fetchSession: async () => {
+              const response = await getV2GetSession(
+                sessionId,
+                undefined,
+                getTenantRequestInit(
+                  sessionTenantScope.organizationId,
+                  sessionTenantScope.teamId,
+                ),
+              );
+              return response.status === 200
+                ? (response.data as SessionView)
+                : null;
+            },
+          })
+        : null,
+    [sessionId, sessionTenantScope],
   );
   const snapshot = useSyncExternalStore(
     runtime?.subscribe ?? subscribeNothing,
@@ -218,6 +241,7 @@ export function useCopilotRuntimeStream({
 
   const stop = useCopilotStop({
     sessionId,
+    sessionTenantScope,
     stopStream: () => runtime?.stop(),
     isUserStoppingRef,
     setIsUserStopping: () => {},

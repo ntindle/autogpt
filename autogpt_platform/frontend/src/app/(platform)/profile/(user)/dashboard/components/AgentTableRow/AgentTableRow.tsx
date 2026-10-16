@@ -1,8 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { isLocalStoreMediaUrl } from "@/lib/store-media";
 import { Text } from "@/components/atoms/Text/Text";
+import { shouldBypassImageOptimization } from "@/lib/utils/image";
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { Status } from "@/components/__legacy__/Status";
@@ -24,11 +24,13 @@ import { useImageFallback } from "@/hooks/useImageFallback";
 export type AgentTableRowProps = {
   storeAgentSubmission: StoreSubmission;
   onViewSubmission: (submission: StoreSubmission) => void;
-  onDeleteSubmission: (submission_id: string) => void;
+  onDeleteSubmission: (submission: StoreSubmission) => void;
   onEditSubmission: (
     submission: StoreSubmissionEditRequest & {
       store_listing_version_id: string | undefined;
       graph_id: string;
+      organization_id: string | null;
+      team_id: string | null;
     },
   ) => void;
 };
@@ -76,9 +78,9 @@ export const AgentTableRow = ({
             <div className="relative aspect-video w-32 shrink-0 overflow-hidden rounded-[10px] bg-zinc-100">
               <Image
                 src={image_urls[0]}
-                unoptimized={isLocalStoreMediaUrl(image_urls[0])}
                 alt={agentName}
                 fill
+                unoptimized={shouldBypassImageOptimization(image_urls[0])}
                 style={{ objectFit: "cover" }}
                 onError={handleImageError}
               />

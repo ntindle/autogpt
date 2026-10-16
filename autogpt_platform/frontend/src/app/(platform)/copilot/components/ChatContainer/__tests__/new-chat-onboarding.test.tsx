@@ -22,6 +22,10 @@ vi.mock("@/services/feature-flags/use-get-flag", async (importOriginal) => {
 });
 
 const props: ChatContainerProps = {
+  createTeamId: null,
+  onCreateTeamChange: () => {},
+  isTeamContextReady: true,
+  canSelectCreateTeam: false,
   messages: [],
   status: "ready",
   error: undefined,
@@ -93,7 +97,15 @@ describe("new full-page expert chats", () => {
     const queryClient = new QueryClient();
     render(
       <QueryClientProvider client={queryClient}>
-        <ChatContainer {...props} />
+        <ChatContainer
+          {...{
+            createTeamId: null,
+            onCreateTeamChange: () => {},
+            isTeamContextReady: true,
+            canSelectCreateTeam: false,
+          }}
+          {...props}
+        />
       </QueryClientProvider>,
     );
     fireEvent.click(await screen.findByRole("radio", { name: "AI" }));
@@ -110,7 +122,18 @@ describe("new full-page expert chats", () => {
   test("shows pending onboarding in an empty chat", async () => {
     mockOnboarding();
     const onSend = vi.fn();
-    render(<ChatContainer {...props} onSend={onSend} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...props}
+        onSend={onSend}
+      />,
+    );
     expect(await screen.findByText("What topic?")).toBeDefined();
     fireEvent.click(screen.getByRole("button", { name: "Skip questions" }));
     await waitFor(() =>
@@ -122,7 +145,18 @@ describe("new full-page expert chats", () => {
 
   test("keeps the home hero when an expert is picked before a chat exists", async () => {
     const request = mockOnboarding();
-    render(<ChatContainer {...props} sessionId={null} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...props}
+        sessionId={null}
+      />,
+    );
     expect(await screen.findByRole("textbox")).toBeDefined();
     expect(request).not.toHaveBeenCalled();
     expect(screen.queryByText("What topic?")).toBeNull();
@@ -131,7 +165,18 @@ describe("new full-page expert chats", () => {
   test("sends completed answers through the new chat's send handler", async () => {
     mockOnboarding();
     const onSend = vi.fn();
-    render(<ChatContainer {...props} onSend={onSend} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...props}
+        onSend={onSend}
+      />,
+    );
     fireEvent.click(await screen.findByRole("radio", { name: "AI" }));
     fireEvent.click(screen.getByRole("button", { name: /Send answers/i }));
     await waitFor(() =>
@@ -143,7 +188,17 @@ describe("new full-page expert chats", () => {
 
   test("does not show completed or skipped onboarding", async () => {
     const request = mockOnboarding(true);
-    render(<ChatContainer {...props} />);
+    render(
+      <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
+        {...props}
+      />,
+    );
     await waitFor(() => expect(request).toHaveBeenCalled());
     expect(screen.queryByText("What topic?")).toBeNull();
   });
@@ -152,6 +207,12 @@ describe("new full-page expert chats", () => {
     const request = mockOnboarding();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...props}
         sessionId="existing-session"
         messages={[

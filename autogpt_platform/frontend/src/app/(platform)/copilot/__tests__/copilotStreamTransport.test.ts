@@ -43,6 +43,7 @@ function makeRefs() {
   return {
     copilotModeRef: { current: undefined },
     copilotModelRef: { current: undefined },
+    tenantScopeRef: { current: undefined },
   };
 }
 

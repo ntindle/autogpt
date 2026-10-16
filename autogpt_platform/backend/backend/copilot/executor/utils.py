@@ -39,7 +39,9 @@ from backend.copilot.tree import (
 )
 from backend.copilot.trial_cost_context import TrialCostContext, capture_cost_context
 from backend.data.rabbitmq import Exchange, ExchangeType, Queue, RabbitMQConfig
+from backend.data.tenancy import live_resource_access_barrier
 from backend.util import tracing
+from backend.util.exceptions import NotAuthorizedError
 from backend.util.logging import TruncatedLogger, is_structured_logging_enabled
 from backend.util.settings import Config
 
@@ -579,6 +581,49 @@ async def schedule_turn(
         )
 
 
+async def schedule_turn_if_live(
+    *,
+    session_id: str,
+    user_id: str,
+    turn_id: str,
+    message: str,
+    tool_call_id: str,
+    tool_name: str,
+    is_user_message: bool,
+    organization_id: str | None,
+    team_id: str | None,
+    llm_auth_provider: CopilotLlmAuthProvider,
+    llm_credential_id: str | None,
+    unattended: bool = False,
+    credential_pins: CredentialPins | None = None,
+    permissions: CopilotPermissions | None = None,
+    scheduled: ScheduledTurnOrigin | None = None,
+) -> bool:
+    async with live_resource_access_barrier(
+        user_id, organization_id, team_id, "execute"
+    ) as allowed:
+        if not allowed:
+            return False
+        await schedule_turn(
+            session_id=session_id,
+            user_id=user_id,
+            turn_id=turn_id,
+            message=message,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            is_user_message=is_user_message,
+            organization_id=organization_id,
+            team_id=team_id,
+            llm_auth_provider=llm_auth_provider,
+            llm_credential_id=llm_credential_id,
+            unattended=unattended,
+            credential_pins=credential_pins,
+            permissions=permissions,
+            scheduled=scheduled,
+        )
+        return True
+
+
 async def dispatch_turn(
     slot: TurnSlot,
     *,
@@ -836,6 +881,64 @@ def _narrow_permissions(
 
 
 async def schedule_chat_turn(
+    *,
+    session_id: str,
+    user_id: str,
+    message: str,
+    message_id: str | None = None,
+    message_metadata: dict[str, Any] | None = None,
+    message_already_persisted: bool = False,
+    require_fresh_slot: bool = False,
+    dedupe_content: bool = True,
+    is_user_message: bool = True,
+    expert_id: str | None = None,
+    session_origin: str | None = None,
+    session_source_platform: str | None = None,
+    context: dict[str, str] | None = None,
+    voice: bool = False,
+    file_ids: list[str] | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    model: CopilotLLMModel | None = None,
+    llm_auth_provider: CopilotLlmAuthProvider = "platform",
+    llm_credential_id: str | None = None,
+    permissions: CopilotPermissions | None = None,
+    request_arrival_at: float = 0.0,
+    impersonated: bool = False,
+) -> str | None:
+    async with live_resource_access_barrier(
+        user_id, organization_id, team_id, "execute"
+    ) as allowed:
+        if not allowed:
+            raise NotAuthorizedError("Resource scope is inactive")
+        return await _schedule_chat_turn_locked(
+            session_id=session_id,
+            user_id=user_id,
+            message=message,
+            message_id=message_id,
+            message_metadata=message_metadata,
+            message_already_persisted=message_already_persisted,
+            require_fresh_slot=require_fresh_slot,
+            dedupe_content=dedupe_content,
+            is_user_message=is_user_message,
+            expert_id=expert_id,
+            session_origin=session_origin,
+            session_source_platform=session_source_platform,
+            context=context,
+            voice=voice,
+            file_ids=file_ids,
+            organization_id=organization_id,
+            team_id=team_id,
+            model=model,
+            llm_auth_provider=llm_auth_provider,
+            llm_credential_id=llm_credential_id,
+            permissions=permissions,
+            request_arrival_at=request_arrival_at,
+            impersonated=impersonated,
+        )
+
+
+async def _schedule_chat_turn_locked(
     *,
     session_id: str,
     user_id: str,

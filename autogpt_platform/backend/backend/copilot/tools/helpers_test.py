@@ -49,6 +49,18 @@ _USER = "test-user-helpers"
 _SESSION = "test-session-helpers"
 
 
+def _credential_lease(credentials):
+    lease = MagicMock(credentials=credentials, is_active=True)
+    lease.release = AsyncMock()
+    lease.validate = AsyncMock()
+
+    async def wait_for_failure():
+        await asyncio.Event().wait()
+
+    lease.wait_for_failure = wait_for_failure
+    return lease
+
+
 class TestGetBlockProvider:
     def test_returns_only_provider(self):
         block = MagicMock()
@@ -1330,11 +1342,11 @@ class TestExecuteBlockAutoCredentials:
         """Drive file with valid _credentials_id → block executes with creds injected."""
         block = _make_block_with_auto_creds()
         credit_patch, _mock_credit = _patch_credit_db()
-        mock_creds = MagicMock(id="cred-id-123", provider="google")
-        mock_lock = AsyncMock()
+        mock_creds = MagicMock(id="cred-id-123", provider="google", type="oauth2")
+        mock_lease = _credential_lease(mock_creds)
         creds_manager_cls = MagicMock()
-        creds_manager_cls.return_value.acquire = AsyncMock(
-            return_value=(mock_creds, mock_lock)
+        creds_manager_cls.return_value.acquire_lease = AsyncMock(
+            return_value=mock_lease
         )
         creds_manager_cls.return_value.get = AsyncMock(return_value=None)
 
@@ -1367,10 +1379,10 @@ class TestExecuteBlockAutoCredentials:
 
         assert isinstance(result, BlockOutputResponse)
         assert result.success is True
-        creds_manager_cls.return_value.acquire.assert_awaited_once_with(
+        creds_manager_cls.return_value.acquire_lease.assert_awaited_once_with(
             _USER, "cred-id-123"
         )
-        mock_lock.release.assert_awaited_once()
+        mock_lease.release.assert_awaited_once()
 
     async def test_missing_credentials_id_returns_setup_requirements(self):
         """Drive field without _credentials_id → SetupRequirementsResponse
@@ -1412,7 +1424,7 @@ class TestExecuteBlockAutoCredentials:
         block = _make_block_with_auto_creds()
         credit_patch, _ = _patch_credit_db()
         creds_manager_cls = MagicMock()
-        creds_manager_cls.return_value.acquire = AsyncMock()
+        creds_manager_cls.return_value.acquire_lease = AsyncMock()
         creds_manager_cls.return_value.get = AsyncMock(return_value=None)
 
         with (
@@ -1443,7 +1455,7 @@ class TestExecuteBlockAutoCredentials:
             )
 
         assert isinstance(result, BlockOutputResponse)
-        creds_manager_cls.return_value.acquire.assert_not_awaited()
+        creds_manager_cls.return_value.acquire_lease.assert_not_awaited()
 
     async def test_no_file_selected_returns_setup_requirements(self):
         """Drive field provided as None → SetupRequirementsResponse."""
@@ -1491,17 +1503,17 @@ class TestExecuteBlockAutoCredentials:
         assert isinstance(result, ErrorResponse) and "re-select" in result.message
         assert result.outside == ()
 
-    async def test_auto_cred_locks_released_when_coerce_raises(self):
+    async def test_auto_credential_leases_released_when_coerce_raises(self):
         """Regression guard for Sentry r3135420231: if coerce_inputs_to_schema
         raises between acquire_auto_credentials and the inner wait_for try,
-        the auto-cred locks must still be released."""
+        the auto-credential leases must still be released."""
         block = _make_block_with_auto_creds()
         credit_patch, _ = _patch_credit_db()
-        mock_creds = MagicMock(id="cred-id-123", provider="google")
-        mock_lock = AsyncMock()
+        mock_creds = MagicMock(id="cred-id-123", provider="google", type="oauth2")
+        mock_lease = _credential_lease(mock_creds)
         creds_manager_cls = MagicMock()
-        creds_manager_cls.return_value.acquire = AsyncMock(
-            return_value=(mock_creds, mock_lock)
+        creds_manager_cls.return_value.acquire_lease = AsyncMock(
+            return_value=mock_lease
         )
         creds_manager_cls.return_value.get = AsyncMock(return_value=None)
 
@@ -1536,22 +1548,22 @@ class TestExecuteBlockAutoCredentials:
                 dry_run=False,
             )
 
-        # Exception propagates to the outer ErrorResponse path, but the lock
-        # must have been released on the way out (not stranded in Redis).
+        # Exception propagates to the outer ErrorResponse path, but the lease
+        # must have been released on the way out.
         assert isinstance(result, ErrorResponse)
-        mock_lock.release.assert_awaited_once()
+        mock_lease.release.assert_awaited_once()
 
-    async def test_auto_cred_locks_released_on_insufficient_credits(self):
+    async def test_auto_credential_leases_released_on_insufficient_credits(self):
         """Early-return from the credit-balance check must still release
-        auto-cred locks (same r3135420231 surface, different trigger)."""
+        auto-credential leases (same r3135420231 surface, different trigger)."""
         block = _make_block_with_auto_creds()
         # balance < cost → early return ErrorResponse
         credit_patch, _ = _patch_credit_db(get_credits_return=0)
-        mock_creds = MagicMock(id="cred-id-123", provider="google")
-        mock_lock = AsyncMock()
+        mock_creds = MagicMock(id="cred-id-123", provider="google", type="oauth2")
+        mock_lease = _credential_lease(mock_creds)
         creds_manager_cls = MagicMock()
-        creds_manager_cls.return_value.acquire = AsyncMock(
-            return_value=(mock_creds, mock_lock)
+        creds_manager_cls.return_value.acquire_lease = AsyncMock(
+            return_value=mock_lease
         )
         creds_manager_cls.return_value.get = AsyncMock(return_value=None)
 
@@ -1588,7 +1600,7 @@ class TestExecuteBlockAutoCredentials:
 
         assert isinstance(result, ErrorResponse)
         assert "Insufficient credits" in result.message
-        mock_lock.release.assert_awaited_once()
+        mock_lease.release.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1597,8 +1609,7 @@ class TestExecuteBlockCredentialLeases:
         block = _make_block()
         captured: dict[str, Any] = {}
         credentials = MagicMock(id="cred-1", provider="codex", type="oauth2")
-        lease = MagicMock(credentials=credentials)
-        lease.release = AsyncMock()
+        lease = _credential_lease(credentials)
         manager = MagicMock()
         manager.acquire_lease = AsyncMock(return_value=lease)
         manager.get = AsyncMock(return_value=credentials)
@@ -1643,8 +1654,7 @@ class TestExecuteBlockCredentialLeases:
     async def test_codex_entitlement_is_checked_against_acquired_credentials(self):
         block = _make_block()
         credentials = MagicMock(id="cred-1", provider="codex", type="oauth2")
-        lease = MagicMock(credentials=credentials)
-        lease.release = AsyncMock()
+        lease = _credential_lease(credentials)
         manager = MagicMock()
         manager.acquire_lease = AsyncMock(return_value=lease)
         credit_patch, _ = _patch_credit_db()
@@ -1686,9 +1696,9 @@ class TestExecuteBlockCredentialLeases:
     async def test_credential_metadata_cannot_hide_authoritative_codex_provider(self):
         block = _make_block()
         credentials = MagicMock(id="cred-1", provider="codex", type="oauth2")
+        lease = _credential_lease(credentials)
         manager = MagicMock()
-        manager.get = AsyncMock(return_value=credentials)
-        manager.acquire_lease = AsyncMock()
+        manager.acquire_lease = AsyncMock(return_value=lease)
         credit_patch, _ = _patch_credit_db()
         credential_meta = CredentialsMetaInput[
             Literal[ProviderName.OPENAI, ProviderName.CODEX],
@@ -1723,15 +1733,16 @@ class TestExecuteBlockCredentialLeases:
         assert isinstance(result, ErrorResponse)
         assert "Failed to retrieve credentials" in result.message
         gate.assert_not_awaited()
-        manager.acquire_lease.assert_not_awaited()
+        manager.acquire_lease.assert_awaited_once_with(_USER, "cred-1")
+        lease.release.assert_awaited_once()
 
-    async def test_ordinary_credentials_keep_nonlocking_lookup(self):
+    async def test_ordinary_credentials_are_leased_and_released(self):
         block = _make_block()
         captured: dict[str, Any] = {}
         credentials = MagicMock(id="cred-1", provider="openai", type="api_key")
+        lease = _credential_lease(credentials)
         manager = MagicMock()
-        manager.acquire_lease = AsyncMock()
-        manager.get = AsyncMock(return_value=credentials)
+        manager.acquire_lease = AsyncMock(return_value=lease)
         credit_patch, _ = _patch_credit_db()
 
         async def execute(_input_data: dict, **kwargs: Any):
@@ -1765,15 +1776,14 @@ class TestExecuteBlockCredentialLeases:
 
         assert isinstance(result, BlockOutputResponse)
         assert captured["credentials"] is credentials
-        assert "credential_leases" not in captured
-        manager.get.assert_awaited_once_with(_USER, "cred-1", lock=False)
-        manager.acquire_lease.assert_not_awaited()
+        assert captured["credential_leases"] == {"credentials": lease}
+        manager.acquire_lease.assert_awaited_once_with(_USER, "cred-1")
+        lease.release.assert_awaited_once()
 
     async def test_regular_lease_is_released_when_input_coercion_fails(self):
         block = _make_block()
         credentials = MagicMock(id="cred-1", provider="codex", type="oauth2")
-        lease = MagicMock(credentials=credentials)
-        lease.release = AsyncMock()
+        lease = _credential_lease(credentials)
         manager = MagicMock()
         manager.acquire_lease = AsyncMock(return_value=lease)
         manager.get = AsyncMock(return_value=credentials)

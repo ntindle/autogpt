@@ -62,14 +62,12 @@ export function useTasksPage() {
     const task =
       tasks.find((candidate) => candidate.id === item.review_of) ?? item;
     if (task.session_id) {
-      router.push(`/copilot?sessionId=${encodeURIComponent(task.session_id)}`);
+      router.push(`/tasks/chat/${encodeURIComponent(task.session_id)}`);
       return;
     }
     const updated = await act(task, { operation: "discuss" });
     if (updated?.session_id)
-      router.push(
-        `/copilot?sessionId=${encodeURIComponent(updated.session_id)}`,
-      );
+      router.push(`/tasks/chat/${encodeURIComponent(updated.session_id)}`);
   }
 
   const captureState = useTaskCapture({

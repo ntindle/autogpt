@@ -314,9 +314,10 @@ async def charge_reconciled_usage(
         # the USER ledger: no org context, or a personal org (which bills
         # the owner's wallet). Real-org deductions come from OrgBalance, so
         # the user's personal auto-top-up must not trigger for those.
-        user_ledger = not org_id or (
-            await db_client.get_personal_org_owner(org_id) is not None
+        personal_owner_id = (
+            await db_client.get_personal_org_owner(org_id) if org_id else None
         )
+        user_ledger = not org_id or personal_owner_id is not None
         if delta > 0 and user_ledger:
             # handle_low_balance is sync + does a blocking RPC; dispatch to
             # thread so we don't block the event loop. Rare path (threshold
@@ -324,7 +325,7 @@ async def charge_reconciled_usage(
             await asyncio.to_thread(
                 handle_low_balance,
                 get_db_client(),
-                node_exec.user_id,
+                personal_owner_id or node_exec.user_id,
                 remaining_balance,
                 delta,
             )
@@ -373,6 +374,10 @@ async def try_send_insufficient_funds_notif(
     graph_id: str,
     error: InsufficientBalanceError,
     log_metadata: LogMetadata,
+    *,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    source_graph_execution_id: str | None = None,
 ) -> None:
     """Send an insufficient-funds notification, swallowing failures."""
     try:
@@ -382,6 +387,9 @@ async def try_send_insufficient_funds_notif(
             user_id,
             graph_id,
             error,
+            organization_id=organization_id,
+            team_id=team_id,
+            source_graph_execution_id=source_graph_execution_id,
         )
     except Exception as notif_error:  # pragma: no cover
         log_metadata.warning(
@@ -394,10 +402,17 @@ def handle_insufficient_funds_notif(
     user_id: str,
     graph_id: str,
     e: InsufficientBalanceError,
+    *,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    source_graph_execution_id: str | None = None,
 ) -> None:
-    # Check if we've already sent a notification for this user+agent combo.
-    # We only send one notification per user per agent until they top up credits.
-    redis_key = f"{INSUFFICIENT_FUNDS_NOTIFIED_PREFIX}:{user_id}:{graph_id}"
+    organization_scope = organization_id or "_"
+    team_scope = team_id or "_"
+    redis_key = (
+        f"{INSUFFICIENT_FUNDS_NOTIFIED_PREFIX}:{user_id}:"
+        f"{organization_scope}:{team_scope}:{graph_id}"
+    )
     try:
         redis_client = redis.get_redis()
         # SET NX returns True only if the key was newly set (didn't exist)
@@ -429,16 +444,29 @@ def handle_insufficient_funds_notif(
     # Raise the alert condition rather than sending: the alert engine owns
     # debouncing, coalescing and the daily cap, and folds anything it can't
     # send into the next Briefing.
-    agent_name = metadata.name if metadata else "Unknown Agent"
+    fallback_name = f"Agent {graph_id[:8]}"
+    if metadata is not None and (
+        metadata.organization_id,
+        metadata.team_id,
+    ) == (organization_id, team_id):
+        agent_name = metadata.name or fallback_name
+    else:
+        agent_name = fallback_name
     db_client.raise_alert_condition(
         user_id=user_id,
         cause=AlertCause.ZERO_BALANCE,
-        cause_key=f"zero_balance:{graph_id}",
+        cause_key=(
+            f"zero_balance:{organization_scope}:{team_scope}:"
+            f"{source_graph_execution_id or graph_id}"
+        ),
         data=ZeroBalanceCause(
             cta_path="/settings/billing",
             agent=agent_name,
             shortfall_display=f"{shortfall / 100:,.2f}",
         ).model_dump(mode="json"),
+        organization_id=organization_id,
+        team_id=team_id,
+        source_graph_execution_id=source_graph_execution_id,
     )
 
     # Send Discord system alert
@@ -448,7 +476,7 @@ def handle_insufficient_funds_notif(
         alert_message = (
             f"❌ **Insufficient Funds Alert**\n"
             f"User: {user_email or user_id}\n"
-            f"Agent: {metadata.name if metadata else 'Unknown Agent'}\n"
+            f"Agent: {agent_name}\n"
             f"Current balance: ${e.balance / 100:.2f}\n"
             f"Attempted cost: ${abs(e.amount) / 100:.2f}\n"
             f"Shortfall: ${abs(shortfall) / 100:.2f}\n"

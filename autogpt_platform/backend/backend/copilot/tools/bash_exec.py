@@ -17,6 +17,7 @@ limits.  Requires bubblewrap to be installed (Linux only).
 import asyncio
 import logging
 import shlex
+from contextlib import AsyncExitStack
 from typing import Any
 
 from e2b import AsyncSandbox, CommandExitException
@@ -37,10 +38,14 @@ from backend.copilot.gate.shell_write import workspace_write_target
 from backend.copilot.gate.subject import Subject
 from backend.copilot.integration_creds import (
     get_github_user_git_identity,
-    get_integration_env_vars,
+    leased_integration_env_vars,
 )
 from backend.copilot.model import ChatSession
 from backend.copilot.sdk.env import config as chat_config
+from backend.integrations.credential_lease import (
+    CredentialLease,
+    run_with_credential_lease_guard,
+)
 from backend.util.e2b_network import reattach_command
 from backend.util.sandbox_login import (
     changed_login_files,
@@ -56,6 +61,30 @@ from .models import BashExecResponse, ErrorResponse, ToolResponseBase
 from .sandbox import get_workspace_dir, has_full_sandbox, run_sandboxed
 
 logger = logging.getLogger(__name__)
+MIN_BASH_TIMEOUT_SECONDS = 1
+MAX_BASH_TIMEOUT_SECONDS = 25 * 60
+E2B_COMMAND_STOP_TIMEOUT_SECONDS = 10
+
+
+async def _stop_e2b_command(sandbox: AsyncSandbox, handle: Any | None) -> None:
+    if handle is not None:
+        try:
+            killed = await asyncio.wait_for(
+                asyncio.shield(handle.kill()),
+                timeout=E2B_COMMAND_STOP_TIMEOUT_SECONDS,
+            )
+            if killed:
+                return
+        except Exception:
+            logger.exception("[E2B] failed to kill command handle")
+    try:
+        await asyncio.wait_for(
+            asyncio.shield(sandbox.kill()),
+            timeout=E2B_COMMAND_STOP_TIMEOUT_SECONDS,
+        )
+    except Exception:
+        logger.exception("[E2B] failed to kill sandbox after command cancellation")
+
 
 # Headroom on the box's running-time limit past the command's own timeout, so
 # the box is still up to report the result (or the timeout) and to be killed.
@@ -184,8 +213,13 @@ class BashExecTool(BaseTool):
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds; raise for long-running commands.",
+                    "description": (
+                        "Timeout in seconds, between 1 and "
+                        f"{MAX_BASH_TIMEOUT_SECONDS}."
+                    ),
                     "default": 120,
+                    "minimum": MIN_BASH_TIMEOUT_SECONDS,
+                    "maximum": MAX_BASH_TIMEOUT_SECONDS,
                     "title": "Time limit",
                     "format": "seconds",
                 },
@@ -258,6 +292,16 @@ class BashExecTool(BaseTool):
                 error="empty_command",
                 session_id=session_id,
             ).from_outside()
+
+        if not MIN_BASH_TIMEOUT_SECONDS <= timeout <= MAX_BASH_TIMEOUT_SECONDS:
+            return ErrorResponse(
+                message=(
+                    "Timeout must be between "
+                    f"{MIN_BASH_TIMEOUT_SECONDS} and {MAX_BASH_TIMEOUT_SECONDS} seconds."
+                ),
+                error="invalid_timeout",
+                session_id=session_id,
+            )
 
         # Pre-flight redirect: bash sandbox can't reach host-side SDK
         # tool-result paths. Without this the model burns turns retrying
@@ -336,54 +380,65 @@ class BashExecTool(BaseTool):
         envs: dict[str, str] = {
             "PATH": "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         }
-        # Collect injected secret values so we can scrub them from output.
-        secret_values: list[str] = []
-        if user_id is not None:
-            selected = await selected_credentials(session_id)
-            integration_env = await get_integration_env_vars(
-                user_id, required_scopes, selected
-            )
-            secret_values = [v for v in integration_env.values() if v]
-            envs.update(integration_env)
+        credential_leases: list[CredentialLease] = []
+        async with AsyncExitStack() as stack:
+            # Collect injected secret values so we can scrub them from output.
+            secret_values: list[str] = []
+            if user_id is not None:
+                selected = await selected_credentials(session_id)
+                integration_env = await stack.enter_async_context(
+                    leased_integration_env_vars(
+                        user_id, credential_leases, required_scopes, selected
+                    )
+                )
+                secret_values = [v for v in integration_env.values() if v]
+                envs.update(integration_env)
 
-            # Set git author/committer identity from the user's GitHub profile
-            # so commits made in the sandbox are attributed correctly.
-            git_identity = await get_github_user_git_identity(
-                user_id, selected.get("github")
-            )
-            if git_identity:
-                envs.update(git_identity)
+                # Set git author/committer identity from the user's GitHub profile
+                # so commits made in the sandbox are attributed correctly.
+                git_identity = await get_github_user_git_identity(
+                    user_id,
+                    selected.get("github"),
+                    access_token=integration_env.get("GH_TOKEN")
+                    or integration_env.get("GITHUB_TOKEN"),
+                )
+                if git_identity:
+                    envs.update(git_identity)
 
-        # The box's running-time limit was armed when this turn connected;
-        # E2B pauses the box at it, breaking the command's stream mid-run.
-        await keep_sandbox_running(
-            sandbox,
-            max(
-                chat_config.e2b_sandbox_timeout,
-                timeout + _SANDBOX_LIMIT_MARGIN_SECONDS,
-            ),
-            owner,
-        )
-        try:
-            run = await _follow_command(sandbox, command, timeout, envs)
-        except TimeoutException as exc:
-            return ErrorResponse(
-                message=(
-                    "The sandbox did not confirm the command started within "
-                    "the request timeout, so it may or may not have run "
-                    f"({exc}). This is not the command's {timeout}s timeout."
+            # The box's running-time limit was armed when this turn connected;
+            # E2B pauses the box at it, breaking the command's stream mid-run.
+            await keep_sandbox_running(
+                sandbox,
+                max(
+                    chat_config.e2b_sandbox_timeout,
+                    timeout + _SANDBOX_LIMIT_MARGIN_SECONDS,
                 ),
-                error="e2b_start_timeout",
-                session_id=session_id,
-            ).from_outside()
-        except Exception as exc:
-            logger.error("[E2B] bash_exec failed: %s", exc, exc_info=True)
-            return ErrorResponse(
-                message=f"E2B execution failed: {exc}",
-                error="e2b_execution_error",
-                session_id=session_id,
-            ).from_outside(str(exc))
-        return _run_response(run, timeout, secret_values, session_id)
+                owner,
+            )
+            try:
+                run = await run_with_credential_lease_guard(
+                    _follow_command(sandbox, command, timeout, envs), credential_leases
+                )
+                if credential_leases and run.lost:
+                    await _stop_e2b_command(sandbox, None)
+            except TimeoutException as exc:
+                return ErrorResponse(
+                    message=(
+                        "The sandbox did not confirm the command started within "
+                        "the request timeout, so it may or may not have run "
+                        f"({exc}). This is not the command's {timeout}s timeout."
+                    ),
+                    error="e2b_start_timeout",
+                    session_id=session_id,
+                ).from_outside()
+            except Exception as exc:
+                logger.error("[E2B] bash_exec failed: %s", exc, exc_info=True)
+                return ErrorResponse(
+                    message=f"E2B execution failed: {exc}",
+                    error="e2b_execution_error",
+                    session_id=session_id,
+                ).from_outside(str(exc))
+            return _run_response(run, timeout, secret_values, session_id)
 
 
 async def _follow_command(
@@ -404,15 +459,28 @@ async def _follow_command(
     stderr: list[str] = []
     started = loop.time()
     deadline = started + timeout
-    handle = await sandbox.commands.run(
-        f"bash -c {shlex.quote(command)}",
-        background=True,
-        cwd=E2B_WORKDIR,
-        timeout=timeout,
-        envs=envs,
-        on_stdout=stdout.append,
-        on_stderr=stderr.append,
+    start_task = asyncio.create_task(
+        sandbox.commands.run(
+            f"bash -c {shlex.quote(command)}",
+            background=True,
+            cwd=E2B_WORKDIR,
+            timeout=timeout,
+            envs=envs,
+            on_stdout=stdout.append,
+            on_stderr=stderr.append,
+        )
     )
+    try:
+        handle = await asyncio.shield(start_task)
+    except BaseException:
+        try:
+            handle = await asyncio.wait_for(
+                asyncio.shield(start_task), timeout=E2B_COMMAND_STOP_TIMEOUT_SECONDS
+            )
+        except BaseException:
+            handle = None
+        await _stop_e2b_command(sandbox, handle)
+        raise
     pid = handle.pid
     reconnects = 0
 
@@ -425,47 +493,54 @@ async def _follow_command(
             **kwargs,
         )
 
-    while True:
-        try:
-            result = await handle.wait()
-            return outcome(exit_code=result.exit_code)
-        except CommandExitException as exc:
-            return outcome(exit_code=exc.exit_code)
-        except Exception as exc:
-            remaining = deadline - loop.time()
-            if remaining <= _DEADLINE_SLACK_SECONDS:
-                return outcome(timed_out=True, **await _kill(sandbox, pid))
-            logger.warning(
-                "[E2B] bash_exec lost its stream to pid %s after %.1fs of %ds "
-                "(%s: %s)",
-                pid,
-                loop.time() - started,
-                timeout,
-                type(exc).__name__,
-                exc,
-            )
-            if reconnects >= _MAX_RECONNECTS:
-                return outcome(lost=type(exc).__name__)
-            reconnects += 1
+    try:
+        while True:
             try:
-                handle = await reattach_command(
-                    sandbox,
-                    pid,
-                    timeout=remaining,
-                    on_stdout=stdout.append,
-                    on_stderr=stderr.append,
-                )
-            except NotFoundException:
-                return outcome(ended_unseen=True)
-            except Exception as reconnect_exc:
-                if deadline - loop.time() <= _DEADLINE_SLACK_SECONDS:
+                result = await handle.wait()
+                return outcome(exit_code=result.exit_code)
+            except CommandExitException as exc:
+                return outcome(exit_code=exc.exit_code)
+            except Exception as exc:
+                remaining = deadline - loop.time()
+                if remaining <= _DEADLINE_SLACK_SECONDS:
                     return outcome(timed_out=True, **await _kill(sandbox, pid))
                 logger.warning(
-                    "[E2B] bash_exec could not reattach to pid %s: %s",
+                    "[E2B] bash_exec lost its stream to pid %s after %.1fs of %ds "
+                    "(%s: %s)",
                     pid,
-                    reconnect_exc,
+                    loop.time() - started,
+                    timeout,
+                    type(exc).__name__,
+                    exc,
                 )
-                return outcome(lost=type(exc).__name__)
+                if reconnects >= _MAX_RECONNECTS:
+                    return outcome(lost=type(exc).__name__)
+                reconnects += 1
+                try:
+                    handle = await reattach_command(
+                        sandbox,
+                        pid,
+                        timeout=remaining,
+                        on_stdout=stdout.append,
+                        on_stderr=stderr.append,
+                    )
+                except NotFoundException:
+                    return outcome(ended_unseen=True)
+                except Exception as reconnect_exc:
+                    if deadline - loop.time() <= _DEADLINE_SLACK_SECONDS:
+                        return outcome(timed_out=True, **await _kill(sandbox, pid))
+                    logger.warning(
+                        "[E2B] bash_exec could not reattach to pid %s: %s",
+                        pid,
+                        reconnect_exc,
+                    )
+                    return outcome(lost=type(exc).__name__)
+
+    except BaseException:
+        stopped = await _kill(sandbox, pid)
+        if stopped.get("killed") is not True or not stopped.get("children_killed"):
+            await _stop_e2b_command(sandbox, None)
+        raise
 
 
 async def _kill(sandbox: AsyncSandbox, pid: int) -> dict[str, Any]:

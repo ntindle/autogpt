@@ -37,7 +37,11 @@ test("a block's card names the block and labels its inputs from the block's sche
   serve(schemaCalls);
   render(
     <CopilotChatActionsProvider onSend={vi.fn()} onBackendTurn={vi.fn()}>
-      <CopilotPendingReviews chatSessionId={CHAT_SESSION} />
+      <CopilotPendingReviews
+        organizationId={null}
+        teamId={null}
+        chatSessionId={CHAT_SESSION}
+      />
     </CopilotChatActionsProvider>,
   );
 

@@ -320,7 +320,7 @@ async def test_write_file_storage_check_routes_through_workspace_db_accessor(
     ):
         await manager.write_file(filename="test.txt", content=b"hello")
 
-    mock_db.get_workspace_total_size.assert_awaited_once_with("ws-123")
+    mock_db.get_workspace_total_size.assert_awaited_once_with("ws-123", all_scopes=True)
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,6 @@ def session_manager():
         "/skills/pdf/SKILL.md",
         "/skills/pdf/references/guide.md",
         "/experts/expert-a/skills/pdf/scripts/extract.py",
-        "/sessions/other/report.pdf",
     ],
 )
 def test_shared_roots_resolve_as_written(session_manager, path: str):

@@ -21,6 +21,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/molecules/DropdownMenu/DropdownMenu";
 import { useToast } from "@/components/molecules/Toast/use-toast";
+import { useOrgTeamStore } from "@/services/org-team/store";
+import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 import { useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -28,6 +30,9 @@ import { useState } from "react";
 import { MoveToFolderDialog } from "../../MoveToFolderDialog/MoveToFolderDialog";
 import { MoreHorizontalIcon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { ShareAgentDialog } from "../../ShareAgentDialog/ShareAgentDialog";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+import { getBuilderHref } from "@/services/org-team/builder";
 
 interface AgentCardMenuProps {
   agent: LibraryAgent;
@@ -39,12 +44,26 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
   const router = useRouter();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [showMoveDialog, setShowMoveDialog] = useState(false);
+  const [showShareDialog, setShowShareDialog] = useState(false);
   const [isDeletingAgent, setIsDeletingAgent] = useState(false);
   const [isDuplicatingAgent, setIsDuplicatingAgent] = useState(false);
   const [isRemovingFromFolder, setIsRemovingFromFolder] = useState(false);
 
-  const { mutateAsync: deleteAgent } = useDeleteV2DeleteLibraryAgent();
-  const { mutateAsync: forkAgent } = usePostV2ForkLibraryAgent();
+  // Sharing targets a team, so it only makes sense once the user has teams.
+  // Ownership/admin rights are enforced by the backend (surfaced as a toast).
+  const hasTeams = useOrgTeamStore((s) => s.teams.length > 0);
+  const showOrgSettings = useGetFlag(Flag.SHOW_ORG_SETTINGS);
+
+  const tenantRequest = getTenantRequestInit(
+    agent.organization_id ?? null,
+    agent.team_id ?? null,
+  );
+  const { mutateAsync: deleteAgent } = useDeleteV2DeleteLibraryAgent({
+    request: tenantRequest,
+  });
+  const { mutateAsync: forkAgent } = usePostV2ForkLibraryAgent({
+    request: tenantRequest,
+  });
   const { mutateAsync: bulkMoveAgents } = usePostV2BulkMoveAgents({
     mutation: {
       onSuccess: () => {
@@ -56,6 +75,7 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
         });
       },
     },
+    request: tenantRequest,
   });
 
   async function handleDuplicateAgent() {
@@ -170,7 +190,12 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
             <>
               <DropdownMenuItem asChild>
                 <Link
-                  href={`/build?flowID=${agent.graph_id}&flowVersion=${agent.graph_version}`}
+                  href={getBuilderHref({
+                    graphId: agent.graph_id,
+                    graphVersion: agent.graph_version,
+                    organizationId: agent.organization_id ?? null,
+                    teamId: agent.team_id ?? null,
+                  })}
                   target="_blank"
                   className="flex items-center gap-2"
                   data-testid="library-agent-card-open-in-builder-link"
@@ -192,6 +217,21 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
           >
             Duplicate workflow
           </DropdownMenuItem>
+          {showOrgSettings && hasTeams && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowShareDialog(true);
+                }}
+                className="flex items-center gap-2"
+                data-testid="library-agent-card-share"
+              >
+                Share with a team
+              </DropdownMenuItem>
+            </>
+          )}
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onClick={(e) => {
@@ -268,9 +308,19 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
         agentId={agent.id}
         agentName={agent.name}
         currentFolderId={agent.folder_id}
+        organizationId={agent.organization_id ?? null}
+        teamId={agent.team_id ?? null}
         isOpen={showMoveDialog}
         setIsOpen={setShowMoveDialog}
       />
+
+      {hasTeams && (
+        <ShareAgentDialog
+          agent={agent}
+          isOpen={showShareDialog}
+          setIsOpen={setShowShareDialog}
+        />
+      )}
     </>
   );
 }

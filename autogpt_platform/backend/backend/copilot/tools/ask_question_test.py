@@ -24,6 +24,14 @@ def session() -> ChatSession:
     return ChatSession.new(user_id="test-user", dry_run=False)
 
 
+@pytest.fixture(autouse=True)
+def pending_question_store():
+    db = MagicMock()
+    db.set_session_pending_question = AsyncMock()
+    with patch("backend.copilot.tools.ask_question.chat_db", return_value=db):
+        yield db
+
+
 # ── Happy paths ──────────────────────────────────────────────────────
 
 

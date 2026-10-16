@@ -36,10 +36,17 @@ interface Props {
   /** Read-only mode — forwarded to ``ArtifactCard`` so clicks
    *  download instead of trying to open a panel that isn't mounted. */
   readOnly?: boolean;
+  fileUrlBuilder?: (fileId: string) => string;
+  organizationId?: string | null;
+  teamId?: string | null;
 }
 
-function renderFileContent(file: FileUIPart): React.ReactNode | null {
-  if (!file.url) return null;
+function renderFileContent(
+  file: FileUIPart,
+  sourceUrl: string,
+  organizationId?: string | null,
+  teamId?: string | null,
+): React.ReactNode | null {
   const metadata: OutputMetadata = {
     mimeType: file.mediaType,
     filename: file.filename,
@@ -48,11 +55,13 @@ function renderFileContent(file: FileUIPart): React.ReactNode | null {
       : file.mediaType?.startsWith("video/")
         ? "video"
         : undefined,
+    organizationId,
+    teamId,
   };
-  const renderer = globalRegistry.getRenderer(file.url, metadata);
+  const renderer = globalRegistry.getRenderer(sourceUrl, metadata);
   if (!renderer) return null;
   return (
-    <OutputItem value={file.url} metadata={metadata} renderer={renderer} />
+    <OutputItem value={sourceUrl} metadata={metadata} renderer={renderer} />
   );
 }
 
@@ -62,6 +71,9 @@ export function MessageAttachments({
   isUser,
   filePattern,
   readOnly,
+  fileUrlBuilder,
+  organizationId,
+  teamId,
 }: Props) {
   if (files.length === 0 && folders.length === 0) return null;
 
@@ -79,6 +91,7 @@ export function MessageAttachments({
           file,
           isUser ? "user-upload" : "agent",
           filePattern,
+          fileUrlBuilder,
         );
         if (artifactRef) {
           return (
@@ -89,7 +102,10 @@ export function MessageAttachments({
             />
           );
         }
-        const rendered = renderFileContent(file);
+        const sourceUrl = file.url ?? "";
+        const rendered = sourceUrl
+          ? renderFileContent(file, sourceUrl, organizationId, teamId)
+          : null;
         return rendered ? (
           <div
             key={`${file.filename}-${i}`}
@@ -106,9 +122,9 @@ export function MessageAttachments({
               }`}
             >
               <span className="truncate">{file.filename || "file"}</span>
-              {file.url && (
+              {sourceUrl && (
                 <a
-                  href={file.url}
+                  href={sourceUrl}
                   download
                   aria-label="Download file"
                   className="ml-auto shrink-0 opacity-50 hover:opacity-100"
@@ -138,9 +154,9 @@ export function MessageAttachments({
                   </p>
                 </div>
               </div>
-              {file.url && (
+              {sourceUrl && (
                 <a
-                  href={file.url}
+                  href={sourceUrl}
                   download
                   aria-label="Download file"
                   className="shrink-0 text-purple-400 hover:text-purple-600"
@@ -154,9 +170,9 @@ export function MessageAttachments({
           <ContentCard key={`${file.filename}-${i}`}>
             <ContentCardHeader
               action={
-                file.url ? (
+                sourceUrl ? (
                   <a
-                    href={file.url}
+                    href={sourceUrl}
                     download
                     aria-label="Download file"
                     className="shrink-0 text-neutral-400 hover:text-neutral-600"

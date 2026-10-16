@@ -37,10 +37,15 @@ from backend.blocks.mcp.helpers import (
     is_manual_mcp_credential,
     mcp_authorization_header,
     normalize_mcp_url,
+    release_mcp_credential_leases,
     server_host,
 )
 from backend.blocks.mcp.oauth import MCPOAuthHandler, MCPTokenEndpointAuthMethod
 from backend.data.model import OAuth2Credentials
+from backend.integrations.credential_lease import (
+    CredentialLease,
+    run_with_credential_lease_guard,
+)
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.integrations.mcp_catalog import get_mcp_catalog_entry_for_url
 from backend.integrations.providers import ProviderName
@@ -137,6 +142,7 @@ async def discover_tools(
     except ValueError as e:
         raise fastapi.HTTPException(status_code=400, detail=f"Invalid server URL: {e}")
 
+    mcp_leases: list[CredentialLease] = []
     authorization: str | None = None
     explicit_token = (
         request.auth_token.get_secret_value() if request.auth_token else None
@@ -149,16 +155,22 @@ async def discover_tools(
     elif request.use_saved_credentials:
         # Auto-use stored MCP credential when no explicit token is provided.
         stored_credential = await auto_lookup_mcp_credential(
-            user_id, normalize_mcp_url(request.server_url)
+            user_id, normalize_mcp_url(request.server_url), mcp_leases
         )
         if stored_credential:
             authorization = mcp_authorization_header(stored_credential)
 
     client = MCPClient(request.server_url, authorization=authorization)
 
-    try:
+    async def initialize_and_list_tools():
         init_result = await client.initialize()
-        tools = await client.list_tools()
+        return init_result, await client.list_tools()
+
+    try:
+        init_result, tools = await run_with_credential_lease_guard(
+            initialize_and_list_tools(),
+            mcp_leases,
+        )
     except HTTPClientError as e:
         if e.status_code in AUTH_STATUS_CODES:
             raise fastapi.HTTPException(
@@ -175,8 +187,8 @@ async def discover_tools(
             detail=f"Failed to connect to MCP server: {e}",
         )
     finally:
-        # Release any legacy session; a no-op on stateless servers.
         await client.close()
+        await release_mcp_credential_leases(mcp_leases)
 
     return DiscoverToolsResponse(
         tools=[

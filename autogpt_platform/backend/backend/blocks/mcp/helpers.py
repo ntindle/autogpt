@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from backend.data.model import OAuth2Credentials
+from backend.integrations.credential_lease import CredentialLease
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.integrations.providers import ProviderName
 
@@ -145,13 +146,19 @@ async def invalidate_mcp_credential(user_id: str, credential_id: str) -> None:
 
 
 async def auto_lookup_mcp_credential(
-    user_id: str, server_url: str, allowed_ids: set[str] | None = None
+    user_id: str,
+    server_url: str,
+    lease_sink: list[CredentialLease] | None = None,
+    allowed_ids: set[str] | None = None,
 ) -> OAuth2Credentials | None:
     """Look up the best stored MCP credential for *server_url*.
 
     The caller should pass a **normalized** URL (via :func:`normalize_mcp_url`)
     so the comparison with ``mcp_server_url`` in credential metadata matches.
 
+    Acquires and returns the matching credential under a live lease. The caller
+    must keep the lease in ``lease_sink`` for the full provider action, race the
+    action against lease failure, and release the lease afterward.
     ``allowed_ids`` narrows the candidates before ranking, so an expert whose
     grant is outranked by an ungranted row still gets the one it may use.
 
@@ -187,12 +194,45 @@ async def auto_lookup_mcp_credential(
             ):
                 if best is None or rank(cred) >= rank(best):
                     best = cred
-        # Manual credentials have no token endpoint to refresh against.
-        if best and not is_manual_mcp_credential(best):
-            best = await mgr.refresh_if_needed(user_id, best)
-        if best:
-            logger.info("Auto-resolved MCP credential %s for %s", best.id, server_url)
-        return best
+        if lease_sink is None:
+            # Manual credentials have no token endpoint to refresh against.
+            if best and not is_manual_mcp_credential(best):
+                best = await mgr.refresh_if_needed(user_id, best)
+            if best:
+                logger.info(
+                    "Auto-resolved MCP credential %s for %s", best.id, server_url
+                )
+            return best
+        if not best:
+            return None
+
+        lease = await mgr.acquire_lease(user_id, best.id)
+        credentials = lease.credentials
+        if not (
+            isinstance(credentials, OAuth2Credentials)
+            and credentials.provider == ProviderName.MCP.value
+            and (credentials.metadata or {}).get("mcp_server_url") == server_url
+        ):
+            await lease.release()
+            return None
+        lease_sink.append(lease)
+        logger.info(
+            "Auto-resolved leased MCP credential %s for %s",
+            credentials.id,
+            server_url,
+        )
+        return credentials
     except Exception:
         logger.warning("Auto-lookup MCP credential failed", exc_info=True)
         return None
+
+
+async def release_mcp_credential_leases(
+    leases: list[CredentialLease],
+) -> None:
+    while leases:
+        lease = leases.pop()
+        try:
+            await lease.release()
+        except Exception:
+            logger.warning("Failed to release MCP credential lease", exc_info=True)

@@ -52,6 +52,12 @@ from .config import graphiti_config
 from .falkordb_driver import AutoGPTFalkorDriver
 
 
+@pytest.fixture(autouse=True)
+def _enable_shared_memory_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shared-memory behavior tests opt into the organization rollout."""
+    monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "true")
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     graphiti_dir = Path(__file__).parent
     for item in items:

@@ -2,13 +2,11 @@ import logging
 from typing import Annotated, Sequence, cast, get_args
 
 import fastapi
-from autogpt_libs.auth.dependencies import (
-    get_request_context,
-    get_user_id,
-    requires_user,
-)
+from autogpt_libs.auth.dependencies import get_user_id, requires_user
 from autogpt_libs.auth.models import RequestContext
+from autogpt_libs.auth.permissions import OrgAction, TeamAction
 
+from backend.api.live_auth import requires_live_resource_permission
 from backend.integrations.providers import ProviderName
 from backend.util.models import Pagination
 
@@ -51,12 +49,22 @@ def sanitize_query(query: str | None) -> str | None:
 )
 async def get_suggestions(
     user_id: Annotated[str, fastapi.Security(get_user_id)],
+    ctx: Annotated[
+        RequestContext,
+        requires_live_resource_permission(
+            OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS
+        ),
+    ],
 ) -> builder_model.SuggestionsResponse:
     """
     Get all suggestions for the Blocks Menu.
     """
     return builder_model.SuggestionsResponse(
-        recent_searches=await builder_db.get_recent_searches(user_id),
+        recent_searches=await builder_db.get_recent_searches(
+            user_id,
+            organization_id=ctx.org_id,
+            team_id_restriction=ctx.team_id,
+        ),
         providers=[
             ProviderName.TWITTER,
             ProviderName.GITHUB,
@@ -152,7 +160,12 @@ async def get_providers(
 )
 async def search(
     user_id: Annotated[str, fastapi.Security(get_user_id)],
-    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_live_resource_permission(
+            OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS
+        ),
+    ],
     search_query: Annotated[str | None, fastapi.Query()] = None,
     filter: Annotated[str | None, fastapi.Query()] = None,
     search_id: Annotated[str | None, fastapi.Query()] = None,
@@ -191,6 +204,7 @@ async def search(
         filters=filters,
         by_creator=by_creator,
         organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
 
     # Paginate results
@@ -216,6 +230,7 @@ async def search(
             search_id=search_id,
         ),
         organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
     )
 
     return builder_model.SearchResponse(
@@ -233,9 +248,18 @@ async def search(
 )
 async def get_counts(
     user_id: Annotated[str, fastapi.Security(get_user_id)],
-    ctx: Annotated[RequestContext, fastapi.Security(get_request_context)],
+    ctx: Annotated[
+        RequestContext,
+        requires_live_resource_permission(
+            OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS
+        ),
+    ],
 ) -> builder_model.CountResponse:
     """
     Get item counts for the menu categories in the Blocks Menu.
     """
-    return await builder_db.get_counts(user_id, organization_id=ctx.org_id)
+    return await builder_db.get_counts(
+        user_id,
+        organization_id=ctx.org_id,
+        team_id_restriction=ctx.team_id,
+    )

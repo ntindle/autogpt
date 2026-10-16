@@ -74,6 +74,7 @@ async def create_workspace_task(
     request: TaskCreate,
     organization_id: str | None = None,
     source_session_id: str | None = None,
+    team_id: str | None = None,
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
@@ -88,10 +89,12 @@ async def create_workspace_task(
             **request.model_dump(),
             user_id=user_id,
             organization_id=organization_id,
+            team_id=team_id,
             source_session_id=source_session_id
         )
         if parent:
             task.organization_id = parent.organization_id
+            task.team_id = parent.team_id
             task.project = task.project or parent.project
             if parent.status in ("done", "canceled"):
                 raise TaskConflict("Reopen the outcome before adding steps")

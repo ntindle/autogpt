@@ -42,10 +42,19 @@ from backend.copilot.response_model import (
 )
 from backend.copilot.stream_registry import get_session as get_active_session_meta
 from backend.copilot.stream_registry import get_session_meta_key
-from backend.data.db_accessors import chat_db
+from backend.data.db_accessors import (
+    LiveResourceAccessRevoked,
+    chat_db,
+    live_resource_lease,
+    require_exact_chat_session_scope,
+)
 from backend.data.redis_client import get_redis_async
 from backend.data.redis_helpers import incr_with_ttl
-from backend.data.workspace import build_files_block, resolve_attachable_workspace_files
+from backend.data.workspace import (
+    build_files_block,
+    resolve_attachable_workspace_files,
+    resolve_workspace_files,
+)
 from backend.data.workspace_folder import resolve_attachable_workspace_folders
 from backend.data.workspace_scope import WorkspaceAccessDeniedError
 
@@ -149,6 +158,9 @@ class QueuePendingMessageResponse(BaseModel):
 async def queue_user_message(
     *,
     session_id: str,
+    user_id: str,
+    organization_id: str | None,
+    team_id: str | None,
     message: str,
     context: PendingMessageContext | None = None,
     file_ids: list[str] | None = None,
@@ -166,30 +178,49 @@ async def queue_user_message(
     for internal senders only (a session messaging another session); the
     HTTP path never passes it.
     """
-    pending = PendingMessage(
-        content=message,
-        file_ids=file_ids or [],
-        context=context,
-        metadata=metadata or None,
-    )
-    if require_turn_in_flight:
-        new_len = await push_pending_message_if_session_running(
-            session_id,
-            pending,
-            session_meta_key=get_session_meta_key(session_id),
-        )
-        return QueuePendingMessageResponse(
-            buffer_length=new_len or 0,
-            max_buffer_length=MAX_PENDING_MESSAGES,
-            turn_in_flight=new_len is not None,
+    async with live_resource_lease(
+        user_id, organization_id, team_id, "execute"
+    ) as allowed:
+        if not allowed:
+            raise LiveResourceAccessRevoked("workspace_access_revoked")
+        await require_exact_chat_session_scope(
+            session_id, user_id, organization_id, team_id
         )
 
-    new_len = await push_pending_message(session_id, pending)
-    return QueuePendingMessageResponse(
-        buffer_length=new_len,
-        max_buffer_length=MAX_PENDING_MESSAGES,
-        turn_in_flight=await is_turn_in_flight(session_id),
-    )
+        resolved_file_ids: list[str] = []
+        if file_ids:
+            resolved = await resolve_workspace_files(
+                user_id,
+                file_ids,
+                organization_id,
+                team_id,
+            )
+            resolved_file_ids = [file.id for file in resolved]
+
+        pending = PendingMessage(
+            content=message,
+            file_ids=resolved_file_ids,
+            context=context,
+            metadata=metadata or None,
+        )
+        if require_turn_in_flight:
+            new_len = await push_pending_message_if_session_running(
+                session_id,
+                pending,
+                session_meta_key=get_session_meta_key(session_id),
+            )
+            return QueuePendingMessageResponse(
+                buffer_length=new_len or 0,
+                max_buffer_length=MAX_PENDING_MESSAGES,
+                turn_in_flight=new_len is not None,
+            )
+
+        new_len = await push_pending_message(session_id, pending)
+        return QueuePendingMessageResponse(
+            buffer_length=new_len,
+            max_buffer_length=MAX_PENDING_MESSAGES,
+            turn_in_flight=await is_turn_in_flight(session_id),
+        )
 
 
 async def resolve_attachments_for_http(
@@ -198,12 +229,19 @@ async def resolve_attachments_for_http(
     *,
     session_id: str,
     expert_id: str | None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> list["UserWorkspaceFile"]:
     """Resolve attachment IDs for an HTTP request, mapping an expert-scope
     violation to a 400 so the stream and pending routes answer alike."""
     try:
         return await resolve_attachable_workspace_files(
-            user_id, file_ids, session_id=session_id, expert_id=expert_id
+            user_id,
+            file_ids,
+            session_id=session_id,
+            expert_id=expert_id,
+            organization_id=organization_id,
+            team_id=team_id,
         )
     except WorkspaceAccessDeniedError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -213,6 +251,8 @@ async def queue_pending_for_http(
     *,
     session_id: str,
     user_id: str,
+    organization_id: str | None,
+    team_id: str | None,
     message: str,
     context: dict[str, str] | None,
     file_ids: list[str] | None,
@@ -248,12 +288,21 @@ async def queue_pending_for_http(
     sanitized_file_ids: list[str] | None = None
     if file_ids:
         files = await resolve_attachments_for_http(
-            user_id, file_ids, session_id=session_id, expert_id=expert_id
+            user_id,
+            file_ids,
+            session_id=session_id,
+            expert_id=expert_id,
+            organization_id=organization_id,
+            team_id=team_id,
         )
         sanitized_file_ids = [wf.id for wf in files] or None
     if folder_ids:
         folders = await resolve_attachable_workspace_folders(
-            user_id, folder_ids, expert_id=expert_id
+            user_id,
+            folder_ids,
+            expert_id=expert_id,
+            organization_id=organization_id,
+            team_id=team_id,
         )
         message += build_files_block([], folders)
 
@@ -287,6 +336,9 @@ async def queue_pending_for_http(
     push = asyncio.ensure_future(
         queue_user_message(
             session_id=session_id,
+            user_id=user_id,
+            organization_id=organization_id,
+            team_id=team_id,
             message=message,
             context=queue_context,
             file_ids=sanitized_file_ids,
@@ -308,6 +360,10 @@ async def queue_pending_for_http(
                 )
             )
         raise
+    except LiveResourceAccessRevoked as exc:
+        if client_message_id is not None:
+            await release_client_message(session_id, client_message_id, claim_owner)
+        raise HTTPException(status_code=404, detail="Session not found") from exc
     except BaseException:
         if client_message_id is not None:
             await release_client_message(session_id, client_message_id, claim_owner)

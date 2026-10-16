@@ -6,6 +6,7 @@ import { Button } from "@/components/atoms/Button/Button";
 import { Switch } from "@/components/atoms/Switch/Switch";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useProcessReviews } from "@/hooks/useProcessReviews";
+import type { ReviewItemReviewedData } from "@/app/api/__generated__/models/reviewItemReviewedData";
 import {
   Alert01Icon,
   ArrowDown01Icon,
@@ -129,12 +130,12 @@ export function PendingReviewsList({
       const reviewData = reviewDataMap[review.node_exec_id];
       const autoApproveThisNode = autoApproveFutureMap[review.node_id || ""];
 
-      let parsedData: any = undefined;
+      let parsedData: ReviewItemReviewedData | undefined = undefined;
 
       if (!autoApproveThisNode) {
         if (review.editable && reviewData) {
           try {
-            parsedData = JSON.parse(reviewData);
+            parsedData = JSON.parse(reviewData) as ReviewItemReviewedData;
           } catch (error) {
             toast({
               title: "Invalid JSON",

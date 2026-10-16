@@ -6,9 +6,14 @@ import {
 } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import type { ListFilesResponse } from "@/app/api/__generated__/models/listFilesResponse";
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
 import { isHiddenWorkspaceFile } from "@/lib/workspace-files";
 import { useMemo } from "react";
 import { useCopilotStreamStore } from "../../../../copilotStreamStore";
+import { useCopilotUIStore } from "../../../../store";
 import { getMessageArtifacts } from "../../../ChatMessagesContainer/helpers";
 import { isInternalToolOutput, isUploadedFile } from "./helpers";
 
@@ -18,6 +23,7 @@ export interface SessionFile {
 }
 
 export function useSessionFiles(sessionId: string | null) {
+  const tenantScope = useCopilotUIStore((s) => s.artifactTenantScope);
   const messages = useCopilotStreamStore((s) =>
     sessionId ? s.messageSnapshots[sessionId] : undefined,
   );
@@ -43,11 +49,19 @@ export function useSessionFiles(sessionId: string | null) {
 
   const query = useListWorkspaceFiles(params, {
     query: {
-      enabled: !!sessionId,
-      queryKey: [...getListWorkspaceFilesQueryKey(params), documentCount],
-      placeholderData: (previous) => previous,
+      enabled: !!sessionId && tenantScope !== null,
+      queryKey: getTeamScopedQueryKey(
+        [...getListWorkspaceFilesQueryKey(params), documentCount],
+        tenantScope?.organizationId,
+        tenantScope?.teamId,
+      ),
       select: (res) => res.data as ListFilesResponse,
     },
+    request: getTenantRequestInit(
+      tenantScope?.organizationId,
+      tenantScope?.teamId,
+      tenantScope !== null,
+    ),
   });
 
   // The chip and the artifacts button both read this on every render, and
@@ -77,9 +91,9 @@ export function useSessionFiles(sessionId: string | null) {
     uploaded,
     generated,
     deliverables,
-    isLoading: query.isLoading && !!sessionId,
+    isLoading: query.isLoading && !!sessionId && tenantScope !== null,
     isError: query.isError,
     error: query.error,
-    isEmpty: !!sessionId && files.length === 0,
+    isEmpty: !!sessionId && tenantScope !== null && files.length === 0,
   };
 }

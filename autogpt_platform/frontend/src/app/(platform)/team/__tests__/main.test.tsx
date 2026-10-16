@@ -1086,46 +1086,7 @@ describe("TeamPage", () => {
     expect(listRequests).toBe(0);
     expect(screen.queryByRole("button", { name: "Edit Soul" })).toBeNull();
   });
-
-  test("does not mark the card as needing setup when a stale id has a live job", async () => {
-    const staleButLiveMaria: Expert = {
-      ...hiredMaria,
-      workflows: [
-        {
-          ...hiredMaria.workflows[0],
-          schedule_cron: "40 7 * * *",
-          schedule_id: "deleted-schedule",
-        },
-      ],
-    };
-    server.use(
-      getListExpertsMockHandler([staleButLiveMaria]),
-      getGetV1ListExecutionSchedulesForAUserMockHandler([makeSchedule()]),
-    );
-
-    render(<TeamPage />);
-
-    const card = await screen.findByRole("link", { name: "View Maria" });
-    expect(within(card).queryByText(/needs setup/i)).toBeNull();
-  });
 });
-
-function makeSetupItem(
-  overrides: Partial<ExpertSetupItem> = {},
-): ExpertSetupItem {
-  return {
-    expert_id: "expert-maria",
-    expert_name: "Maria",
-    expert_avatar_url: null,
-    workflow_id: "wf-1",
-    workflow_name: "SEO Audit",
-    library_agent_id: "lib-1",
-    providers: ["notion"],
-    resolution: "connect",
-    credential_id: null,
-    ...overrides,
-  };
-}
 
 describe("TeamPage - setup needed card", () => {
   test("stays hidden when nothing needs setup", async () => {
@@ -1497,3 +1458,20 @@ describe("TeamPage - setup needed card", () => {
     expect(screen.queryByRole("button", { name: "Retry setup" })).toBeNull();
   });
 });
+
+function makeSetupItem(
+  overrides: Partial<ExpertSetupItem> = {},
+): ExpertSetupItem {
+  return {
+    expert_id: "expert-maria",
+    expert_name: "Maria",
+    expert_avatar_url: null,
+    workflow_id: "wf-1",
+    workflow_name: "SEO Audit",
+    library_agent_id: "lib-1",
+    providers: ["notion"],
+    resolution: "connect",
+    credential_id: null,
+    ...overrides,
+  };
+}

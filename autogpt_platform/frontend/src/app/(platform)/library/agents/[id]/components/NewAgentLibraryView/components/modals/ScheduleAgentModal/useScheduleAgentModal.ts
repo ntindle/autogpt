@@ -6,6 +6,8 @@ import { trackScheduleCreatedGoal } from "@/services/analytics/activation-goals"
 import { invalidateAllScheduleQueries } from "@/services/schedules/invalidate-schedules";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo, useState } from "react";
+import { useCreateTeamSelection } from "@/components/contextual/TeamPicker/useCreateTeamSelection";
+import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
 
 interface UseScheduleAgentModalCallbacks {
   onCreateSchedule?: (schedule: GraphExecutionJobInfo) => void;
@@ -26,8 +28,11 @@ export function useScheduleAgentModal(
   const [cronExpression, setCronExpression] = useState(
     agent.recommended_schedule_cron || "0 9 * * 1",
   );
+  const { teamId, setTeamId, hasTeams, teamRequestInit, isReady } =
+    useCreateTeamSelection(CreateSurface.ScheduleAgent);
 
   const createScheduleMutation = useCreateSchedule({
+    request: teamRequestInit,
     mutation: {
       onSuccess: (response) => {
         if (response.status === 200) {
@@ -66,6 +71,9 @@ export function useScheduleAgentModal(
         });
         return Promise.reject(new Error("Schedule name required"));
       }
+      if (!isReady) {
+        return Promise.reject(new Error("Organization context is loading"));
+      }
 
       return new Promise<void>((resolve, reject) => {
         createScheduleMutation.mutate(
@@ -93,6 +101,7 @@ export function useScheduleAgentModal(
       inputCredentials,
       createScheduleMutation,
       toast,
+      isReady,
     ],
   );
 
@@ -116,6 +125,12 @@ export function useScheduleAgentModal(
 
     // Loading state
     isCreatingSchedule: createScheduleMutation.isPending,
+
+    // Team ownership
+    teamId,
+    setTeamId,
+    hasTeams,
+    isReady,
 
     // Actions
     handleSchedule,

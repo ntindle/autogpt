@@ -22,6 +22,7 @@ from backend.data.expert_run_output import (
 )
 from backend.data.model import GraphExecutionStats
 from backend.data.redis_client import get_redis
+from backend.util.tenancy_urls import library_agent_path
 
 if TYPE_CHECKING:
     from backend.data.db_manager import DatabaseManagerClient
@@ -63,6 +64,10 @@ def _post_run_result(
     expert_id = completed_expert_id(graph_exec, status)
     if expert_id is None:
         return
+    context = graph_exec.execution_context
+    if not context or not context.organization_id:
+        logger.warning("Skipping expert run post without tenant scope")
+        return
     # The key is captured once at admission and reused for release — a UTC
     # midnight rollover between the two must not decrement the new day's
     # counter (which would mint extra slots).
@@ -84,7 +89,10 @@ def _post_run_result(
         agent_name = metadata.name if metadata else DEFAULT_AGENT_NAME
         succeeded = status == ExecutionStatus.COMPLETED
         library_agent_id = db_client.get_library_agent_id_by_graph_id(
-            graph_exec.user_id, graph_exec.graph_id
+            graph_exec.user_id,
+            graph_exec.graph_id,
+            graph_exec.execution_context.organization_id,
+            graph_exec.execution_context.team_id,
         )
         content = build_expert_run_message(
             agent_name=agent_name,
@@ -92,6 +100,8 @@ def _post_run_result(
             summary=exec_stats.activity_status,
             error=str(exec_stats.error) if exec_stats.error else None,
             library_agent_id=library_agent_id,
+            organization_id=graph_exec.execution_context.organization_id,
+            team_id=graph_exec.execution_context.team_id,
         )
         output_type: OutputType
         output_key: str | None
@@ -103,6 +113,8 @@ def _post_run_result(
             user_id=graph_exec.user_id,
             expert_id=expert_id,
             content=content,
+            organization_id=graph_exec.execution_context.organization_id,
+            team_id=graph_exec.execution_context.team_id,
             message_id=str(
                 uuid.uuid5(_POST_NAMESPACE, f"run-post:{graph_exec.graph_exec_id}")
             ),
@@ -115,6 +127,8 @@ def _post_run_result(
                 "status": "completed" if succeeded else "failed",
                 "output_type": output_type,
                 "output_key": output_key,
+                "organization_id": graph_exec.execution_context.organization_id,
+                "team_id": graph_exec.execution_context.team_id,
             },
         )
     except Exception:
@@ -144,6 +158,8 @@ def build_expert_run_message(
     summary: str | None = None,
     error: str | None = None,
     library_agent_id: str | None = None,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> str:
     """The summary and error both derive from workflow output — untrusted
     text that this message replays into the thread's conversation history.
@@ -153,7 +169,7 @@ def build_expert_run_message(
     speech; errors are also capped so one failed run can't persist a
     multi-MB message that reloads on every later turn."""
     link = (
-        f"\n\n[View the run](/library/agents/{library_agent_id})"
+        f"\n\n[View the run]({library_agent_path(library_agent_id, organization_id, team_id)})"
         if library_agent_id
         else ""
     )

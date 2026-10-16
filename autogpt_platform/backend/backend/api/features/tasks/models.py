@@ -136,6 +136,7 @@ class WorkspaceTask(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     user_id: str
     organization_id: str | None = None
+    team_id: str | None = None
     title: str = Field(min_length=1, max_length=500)
     description: str = Field(default="", max_length=20000)
     project: str = Field(default="", max_length=100)
@@ -274,3 +275,8 @@ class TaskContextResponse(BaseModel):
     task: WorkspaceTask
     ancestors: list[WorkspaceTask]
     children: list[WorkspaceTask]
+
+
+class TaskSessionScope(BaseModel):
+    organization_id: str | None
+    team_id: str | None

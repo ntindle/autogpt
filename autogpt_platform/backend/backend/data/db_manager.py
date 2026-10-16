@@ -31,6 +31,7 @@ from backend.api.features.library.db import (
     list_presets,
     list_trigger_agents,
     move_folder,
+    resolve_unique_library_agent_scope,
     update_folder,
     update_graph_in_library,
     update_library_agent,
@@ -40,7 +41,13 @@ from backend.api.features.library.triggers import (
     setup_triggered_preset,
     update_triggered_preset,
 )
-from backend.api.features.orgs.db import get_user_default_team, resolve_default_tenancy
+from backend.api.features.orgs.db import (
+    get_shared_memory_hold_buffer,
+    get_shared_memory_org_access,
+    get_user_default_team,
+    list_shared_memory_team_access,
+    resolve_default_tenancy,
+)
 from backend.api.features.search.embeddings import (
     cleanup_orphaned_embeddings,
     delete_content_embedding,
@@ -56,11 +63,14 @@ from backend.api.features.store.db import (
     get_store_agent_by_version_id,
     get_store_agent_details,
     get_store_agents,
+    get_verdict_notification_source_graph_id,
+    is_verdict_notification_source_live,
 )
 from backend.api.features.store.embeddings import backfill_missing_embeddings
 from backend.api.features.tasks import db as tasks_db
 from backend.api.features.tasks import lifecycle as tasks_lifecycle
 from backend.copilot import db as chat_db
+from backend.copilot.executor.utils import schedule_turn_if_live
 from backend.copilot.sharing.db import link_new_execution_to_chat_share
 from backend.data import bot_analytics as bot_analytics_db
 from backend.data import bot_installs as bot_installs_db
@@ -73,15 +83,22 @@ from backend.data import skill_use as skill_use_data
 from backend.data import skill_versions as skill_versions_data
 from backend.data.activity_event import create_activity_event
 from backend.data.alerts import (
+    alert_condition_sources_are_live,
     count_alerts_sent_since,
+    finalize_alert_delivery,
+    finalize_briefing_delivery,
+    get_alert_condition_source_graph_ids,
+    get_briefing_alert_condition_scopes,
     get_briefing_alert_conditions,
+    get_pending_alert_condition_scopes,
     get_pending_alert_conditions,
+    get_stale_alert_condition_ids,
     get_users_with_matured_alerts,
-    mark_alert_conditions_briefed,
     mark_alert_conditions_deferred,
-    mark_alert_conditions_sent,
     raise_alert_condition,
     resolve_alert_condition,
+    resolve_alert_conditions_by_ids,
+    resolve_alert_conditions_for_scopes,
 )
 from backend.data.analytics import (
     get_accuracy_trends_and_alerts,
@@ -104,6 +121,7 @@ from backend.data.briefing_data import (
     count_scheduled_agents,
     get_agent_period_stats,
     get_briefing_credit_balance,
+    get_briefing_resource_scopes,
     get_top_scored_runs,
 )
 from backend.data.credit import (
@@ -127,6 +145,7 @@ from backend.data.execution import (
     get_latest_node_execution,
     get_node_execution,
     get_node_executions,
+    has_exact_graph_execution_scope,
     set_execution_kv_data,
     update_graph_execution_start_time,
     update_graph_execution_stats,
@@ -134,6 +153,10 @@ from backend.data.execution import (
     update_node_execution_status_batch,
     upsert_execution_input,
     upsert_execution_output,
+)
+from backend.data.grants import (
+    resolve_execution_credentials_owner,
+    validate_execution_credentials_owner,
 )
 from backend.data.graph import (
     get_connected_output_nodes,
@@ -178,6 +201,27 @@ from backend.data.subscription_trial import (
     get_subscription_trial,
     record_subscription_trial_cost,
 )
+from backend.data.tenancy import (
+    acquire_agent_graph_attachment_lease,
+    acquire_alert_condition_delivery_lease,
+    acquire_live_resource_lease,
+    acquire_live_resource_scopes_lease,
+    acquire_store_listing_version_delivery_lease,
+    check_live_transaction_lease_database,
+    connect_live_transaction_lease_database,
+    disconnect_live_transaction_lease_database,
+    has_live_resource_access,
+    has_live_tenancy,
+    is_agent_graph_attachment_lease_active,
+    is_alert_condition_delivery_lease_active,
+    is_live_resource_lease_active,
+    is_store_listing_version_delivery_lease_active,
+    release_agent_graph_attachment_lease,
+    release_alert_condition_delivery_lease,
+    release_all_live_transaction_leases,
+    release_live_resource_lease,
+    release_store_listing_version_delivery_lease,
+)
 from backend.data.understanding import (
     get_business_understanding,
     upsert_business_understanding,
@@ -200,7 +244,6 @@ from backend.data.user import (
     heal_orphaned_auth_identities,
     is_marketing_opted_out,
     release_welcome_email,
-    set_last_briefing_at,
     set_user_credentials,
     update_user_integrations,
 )
@@ -320,12 +363,21 @@ class DatabaseManager(AppService):
         async with super().lifespan(app):
             logger.info(f"[{self.service_name}] ⏳ Connecting to Database...")
             await db.connect()
-
-            logger.info(f"[{self.service_name}] ✅ Ready")
-            yield
-
-            logger.info(f"[{self.service_name}] ⏳ Disconnecting Database...")
-            await db.disconnect()
+            lease_database_owned = False
+            try:
+                lease_database_owned = await connect_live_transaction_lease_database()
+                logger.info(f"[{self.service_name}] ✅ Ready")
+                yield
+            finally:
+                logger.info(f"[{self.service_name}] ⏳ Disconnecting Database...")
+                try:
+                    if lease_database_owned:
+                        try:
+                            await release_all_live_transaction_leases()
+                        finally:
+                            await disconnect_live_transaction_lease_database()
+                finally:
+                    await db.disconnect()
 
     async def health_check(self) -> str:
         if not db.is_connected():
@@ -337,6 +389,8 @@ class DatabaseManager(AppService):
             result = await db.query_raw_with_schema("SELECT 1 as health_check")
             if not result or result[0].get("health_check") != 1:
                 raise UnhealthyServiceError("Database query test failed")
+            if not await check_live_transaction_lease_database():
+                raise UnhealthyServiceError("Lease database query test failed")
         except Exception as e:
             raise UnhealthyServiceError(f"Database health check failed: {e}")
 
@@ -363,6 +417,7 @@ class DatabaseManager(AppService):
     get_graph_executions = _(get_graph_executions)
     get_graph_executions_count = _(get_graph_executions_count)
     get_graph_execution = _(get_graph_execution)
+    has_exact_graph_execution_scope = _(has_exact_graph_execution_scope)
     get_graph_execution_meta = _(get_graph_execution_meta)
     create_graph_execution = _(create_graph_execution)
     get_node_execution = _(get_node_execution)
@@ -440,6 +495,7 @@ class DatabaseManager(AppService):
     add_store_agent_to_library = _(add_store_agent_to_library)
     get_library_agent_id_by_graph_id = _(get_library_agent_id_by_graph_id)
     get_library_agent_refs_by_graph_ids = _(get_library_agent_refs_by_graph_ids)
+    resolve_unique_library_agent_scope = _(resolve_unique_library_agent_scope)
     create_graph_in_library = _(create_graph_in_library)
     create_library_agent = _(create_library_agent)
     get_library_agent = _(get_library_agent)
@@ -447,6 +503,8 @@ class DatabaseManager(AppService):
     update_library_agent = _(update_library_agent)
     update_graph_in_library = _(update_graph_in_library)
     validate_graph_execution_permissions = _(validate_graph_execution_permissions)
+    resolve_execution_credentials_owner = _(resolve_execution_credentials_owner)
+    validate_execution_credentials_owner = _(validate_execution_credentials_owner)
     setup_triggered_preset = _(setup_triggered_preset)
     update_triggered_preset = _(update_triggered_preset)
     delete_preset_with_webhook_cleanup = _(delete_preset_with_webhook_cleanup)
@@ -478,6 +536,10 @@ class DatabaseManager(AppService):
     get_store_agent_by_version_id = _(get_store_agent_by_version_id)
     get_agent = _(get_agent)
     get_available_graph = _(get_available_graph)
+    get_verdict_notification_source_graph_id = _(
+        get_verdict_notification_source_graph_id
+    )
+    is_verdict_notification_source_live = _(is_verdict_notification_source_live)
 
     # ============ Search ============ #
     get_embedding_stats = _(get_embedding_stats)
@@ -498,11 +560,18 @@ class DatabaseManager(AppService):
     # it owns no Prisma connection of its own.
     get_users_with_matured_alerts = _(get_users_with_matured_alerts)
     get_pending_alert_conditions = _(get_pending_alert_conditions)
+    get_pending_alert_condition_scopes = _(get_pending_alert_condition_scopes)
+    get_briefing_alert_condition_scopes = _(get_briefing_alert_condition_scopes)
+    resolve_alert_conditions_for_scopes = _(resolve_alert_conditions_for_scopes)
     count_alerts_sent_since = _(count_alerts_sent_since)
-    mark_alert_conditions_sent = _(mark_alert_conditions_sent)
+    finalize_alert_delivery = _(finalize_alert_delivery)
+    finalize_briefing_delivery = _(finalize_briefing_delivery)
+    get_alert_condition_source_graph_ids = _(get_alert_condition_source_graph_ids)
+    alert_condition_sources_are_live = _(alert_condition_sources_are_live)
+    get_stale_alert_condition_ids = _(get_stale_alert_condition_ids)
+    resolve_alert_conditions_by_ids = _(resolve_alert_conditions_by_ids)
     mark_alert_conditions_deferred = _(mark_alert_conditions_deferred)
     get_briefing_alert_conditions = _(get_briefing_alert_conditions)
-    mark_alert_conditions_briefed = _(mark_alert_conditions_briefed)
     count_scheduled_agents = _(count_scheduled_agents)
     get_recent_daily_spend = _(get_recent_daily_spend)
 
@@ -564,9 +633,41 @@ class DatabaseManager(AppService):
     # ============ Orgs ============ #
     get_user_default_team = _(get_user_default_team)
     resolve_default_tenancy = _(resolve_default_tenancy)
+    has_live_tenancy = _(has_live_tenancy)
+    has_live_resource_access = _(has_live_resource_access)
+    acquire_live_resource_lease = _(acquire_live_resource_lease)
+    acquire_live_resource_scopes_lease = _(acquire_live_resource_scopes_lease)
+    release_live_resource_lease = _(release_live_resource_lease)
+    is_live_resource_lease_active = _(is_live_resource_lease_active)
+    acquire_agent_graph_attachment_lease = _(acquire_agent_graph_attachment_lease)
+    release_agent_graph_attachment_lease = _(release_agent_graph_attachment_lease)
+    is_agent_graph_attachment_lease_active = _(is_agent_graph_attachment_lease_active)
+    acquire_alert_condition_delivery_lease = _(acquire_alert_condition_delivery_lease)
+    release_alert_condition_delivery_lease = _(release_alert_condition_delivery_lease)
+    is_alert_condition_delivery_lease_active = _(
+        is_alert_condition_delivery_lease_active
+    )
+    acquire_store_listing_version_delivery_lease = _(
+        acquire_store_listing_version_delivery_lease
+    )
+    release_store_listing_version_delivery_lease = _(
+        release_store_listing_version_delivery_lease
+    )
+    is_store_listing_version_delivery_lease_active = _(
+        is_store_listing_version_delivery_lease_active
+    )
+    get_shared_memory_org_access = _(get_shared_memory_org_access)
+    list_shared_memory_team_access = _(list_shared_memory_team_access)
+    get_shared_memory_hold_buffer = _(get_shared_memory_hold_buffer)
 
     find_server_link_owner = _(platform_linking_db.find_server_link_owner)
+    find_server_link_owner_for_sender = _(
+        platform_linking_db.find_server_link_owner_for_sender
+    )
     find_user_link_owner = _(platform_linking_db.find_user_link_owner)
+    acquire_platform_link_lease = _(platform_linking_db.acquire_platform_link_lease)
+    release_platform_link_lease = _(platform_linking_db.release_platform_link_lease)
+    is_platform_link_lease_active = _(platform_linking_db.is_platform_link_lease_active)
     resolve_server_link = _(platform_linking_db.resolve_server_link)
     resolve_user_link = _(platform_linking_db.resolve_user_link)
     create_server_link_token = _(platform_linking_db.create_server_link_token)
@@ -747,6 +848,8 @@ class DatabaseManager(AppService):
     get_chat_session_metadata = _(chat_db.get_chat_session_metadata)
     get_chat_messages_paginated = _(chat_db.get_chat_messages_paginated)
     create_chat_session = _(chat_db.create_chat_session)
+    claim_chat_session = _(chat_db.claim_chat_session)
+    schedule_turn_if_live = _(schedule_turn_if_live)
     update_chat_session = _(chat_db.update_chat_session)
     add_chat_message = _(chat_db.add_chat_message)
     add_chat_messages_batch = _(chat_db.add_chat_messages_batch)
@@ -789,12 +892,12 @@ class DatabaseManager(AppService):
     # These run in the NotificationManager process, which owns no Prisma
     # connection, so every read goes through this RPC surface.
     get_agent_period_stats = _(get_agent_period_stats)
+    get_briefing_resource_scopes = _(get_briefing_resource_scopes)
     get_top_scored_runs = _(get_top_scored_runs)
     count_active_agents = _(count_active_agents)
     get_briefing_credit_balance = _(get_briefing_credit_balance)
     get_briefing_candidates = _(get_briefing_candidates)
     get_briefing_candidate = _(get_briefing_candidate)
-    set_last_briefing_at = _(set_last_briefing_at)
 
     # ============ Billing emails ============ #
     # The lifecycle handlers run in the REST API on a Stripe webhook *and* in
@@ -820,6 +923,7 @@ class DatabaseManagerClient(AppServiceClient):
     get_graph_executions = _(d.get_graph_executions)
     get_graph_executions_count = _(d.get_graph_executions_count)
     get_graph_execution_meta = _(d.get_graph_execution_meta)
+    has_exact_graph_execution_scope = _(d.has_exact_graph_execution_scope)
     get_node_executions = _(d.get_node_executions)
     update_node_execution_status = _(d.update_node_execution_status)
     update_graph_execution_start_time = _(d.update_graph_execution_start_time)
@@ -835,6 +939,33 @@ class DatabaseManagerClient(AppServiceClient):
     spend_org_credits = _(d.spend_org_credits)
     get_org_credits = _(d.get_org_credits)
     get_personal_org_owner = _(d.get_personal_org_owner)
+
+    # Orgs
+    has_live_resource_access = _(d.has_live_resource_access)
+    acquire_live_resource_lease = _(d.acquire_live_resource_lease)
+    acquire_live_resource_scopes_lease = _(d.acquire_live_resource_scopes_lease)
+    release_live_resource_lease = _(d.release_live_resource_lease)
+    is_live_resource_lease_active = _(d.is_live_resource_lease_active)
+    acquire_agent_graph_attachment_lease = _(d.acquire_agent_graph_attachment_lease)
+    release_agent_graph_attachment_lease = _(d.release_agent_graph_attachment_lease)
+    is_agent_graph_attachment_lease_active = _(d.is_agent_graph_attachment_lease_active)
+    acquire_alert_condition_delivery_lease = _(d.acquire_alert_condition_delivery_lease)
+    release_alert_condition_delivery_lease = _(d.release_alert_condition_delivery_lease)
+    is_alert_condition_delivery_lease_active = _(
+        d.is_alert_condition_delivery_lease_active
+    )
+    acquire_store_listing_version_delivery_lease = _(
+        d.acquire_store_listing_version_delivery_lease
+    )
+    release_store_listing_version_delivery_lease = _(
+        d.release_store_listing_version_delivery_lease
+    )
+    is_store_listing_version_delivery_lease_active = _(
+        d.is_store_listing_version_delivery_lease_active
+    )
+    get_shared_memory_org_access = _(d.get_shared_memory_org_access)
+    list_shared_memory_team_access = _(d.list_shared_memory_team_access)
+    get_shared_memory_hold_buffer = _(d.get_shared_memory_hold_buffer)
 
     # Block error monitoring
     get_block_error_stats = _(d.get_block_error_stats)
@@ -857,10 +988,22 @@ class DatabaseManagerClient(AppServiceClient):
     count_scheduled_agents = _(d.count_scheduled_agents)
     get_recent_daily_spend = _(d.get_recent_daily_spend)
 
+    # Store notifications
+    get_verdict_notification_source_graph_id = _(
+        d.get_verdict_notification_source_graph_id
+    )
+    is_verdict_notification_source_live = _(d.is_verdict_notification_source_live)
+
     # Library
     list_library_agents = _(d.list_library_agents)
     add_store_agent_to_library = _(d.add_store_agent_to_library)
     validate_graph_execution_permissions = _(d.validate_graph_execution_permissions)
+    resolve_execution_credentials_owner = _(d.resolve_execution_credentials_owner)
+    validate_execution_credentials_owner = _(d.validate_execution_credentials_owner)
+
+    acquire_platform_link_lease = _(d.acquire_platform_link_lease)
+    release_platform_link_lease = _(d.release_platform_link_lease)
+    is_platform_link_lease_active = _(d.is_platform_link_lease_active)
 
     # Expert run posts (executor completion hook)
     append_expert_run_message = _(d.append_expert_run_message)
@@ -877,6 +1020,7 @@ class DatabaseManagerClient(AppServiceClient):
     mark_briefing_delivered = _(d.mark_briefing_delivered)
     update_briefing_content = _(d.update_briefing_content)
     get_library_agent_refs_by_graph_ids = _(d.get_library_agent_refs_by_graph_ids)
+    resolve_unique_library_agent_scope = _(d.resolve_unique_library_agent_scope)
 
     # Store
     get_store_agents = _(d.get_store_agents)
@@ -930,6 +1074,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_connected_output_nodes = d.get_connected_output_nodes
     get_latest_node_execution = d.get_latest_node_execution
     get_graph_execution = d.get_graph_execution
+    has_exact_graph_execution_scope = d.has_exact_graph_execution_scope
     get_graph_execution_meta = d.get_graph_execution_meta
     get_graph_executions = d.get_graph_executions
     get_node_execution = d.get_node_execution
@@ -983,6 +1128,12 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_user_email_verification = d.get_user_email_verification
     get_user_notification_preference = d.get_user_notification_preference
 
+    # ============ Store notifications ============ #
+    get_verdict_notification_source_graph_id = (
+        d.get_verdict_notification_source_graph_id
+    )
+    is_verdict_notification_source_live = d.is_verdict_notification_source_live
+
     # ============ Alerts ============ #
     raise_alert_condition = d.raise_alert_condition
     resolve_alert_condition = d.resolve_alert_condition
@@ -994,18 +1145,25 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     # passes read and write exclusively through these.
     get_users_with_matured_alerts = d.get_users_with_matured_alerts
     get_pending_alert_conditions = d.get_pending_alert_conditions
+    get_pending_alert_condition_scopes = d.get_pending_alert_condition_scopes
+    get_briefing_alert_condition_scopes = d.get_briefing_alert_condition_scopes
+    resolve_alert_conditions_for_scopes = d.resolve_alert_conditions_for_scopes
     count_alerts_sent_since = d.count_alerts_sent_since
-    mark_alert_conditions_sent = d.mark_alert_conditions_sent
+    finalize_alert_delivery = d.finalize_alert_delivery
+    finalize_briefing_delivery = d.finalize_briefing_delivery
+    get_alert_condition_source_graph_ids = d.get_alert_condition_source_graph_ids
+    alert_condition_sources_are_live = d.alert_condition_sources_are_live
+    get_stale_alert_condition_ids = d.get_stale_alert_condition_ids
+    resolve_alert_conditions_by_ids = d.resolve_alert_conditions_by_ids
     mark_alert_conditions_deferred = d.mark_alert_conditions_deferred
     get_briefing_alert_conditions = d.get_briefing_alert_conditions
-    mark_alert_conditions_briefed = d.mark_alert_conditions_briefed
     get_agent_period_stats = d.get_agent_period_stats
+    get_briefing_resource_scopes = d.get_briefing_resource_scopes
     get_top_scored_runs = d.get_top_scored_runs
     count_active_agents = d.count_active_agents
     get_briefing_credit_balance = d.get_briefing_credit_balance
     get_briefing_candidates = d.get_briefing_candidates
     get_briefing_candidate = d.get_briefing_candidate
-    set_last_briefing_at = d.set_last_briefing_at
     get_billing_email_recipient = d.get_billing_email_recipient
     claim_welcome_email = d.claim_welcome_email
     is_marketing_opted_out = d.is_marketing_opted_out
@@ -1022,6 +1180,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     # ============ Library ============ #
     list_library_agents = d.list_library_agents
     get_library_agent_refs_by_graph_ids = d.get_library_agent_refs_by_graph_ids
+    resolve_unique_library_agent_scope = d.resolve_unique_library_agent_scope
     add_store_agent_to_library = d.add_store_agent_to_library
     create_graph_in_library = d.create_graph_in_library
     create_library_agent = d.create_library_agent
@@ -1030,6 +1189,8 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     update_library_agent = d.update_library_agent
     update_graph_in_library = d.update_graph_in_library
     validate_graph_execution_permissions = d.validate_graph_execution_permissions
+    resolve_execution_credentials_owner = d.resolve_execution_credentials_owner
+    validate_execution_credentials_owner = d.validate_execution_credentials_owner
     setup_triggered_preset = d.setup_triggered_preset
     update_triggered_preset = d.update_triggered_preset
     delete_preset_with_webhook_cleanup = d.delete_preset_with_webhook_cleanup
@@ -1125,9 +1286,39 @@ class DatabaseManagerAsyncClient(AppServiceClient):
 
     # ============ Platform Linking ============ #
     find_server_link_owner = d.find_server_link_owner
+    find_server_link_owner_for_sender = d.find_server_link_owner_for_sender
     get_user_default_team = d.get_user_default_team
     resolve_default_tenancy = d.resolve_default_tenancy
+    has_live_tenancy = d.has_live_tenancy
+    has_live_resource_access = d.has_live_resource_access
+    acquire_live_resource_lease = d.acquire_live_resource_lease
+    acquire_live_resource_scopes_lease = d.acquire_live_resource_scopes_lease
+    release_live_resource_lease = d.release_live_resource_lease
+    is_live_resource_lease_active = d.is_live_resource_lease_active
+    acquire_agent_graph_attachment_lease = d.acquire_agent_graph_attachment_lease
+    release_agent_graph_attachment_lease = d.release_agent_graph_attachment_lease
+    is_agent_graph_attachment_lease_active = d.is_agent_graph_attachment_lease_active
+    acquire_alert_condition_delivery_lease = d.acquire_alert_condition_delivery_lease
+    release_alert_condition_delivery_lease = d.release_alert_condition_delivery_lease
+    is_alert_condition_delivery_lease_active = (
+        d.is_alert_condition_delivery_lease_active
+    )
+    acquire_store_listing_version_delivery_lease = (
+        d.acquire_store_listing_version_delivery_lease
+    )
+    release_store_listing_version_delivery_lease = (
+        d.release_store_listing_version_delivery_lease
+    )
+    is_store_listing_version_delivery_lease_active = (
+        d.is_store_listing_version_delivery_lease_active
+    )
+    get_shared_memory_org_access = d.get_shared_memory_org_access
+    list_shared_memory_team_access = d.list_shared_memory_team_access
+    get_shared_memory_hold_buffer = d.get_shared_memory_hold_buffer
     find_user_link_owner = d.find_user_link_owner
+    acquire_platform_link_lease = d.acquire_platform_link_lease
+    release_platform_link_lease = d.release_platform_link_lease
+    is_platform_link_lease_active = d.is_platform_link_lease_active
     resolve_server_link = d.resolve_server_link
     resolve_user_link = d.resolve_user_link
     create_server_link_token = d.create_server_link_token
@@ -1252,6 +1443,8 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_chat_session_metadata = d.get_chat_session_metadata
     get_chat_messages_paginated = d.get_chat_messages_paginated
     create_chat_session = d.create_chat_session
+    claim_chat_session = d.claim_chat_session
+    schedule_turn_if_live = d.schedule_turn_if_live
     update_chat_session = d.update_chat_session
     add_chat_message = d.add_chat_message
     add_chat_messages_batch = d.add_chat_messages_batch

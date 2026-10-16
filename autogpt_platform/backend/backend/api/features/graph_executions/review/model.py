@@ -56,6 +56,8 @@ class PendingHumanReviewModel(BaseModel):
     session_id: str | None = Field(
         default=None, description="Chat session ID; None for a graph review"
     )
+    organization_id: str | None = None
+    team_id: str | None = None
     payload: SafeJsonData = Field(description="The actual data payload awaiting review")
     instructions: str | None = Field(
         description="Instructions or message for the reviewer", default=None
@@ -125,6 +127,8 @@ class PendingHumanReviewModel(BaseModel):
             graph_id=review.graphId if is_graph else None,
             graph_version=review.graphVersion if is_graph else None,
             session_id=review.chatSessionId or legacy_session_id,
+            organization_id=review.organizationId,
+            team_id=review.teamId,
             payload=review.payload,
             instructions=review.instructions,
             editable=review.editable,

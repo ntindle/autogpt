@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -24,6 +25,12 @@ from backend.copilot.db import (
 )
 from backend.copilot.model import ChatMessage as CopilotChatMessage
 from backend.copilot.model import ChatSession, get_chat_session, upsert_chat_session
+from backend.util.exceptions import NotAuthorizedError
+
+
+@asynccontextmanager
+async def _unlocked_session(_session_id: str):
+    yield
 
 
 def _make_msg(
@@ -736,21 +743,13 @@ async def test_get_user_chat_sessions_orders_pinned_first():
     assert 'ORDER BY "isPinned" DESC, "updatedAt" DESC' in query
 
 
-# ---------- expert-session org-scope carve-out ----------
-#
-# Expert sessions are pinned to the owner's personal org at creation
-# (copilot/model.py::create_chat_session), so scoping them to the caller's
-# ACTIVE org would make them invisible/undeletable whenever a shared org is
-# active. The owner's expert sessions must stay listable, loadable, and
-# deletable regardless of the active organization.
+# ---------- exact org-home session scope ----------
 
-_EXPERT_CARVEOUT_SQL = (
-    '"organizationId" = $2 OR "organizationId" IS NULL' ' OR "expertId" IS NOT NULL'
-)
+_EXACT_ORG_HOME_SCOPE_SQL = '"organizationId" = $2 AND "teamId" IS NULL'
 
 
 @pytest.mark.asyncio
-async def test_get_session_org_scope_exempts_expert_sessions(
+async def test_get_session_uses_exact_org_home_scope(
     mock_db: tuple[AsyncMock, AsyncMock],
 ):
     find_first, _ = mock_db
@@ -763,18 +762,13 @@ async def test_get_session_org_scope_exempts_expert_sessions(
     where = find_first.call_args.kwargs["where"]
     assert where["userId"] == "user-abc"
     assert where["AND"] == [
-        {
-            "OR": [
-                {"organizationId": "shared-org"},
-                {"organizationId": None},
-                {"expertId": {"not": None}},
-            ]
-        }
+        {"organizationId": "shared-org"},
+        {"teamId": None},
     ]
 
 
 @pytest.mark.asyncio
-async def test_delete_org_scope_exempts_expert_sessions():
+async def test_delete_uses_exact_org_home_scope():
     from backend.copilot.db import delete_chat_session
 
     delete_many = AsyncMock(return_value=1)
@@ -789,18 +783,54 @@ async def test_delete_org_scope_exempts_expert_sessions():
     where = delete_many.call_args.kwargs["where"]
     assert where["userId"] == "user-abc"
     assert where["AND"] == [
-        {
-            "OR": [
-                {"organizationId": "shared-org"},
-                {"organizationId": None},
-                {"expertId": {"not": None}},
-            ]
-        }
+        {"organizationId": "shared-org"},
+        {"teamId": None},
     ]
 
 
 @pytest.mark.asyncio
-async def test_list_org_scope_exempts_expert_sessions():
+async def test_delete_shared_chat_fails_closed_when_share_cascade_fails():
+    from backend.copilot.db import delete_chat_session
+
+    session = _make_session("shared-session", "user-abc").model_copy(
+        update={
+            "isShared": True,
+            "organizationId": "org-1",
+            "teamId": "team-a",
+        }
+    )
+    delete_many = AsyncMock(return_value=1)
+    client = AsyncMock(
+        delete_many=delete_many,
+        find_first=AsyncMock(return_value=session),
+    )
+    cascade = AsyncMock(side_effect=RuntimeError("temporary failure"))
+    with (
+        patch.object(PrismaChatSession, "prisma", return_value=client),
+        patch(
+            "backend.copilot.sharing.db.disable_chat_session_share",
+            cascade,
+        ),
+    ):
+        deleted = await delete_chat_session(
+            "shared-session",
+            user_id="user-abc",
+            organization_id="org-1",
+            team_id="team-a",
+        )
+
+    assert deleted is False
+    cascade.assert_awaited_once_with(
+        session_id="shared-session",
+        user_id="user-abc",
+        organization_id="org-1",
+        team_id="team-a",
+    )
+    delete_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_list_uses_exact_org_home_scope():
     raw = AsyncMock(return_value=[])
     with patch("backend.copilot.db.db.query_raw_with_schema", raw):
         await get_user_chat_sessions(
@@ -808,11 +838,11 @@ async def test_list_org_scope_exempts_expert_sessions():
         )
 
     query = raw.call_args.args[0]
-    assert _EXPERT_CARVEOUT_SQL in query
+    assert _EXACT_ORG_HOME_SCOPE_SQL in query
 
 
 @pytest.mark.asyncio
-async def test_session_count_org_scope_matches_list_carveout():
+async def test_session_count_matches_exact_org_home_scope():
     from backend.copilot.db import get_user_session_count
 
     raw = AsyncMock(return_value=[{"count": 0}])
@@ -820,7 +850,7 @@ async def test_session_count_org_scope_matches_list_carveout():
         await get_user_session_count("user-abc", organization_id="shared-org")
 
     query = raw.call_args.args[0]
-    assert _EXPERT_CARVEOUT_SQL in query
+    assert _EXACT_ORG_HOME_SCOPE_SQL in query
 
 
 @pytest.mark.asyncio
@@ -1231,6 +1261,46 @@ async def test_update_chat_message_stamps_not_found_returns_false():
     assert ok is False
 
 
+# ---------- claim_chat_session ----------
+
+
+@pytest.mark.asyncio
+async def test_claim_chat_session_is_atomic_and_persisted() -> None:
+    from backend.copilot.db import claim_chat_session
+
+    row = _make_session(session_id="sess-claim", user_id="u1")
+    client = AsyncMock()
+    client.update_many.return_value = 1
+    client.find_unique.return_value = row
+    with patch.object(PrismaChatSession, "prisma", return_value=client):
+        result = await claim_chat_session("sess-claim", "u1")
+
+    assert result.user_id == "u1"
+    client.update_many.assert_awaited_once()
+    assert client.update_many.await_args.kwargs["where"] == {
+        "id": "sess-claim",
+        "userId": None,
+    }
+    update_data = client.update_many.await_args.kwargs["data"]
+    assert update_data["userId"] == "u1"
+    assert isinstance(update_data["updatedAt"], datetime)
+
+
+@pytest.mark.asyncio
+async def test_claim_chat_session_rejects_concurrent_other_user() -> None:
+    from backend.copilot.db import claim_chat_session
+
+    row = _make_session(session_id="sess-claim", user_id="other-user")
+    client = AsyncMock()
+    client.update_many.return_value = 0
+    client.find_unique.return_value = row
+    with (
+        patch.object(PrismaChatSession, "prisma", return_value=client),
+        pytest.raises(NotAuthorizedError, match="Not authorized to claim session"),
+    ):
+        await claim_chat_session("sess-claim", "u1")
+
+
 # ---------- append_expert_run_message ----------
 
 
@@ -1247,7 +1317,12 @@ async def test_append_expert_run_message_dedupes_on_message_id() -> None:
         patch("backend.copilot.db.add_chat_message", new=add_message),
     ):
         result = await append_expert_run_message(
-            user_id="u1", expert_id="e1", content="done", message_id="m1"
+            user_id="u1",
+            expert_id="e1",
+            content="done",
+            message_id="m1",
+            organization_id="org-1",
+            team_id="team-1",
         )
 
     assert result is None
@@ -1272,13 +1347,28 @@ async def test_append_expert_run_message_uses_latest_expert_session() -> None:
         patch("backend.copilot.db.add_chat_message", new=add_message),
         patch("backend.copilot.db.create_chat_session", new=create_session),
         patch("backend.copilot.db.get_next_sequence", new=AsyncMock(return_value=7)),
+        patch("backend.copilot.db._get_session_lock", new=_unlocked_session),
     ):
         result = await append_expert_run_message(
-            user_id="u1", expert_id="e1", content="done", message_id="m1"
+            user_id="u1",
+            expert_id="e1",
+            content="done",
+            message_id="m1",
+            organization_id="org-1",
+            team_id="team-1",
         )
 
     assert result == "sess-latest"
     create_session.assert_not_awaited()
+    find_first.assert_awaited_once_with(
+        where={
+            "userId": "u1",
+            "expertId": "e1",
+            "organizationId": "org-1",
+            "teamId": "team-1",
+        },
+        order={"updatedAt": "desc"},
+    )
     call_kwargs = add_message.call_args.kwargs
     assert call_kwargs["session_id"] == "sess-latest"
     assert call_kwargs["role"] == "assistant"
@@ -1307,11 +1397,19 @@ async def test_append_expert_run_message_creates_session_when_none_exists() -> N
         patch("backend.copilot.db.add_chat_message", new=add_message),
         patch("backend.copilot.db.create_chat_session", new=created),
         patch("backend.copilot.db.get_next_sequence", new=AsyncMock(return_value=0)),
+        patch("backend.copilot.db._get_session_lock", new=_unlocked_session),
     ):
         result = await append_expert_run_message(
-            user_id="u1", expert_id="e1", content="done", message_id="m1"
+            user_id="u1",
+            expert_id="e1",
+            content="done",
+            message_id="m1",
+            organization_id="org-1",
+            team_id="team-1",
         )
 
     assert result == "sess-new"
     assert created.call_args.kwargs["expert_id"] == "e1"
+    assert created.call_args.kwargs["organization_id"] == "org-1"
+    assert created.call_args.kwargs["team_id"] == "team-1"
     assert add_message.call_args.kwargs["session_id"] == "sess-new"

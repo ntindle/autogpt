@@ -11,14 +11,15 @@ import { ApprovalQueue } from "../ApprovalQueue/ApprovalQueue";
 import { isGateReview, toApprovalItem } from "../ApprovalQueue/helpers";
 import { useCopilotPendingReviews } from "./useCopilotPendingReviews";
 
-type Props =
+type Props = { organizationId: string | null; teamId: string | null } & (
   | { graphExecId: string; graphId?: string }
   | {
       chatSessionId: string;
       pollWhileEmpty?: boolean;
       refetchKey?: number;
       expertName?: string | null;
-    };
+    }
+);
 
 /**
  * Renders the chat's pending reviews, or those of an agent run it started:

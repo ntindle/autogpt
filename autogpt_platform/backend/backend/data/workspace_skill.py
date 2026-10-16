@@ -22,7 +22,7 @@ from backend.data.skill_capacity import (
     skill_origin,
     skill_owner_folder,
 )
-from backend.data.workspace import WorkspaceFile
+from backend.data.workspace import WorkspaceFile, _workspace_scope_where
 from backend.util.json import SafeJson
 
 
@@ -50,6 +50,11 @@ class WorkspaceSkillWrite(BaseModel):
     overwrite: bool
     checksum: str | None = None
     metadata: dict | None = None
+    organization_id: str | None = None
+    team_id: str | None = None
+    session_id: str | None = None
+    execution_id: str | None = None
+    user_global_config: bool = False
     # The rest of the package, swapped in with the root: files that changed,
     # and paths the package no longer has.
     files: list[WorkspaceSkillFile] = Field(default_factory=list)
@@ -111,6 +116,11 @@ async def publish_workspace_skill_file(
                 "workspaceId": write.workspace_id,
                 "path": write.path,
                 "isDeleted": False,
+                **_workspace_scope_where(
+                    write.organization_id,
+                    write.team_id,
+                    user_global_config=write.user_global_config,
+                ),
             }
         )
         if existing and not write.overwrite:
@@ -129,7 +139,15 @@ async def publish_workspace_skill_file(
         ):
             return WorkspaceSkillPublication(status="owned")
         if _takes_a_slot(existing, origin) and (
-            await _root_count(tx, write.workspace_id, folder, origin)
+            await _root_count(
+                tx,
+                write.workspace_id,
+                folder,
+                origin,
+                write.organization_id,
+                write.team_id,
+                write.user_global_config,
+            )
             >= MAX_SKILLS_PER_EXPERT
         ):
             return WorkspaceSkillPublication(status="capacity")
@@ -148,7 +166,14 @@ async def publish_workspace_skill_file(
         )
 
 
-async def skill_root_has_room(workspace_id: str, path: str, origin: str) -> bool:
+async def skill_root_has_room(
+    workspace_id: str,
+    path: str,
+    origin: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    user_global_config: bool = False,
+) -> bool:
     """Whether a root at ``path`` would fit the owner's budget for ``origin``:
     the capacity decision :func:`publish_workspace_skill_file` makes, read
     without taking its lock, so a concurrent write can still win the slot."""
@@ -156,12 +181,27 @@ async def skill_root_has_room(workspace_id: str, path: str, origin: str) -> bool
     if folder is None:
         raise ValueError("Skill capacity is counted for canonical SKILL.md paths")
     existing = await UserWorkspaceFile.prisma().find_first(
-        where={"workspaceId": workspace_id, "path": path, "isDeleted": False}
+        where={
+            "workspaceId": workspace_id,
+            "path": path,
+            "isDeleted": False,
+            **_workspace_scope_where(
+                organization_id, team_id, user_global_config=user_global_config
+            ),
+        }
     )
     if not _takes_a_slot(existing, origin):
         return True
     return (
-        await _root_count(db.prisma, workspace_id, folder, origin)
+        await _root_count(
+            db.prisma,
+            workspace_id,
+            folder,
+            origin,
+            organization_id,
+            team_id,
+            user_global_config,
+        )
         < MAX_SKILLS_PER_EXPERT
     )
 
@@ -197,7 +237,16 @@ async def _swap_package_files(
     retired: list[RetiredSkillFile] = []
     for path in [f.path for f in write.files] + write.removed_paths:
         live = await tx.userworkspacefile.find_first(
-            where={"workspaceId": write.workspace_id, "path": path, "isDeleted": False}
+            where={
+                "workspaceId": write.workspace_id,
+                "path": path,
+                "isDeleted": False,
+                **_workspace_scope_where(
+                    write.organization_id,
+                    write.team_id,
+                    user_global_config=write.user_global_config,
+                ),
+            }
         )
         if live is None:
             continue
@@ -218,6 +267,12 @@ async def _swap_package_files(
                 "sizeBytes": file.size_bytes,
                 "checksum": file.checksum,
                 "metadata": SafeJson(file.metadata or {}),
+                "organizationId": write.organization_id,
+                "teamId": write.team_id,
+                "sessionId": write.session_id,
+                "executionId": write.execution_id,
+                "scopeResolved": True,
+                "isUserGlobalConfig": write.user_global_config,
             }
         )
     return retired
@@ -237,11 +292,24 @@ async def _publication_transaction(
 
 
 async def rename_workspace_skill_file(
-    file_id: str, workspace_id: str, name: str, folder: str
+    file_id: str,
+    workspace_id: str,
+    name: str,
+    folder: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    user_global_config: bool = False,
 ) -> WorkspaceFile | None:
     async with _publication_transaction(workspace_id, folder) as tx:
         file = await tx.userworkspacefile.find_first(
-            where={"id": file_id, "workspaceId": workspace_id, "isDeleted": False}
+            where={
+                "id": file_id,
+                "workspaceId": workspace_id,
+                "isDeleted": False,
+                **_workspace_scope_where(
+                    organization_id, team_id, user_global_config=user_global_config
+                ),
+            }
         )
         if file is None:
             return None
@@ -252,7 +320,15 @@ async def rename_workspace_skill_file(
                 or SKILL_ORIGIN_USER
             )
             if (
-                await _root_count(tx, workspace_id, folder, origin)
+                await _root_count(
+                    tx,
+                    workspace_id,
+                    folder,
+                    origin,
+                    organization_id,
+                    team_id,
+                    user_global_config,
+                )
                 >= MAX_SKILLS_PER_EXPERT
             ):
                 raise SkillLimitError(
@@ -265,17 +341,31 @@ async def rename_workspace_skill_file(
         return WorkspaceFile.from_db(updated) if updated else None
 
 
-async def _root_count(tx: Prisma, workspace_id: str, folder: str, origin: str) -> int:
+async def _root_count(
+    tx: Prisma,
+    workspace_id: str,
+    folder: str,
+    origin: str,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+    user_global_config: bool = False,
+) -> int:
     rows = await tx.query_raw(
         'SELECT COUNT(*)::int AS count FROM "UserWorkspaceFile" '
         'WHERE "workspaceId" = $1 AND NOT "isDeleted" AND path ~ $2 '
-        "AND CASE WHEN metadata->>$3 = $4 THEN $4 ELSE $5 END = $6",
+        "AND CASE WHEN metadata->>$3 = $4 THEN $4 ELSE $5 END = $6 "
+        'AND "organizationId" IS NOT DISTINCT FROM $7 '
+        'AND "teamId" IS NOT DISTINCT FROM $8 '
+        'AND "isUserGlobalConfig" = $9 AND "scopeResolved" = true',
         workspace_id,
         rf"^{re.escape(folder)}/[^/]+/SKILL\.md$",
         SKILL_ORIGIN_METADATA_KEY,
         SKILL_ORIGIN_MARKETPLACE,
         SKILL_ORIGIN_USER,
         origin,
+        organization_id,
+        team_id,
+        user_global_config,
     )
     return rows[0]["count"]
 
@@ -292,6 +382,12 @@ async def _create_root(tx: Prisma, write: WorkspaceSkillWrite) -> UserWorkspaceF
             "sizeBytes": write.size_bytes,
             "checksum": write.checksum,
             "metadata": SafeJson(write.metadata or {}),
+            "organizationId": write.organization_id,
+            "teamId": write.team_id,
+            "sessionId": write.session_id,
+            "executionId": write.execution_id,
+            "scopeResolved": True,
+            "isUserGlobalConfig": write.user_global_config,
         }
     )
 

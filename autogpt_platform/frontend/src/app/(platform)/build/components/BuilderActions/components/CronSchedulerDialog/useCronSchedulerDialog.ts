@@ -8,6 +8,12 @@ import { invalidateAllScheduleQueries } from "@/services/schedules/invalidate-sc
 import { useQueryClient } from "@tanstack/react-query";
 import { parseAsInteger, parseAsString, useQueryStates } from "nuqs";
 import { useEffect, useState } from "react";
+import { useCreateTeamSelection } from "@/components/contextual/TeamPicker/useCreateTeamSelection";
+import {
+  CreateSurface,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
+import { useBuilderTenantScope } from "@/app/(platform)/build/hooks/useBuilderTenantScope";
 
 export function useCronSchedulerDialog({
   open,
@@ -26,6 +32,7 @@ export function useCronSchedulerDialog({
   const queryClient = useQueryClient();
   const [cronExpression, setCronExpression] = useState<string>("");
   const [scheduleName, setScheduleName] = useState<string>("");
+  const tenantScope = useBuilderTenantScope();
   const [scheduleNameError, setScheduleNameError] = useState<string>("");
 
   const [{ flowID, flowVersion }] = useQueryStates({
@@ -36,9 +43,18 @@ export function useCronSchedulerDialog({
 
   const userTimezone = useUserTimezone();
   const timezoneDisplay = getTimezoneDisplayName(userTimezone || "UTC");
+  const { teamId, setTeamId, hasTeams, teamRequestInit, isReady } =
+    useCreateTeamSelection(CreateSurface.BuilderSchedule);
 
   const { mutateAsync: createSchedule, isPending: isCreatingSchedule } =
     usePostV1CreateExecutionSchedule({
+      request: flowID
+        ? getTenantRequestInit(
+            tenantScope.organizationId,
+            tenantScope.teamId,
+            tenantScope.isReady,
+          )
+        : teamRequestInit,
       mutation: {
         onSuccess: (response) => {
           if (response.status === 200) {
@@ -83,6 +99,7 @@ export function useCronSchedulerDialog({
   }
 
   async function handleCreateSchedule() {
+    if (!(flowID ? tenantScope.isReady : isReady)) return;
     if (!scheduleName || scheduleName.trim() === "") {
       setScheduleNameError("Schedule name is required");
       toast({
@@ -124,5 +141,9 @@ export function useCronSchedulerDialog({
     scheduleName,
     scheduleNameError,
     isCreatingSchedule,
+    teamId,
+    setTeamId,
+    hasTeams: !flowID && hasTeams,
+    isReady: flowID ? tenantScope.isReady : isReady,
   };
 }

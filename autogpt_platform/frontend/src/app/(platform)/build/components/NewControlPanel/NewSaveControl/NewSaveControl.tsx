@@ -12,6 +12,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/atoms/Tooltip/BaseTooltip";
+import { TeamPicker } from "@/components/contextual/TeamPicker/TeamPicker";
+import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
 import { useControlPanelStore } from "../../../stores/controlPanelStore";
 import { ControlPanelButton } from "../ControlPanelButton";
 import { useNewSaveControl } from "./useNewSaveControl";
@@ -19,7 +21,16 @@ import { FloppyDiskIcon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
 
 export const NewSaveControl = () => {
-  const { form, isSaving, graphVersion, handleSave } = useNewSaveControl();
+  const {
+    form,
+    isSaving,
+    graphVersion,
+    handleSave,
+    teamId,
+    setTeamId,
+    showTeamPicker,
+    isReady,
+  } = useNewSaveControl();
   const { saveControlOpen, setSaveControlOpen, forceOpenSave } =
     useControlPanelStore();
 
@@ -95,6 +106,15 @@ export const NewSaveControl = () => {
                     )}
                   />
 
+                  {showTeamPicker && (
+                    <TeamPicker
+                      surfaceKey={CreateSurface.BuilderSave}
+                      value={teamId}
+                      onChange={setTeamId}
+                      wrapperClassName="!mb-0"
+                    />
+                  )}
+
                   {graphVersion && (
                     <Input
                       id="version"
@@ -119,7 +139,7 @@ export const NewSaveControl = () => {
                   className="w-full dark:bg-slate-700 dark:text-slate-100 dark:hover:bg-slate-800"
                   data-id="save-control-save-agent"
                   data-testid="save-control-save-agent-button"
-                  disabled={isSaving}
+                  disabled={isSaving || !isReady}
                   loading={isSaving}
                 >
                   Save Workflow

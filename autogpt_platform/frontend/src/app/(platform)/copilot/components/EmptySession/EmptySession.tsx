@@ -23,6 +23,8 @@ import { HomeRecap } from "@/app/(platform)/home/components/HomeRecap/HomeRecap"
 import { RecipientChip } from "../ChatInput/components/RecipientChip";
 import { ConnectionPicker } from "../ChatInput/components/ConnectionPicker/ConnectionPicker";
 import { useRecipientPicker } from "./useRecipientPicker";
+import { TeamPicker } from "@/components/contextual/TeamPicker/TeamPicker";
+import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
 import { useHomeComposer } from "./useHomeComposer";
 
 interface Props {
@@ -39,6 +41,10 @@ interface Props {
   isInteractionLocked?: boolean;
   isKickoffStarting?: boolean;
   expertName?: string;
+  createTeamId: string | null;
+  onCreateTeamChange: (teamId: string | null) => void;
+  isTeamContextReady: boolean;
+  canSelectCreateTeam: boolean;
   /** Expert the new conversation will address; scopes workspace-file pickers. */
   expertId?: string | null;
   /** Voice-mode toggle, rendered beside the mic. Absent when the flag is off. */
@@ -63,6 +69,10 @@ export function EmptySession({
   isInteractionLocked,
   isKickoffStarting,
   expertName,
+  createTeamId,
+  onCreateTeamChange,
+  isTeamContextReady,
+  canSelectCreateTeam,
   expertId = null,
   voiceToggle,
   modeSelector,
@@ -82,7 +92,8 @@ export function EmptySession({
     isLoadingRecipient,
     selectRecipient,
   } = useRecipientPicker();
-  const isComposerDisabled = isCreatingSession || !!isInteractionLocked;
+  const isComposerDisabled =
+    isCreatingSession || !!isInteractionLocked || !isTeamContextReady;
   const introLine = isLoadingRecipient ? null : getIntroLine(selectedExpert);
   const recipientPicker = isExpertsEnabled ? (
     <RecipientChip
@@ -162,6 +173,17 @@ export function EmptySession({
               the greeting page instead of sitting under a bare hero. */}
           {!intro.isAwaitingGreeting && (
             <div className={cn("mb-6", intro.isVisible && "max-w-[48rem]")}>
+              {canSelectCreateTeam && (
+                <div className="mb-2 flex justify-end px-2">
+                  <TeamPicker
+                    surfaceKey={CreateSurface.Copilot}
+                    value={createTeamId}
+                    onChange={onCreateTeamChange}
+                    label="Workspace"
+                    wrapperClassName="w-56 text-left"
+                  />
+                </div>
+              )}
               <div
                 className={cn(
                   isBrainDumpEnabled

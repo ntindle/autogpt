@@ -207,6 +207,14 @@ async def store_media_file(
             user_id,
             execution_context.workspace_id,
             execution_context.session_id,
+            organization_id=execution_context.organization_id,
+            team_id=execution_context.team_id,
+            execution_id=(
+                None
+                if execution_context.session_id
+                else execution_context.graph_exec_id
+            ),
+            access="execute",
             scope=await _expert_workspace_scope(execution_context),
         )
     # Build base path

@@ -17,6 +17,7 @@ import { Icon } from "@/components/atoms/Icon/Icon";
 
 interface Props {
   schedule: GraphExecutionJobInfo;
+  canDelete?: boolean;
   /** Extra action rendered before View/Delete — lets callers that know the
    *  schedule's graph plug in an edit affordance without coupling this
    *  shared row to a feature-specific modal. */
@@ -32,6 +33,7 @@ interface Props {
 
 export function GraphScheduleListItem({
   schedule,
+  canDelete = true,
   editAction,
   className,
   iconClassName,
@@ -124,17 +126,19 @@ export function GraphScheduleListItem({
           <Icon icon={EyeIcon} className="mr-1 h-4 w-4" />
           View
         </Button>
-        <Button
-          variant="secondary"
-          size="small"
-          onClick={openDelete}
-          className={actionClassName}
-          data-testid="schedule-delete-button"
-          aria-label="Delete schedule"
-        >
-          <Icon icon={Delete02Icon} className="mr-1 h-4 w-4" />
-          Delete
-        </Button>
+        {canDelete && (
+          <Button
+            variant="secondary"
+            size="small"
+            onClick={openDelete}
+            className={actionClassName}
+            data-testid="schedule-delete-button"
+            aria-label="Delete schedule"
+          >
+            <Icon icon={Delete02Icon} className="mr-1 h-4 w-4" />
+            Delete
+          </Button>
+        )}
       </div>
 
       <Dialog

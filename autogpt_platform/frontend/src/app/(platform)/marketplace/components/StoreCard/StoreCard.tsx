@@ -7,9 +7,9 @@ import Avatar, {
 } from "@/components/atoms/Avatar/Avatar";
 import { Skeleton } from "@/components/atoms/Skeleton/Skeleton";
 import Image from "next/image";
-import { isLocalStoreMediaUrl } from "@/lib/store-media";
 import { useState } from "react";
 import { AddToLibraryButton } from "../AddToLibraryButton/AddToLibraryButton";
+import { shouldBypassImageOptimization } from "@/lib/utils/image";
 import { isKey } from "@/lib/keyboard";
 
 interface Props {
@@ -71,9 +71,9 @@ export function StoreCard({
             )}
             <Image
               src={agentImage}
-              unoptimized={isLocalStoreMediaUrl(agentImage)}
               alt={`${agentName} preview image`}
               fill
+              unoptimized={shouldBypassImageOptimization(agentImage)}
               className="object-cover"
               onLoad={() => setImageLoaded(true)}
               onError={() => setImageError(true)}

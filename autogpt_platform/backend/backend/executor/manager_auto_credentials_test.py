@@ -5,6 +5,8 @@ These cover ``acquire_auto_credentials`` in ``backend/executor/auto_credentials.
 — shared by the graph executor and the CoPilot direct-block-execution path.
 """
 
+from unittest.mock import call
+
 import pytest
 from pytest_mock import MockerFixture
 
@@ -52,12 +54,14 @@ def mock_input_model(mocker: MockerFixture):
 @pytest.fixture
 def mock_creds_manager(mocker: MockerFixture):
     manager = mocker.AsyncMock()
-    mock_lock = mocker.AsyncMock()
     mock_creds = mocker.MagicMock()
     mock_creds.id = "cred-id-123"
     mock_creds.provider = "google"
-    manager.acquire.return_value = (mock_creds, mock_lock)
-    return manager, mock_creds, mock_lock
+    mock_creds.type = "oauth2"
+    mock_lease = mocker.MagicMock(credentials=mock_creds)
+    mock_lease.release = mocker.AsyncMock()
+    manager.acquire_lease.return_value = mock_lease
+    return manager, mock_creds, mock_lease
 
 
 @pytest.mark.asyncio
@@ -70,19 +74,19 @@ async def test_auto_credentials_happy_path(
     """When field_data has a valid _credentials_id, credentials should be acquired."""
     from backend.executor.auto_credentials import acquire_auto_credentials
 
-    manager, mock_creds, mock_lock = mock_creds_manager
+    manager, mock_creds, mock_lease = mock_creds_manager
     input_data = {"spreadsheet": google_drive_file_data["valid"]}
 
-    extra_kwargs, locks = await acquire_auto_credentials(
+    extra_kwargs, leases = await acquire_auto_credentials(
         input_model=mock_input_model,
         input_data=input_data,
         creds_manager=manager,
         user_id="user-1",
     )
 
-    manager.acquire.assert_called_once_with("user-1", "cred-id-123")
+    manager.acquire_lease.assert_awaited_once_with("user-1", "cred-id-123")
     assert extra_kwargs["credentials"] == mock_creds
-    assert mock_lock in locks
+    assert mock_lease in leases
 
 
 @pytest.mark.asyncio
@@ -127,16 +131,16 @@ async def test_auto_credentials_field_absent_skips(
     # Key not present = connected from upstream block
     input_data = {}
 
-    extra_kwargs, locks = await acquire_auto_credentials(
+    extra_kwargs, leases = await acquire_auto_credentials(
         input_model=mock_input_model,
         input_data=input_data,
         creds_manager=manager,
         user_id="user-1",
     )
 
-    manager.acquire.assert_not_called()
+    manager.acquire_lease.assert_not_called()
     assert "credentials" not in extra_kwargs
-    assert locks == []
+    assert leases == []
 
 
 @pytest.mark.asyncio
@@ -155,14 +159,14 @@ async def test_auto_credentials_chained_cred_id_none(
     manager, _, _ = mock_creds_manager
     input_data = {"spreadsheet": google_drive_file_data["chained"]}
 
-    extra_kwargs, locks = await acquire_auto_credentials(
+    extra_kwargs, leases = await acquire_auto_credentials(
         input_model=mock_input_model,
         input_data=input_data,
         creds_manager=manager,
         user_id="user-1",
     )
 
-    manager.acquire.assert_not_called()
+    manager.acquire_lease.assert_not_called()
     assert "credentials" not in extra_kwargs
 
 
@@ -205,7 +209,7 @@ async def test_auto_credentials_ownership_mismatch_error(
     from backend.executor.auto_credentials import acquire_auto_credentials
 
     manager, _, _ = mock_creds_manager
-    manager.acquire.side_effect = ValueError(
+    manager.acquire_lease.side_effect = ValueError(
         "Credentials #cred-id-123 for user #user-2 not found"
     )
     input_data = {"spreadsheet": google_drive_file_data["valid"]}
@@ -233,7 +237,7 @@ async def test_auto_credentials_deleted_credential_error(
     from backend.executor.auto_credentials import acquire_auto_credentials
 
     manager, _, _ = mock_creds_manager
-    manager.acquire.side_effect = ValueError(
+    manager.acquire_lease.side_effect = ValueError(
         "Credentials #cred-id-123 for user #user-1 not found"
     )
     input_data = {"spreadsheet": google_drive_file_data["valid"]}
@@ -248,27 +252,27 @@ async def test_auto_credentials_deleted_credential_error(
 
 
 @pytest.mark.asyncio
-async def test_auto_credentials_lock_appended(
+async def test_auto_credentials_lease_appended(
     mocker: MockerFixture,
     google_drive_file_data,
     mock_input_model,
     mock_creds_manager,
 ):
-    """Lock from acquire() should be included in returned locks list."""
+    """Lease from acquire_lease() should be returned to guard execution."""
     from backend.executor.auto_credentials import acquire_auto_credentials
 
-    manager, _, mock_lock = mock_creds_manager
+    manager, _, mock_lease = mock_creds_manager
     input_data = {"spreadsheet": google_drive_file_data["valid"]}
 
-    extra_kwargs, locks = await acquire_auto_credentials(
+    extra_kwargs, leases = await acquire_auto_credentials(
         input_model=mock_input_model,
         input_data=input_data,
         creds_manager=manager,
         user_id="user-1",
     )
 
-    assert len(locks) == 1
-    assert locks[0] is mock_lock
+    assert len(leases) == 1
+    assert leases[0] is mock_lease
 
 
 @pytest.mark.asyncio
@@ -279,7 +283,7 @@ async def test_auto_credentials_multiple_fields(
     """When there are multiple auto_credentials fields, only valid ones should acquire."""
     from backend.executor.auto_credentials import acquire_auto_credentials
 
-    manager, mock_creds, mock_lock = mock_creds_manager
+    manager, mock_creds, mock_lease = mock_creds_manager
 
     input_model = mocker.MagicMock()
     input_model.get_auto_credentials_fields.return_value = {
@@ -306,7 +310,7 @@ async def test_auto_credentials_multiple_fields(
         },
     }
 
-    extra_kwargs, locks = await acquire_auto_credentials(
+    extra_kwargs, leases = await acquire_auto_credentials(
         input_model=input_model,
         input_data=input_data,
         creds_manager=manager,
@@ -314,31 +318,32 @@ async def test_auto_credentials_multiple_fields(
     )
 
     # Only the first field should have acquired credentials
-    manager.acquire.assert_called_once_with("user-1", "cred-id-123")
+    manager.acquire_lease.assert_awaited_once_with("user-1", "cred-id-123")
     assert "credentials" in extra_kwargs
     assert "credentials2" not in extra_kwargs
 
 
 @pytest.mark.asyncio
-async def test_acquire_auto_credentials_releases_partial_locks_on_failure(
+async def test_acquire_auto_credentials_releases_partial_leases_on_failure(
     mocker: MockerFixture,
 ):
-    """When acquiring a later auto-credential field raises, any locks
-    already taken for earlier fields must be released — otherwise they'd
-    sit until Redis TTL expires, blocking the next execution."""
+    """When a later acquisition fails, release every earlier credential lease."""
     from backend.executor.auto_credentials import acquire_auto_credentials
 
     manager = mocker.AsyncMock()
     good_creds = mocker.MagicMock()
     good_creds.id = "cred-id-good"
-    good_lock = mocker.AsyncMock()
+    good_creds.provider = "google"
+    good_creds.type = "oauth2"
+    good_lease = mocker.MagicMock(credentials=good_creds)
+    good_lease.release = mocker.AsyncMock()
 
     async def _acquire(_user_id, cred_id):
         if cred_id == "cred-id-good":
-            return (good_creds, good_lock)
+            return good_lease
         raise ValueError(f"bad cred {cred_id}")
 
-    manager.acquire.side_effect = _acquire
+    manager.acquire_lease.side_effect = _acquire
 
     input_model = mocker.MagicMock()
     input_model.get_auto_credentials_fields.return_value = {
@@ -373,7 +378,7 @@ async def test_acquire_auto_credentials_releases_partial_locks_on_failure(
             user_id="user-1",
         )
 
-    good_lock.release.assert_awaited_once()
+    good_lease.release.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -413,7 +418,7 @@ async def test_acquire_auto_credentials_rejects_empty_string_credential_id(
         )
 
     # Never tried to acquire the (empty) credential.
-    manager.acquire.assert_not_called()
+    manager.acquire_lease.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -468,7 +473,180 @@ async def test_acquire_auto_credentials_rejects_non_dict_value_with_type_message
     # "No file selected" — anchor on the type name so the fix
     # can't silently regress to the old generic message.
     assert type(bad_value).__name__ in msg
-    manager.acquire.assert_not_called()
+    manager.acquire_lease.assert_not_called()
+
+
+class TestAutoCredentialsOwnerMode:
+    """OWNER-mode grant runs resolve the graph's OWN referenced file
+    credentials against the graph owner's store, while a file the consumer
+    picked themselves still resolves against the consumer."""
+
+    @pytest.mark.asyncio
+    async def test_owner_referenced_id_resolves_against_owner(
+        self,
+        google_drive_file_data,
+        mock_input_model,
+        mock_creds_manager,
+    ):
+        from backend.executor.auto_credentials import acquire_auto_credentials
+
+        manager, mock_creds, _ = mock_creds_manager
+        consumer_value = {
+            **google_drive_file_data["valid"],
+            "id": "consumer-resource",
+        }
+        owner_value = {
+            **google_drive_file_data["valid"],
+            "id": "owner-resource",
+        }
+        input_data = {"spreadsheet": consumer_value}
+
+        extra_kwargs, _ = await acquire_auto_credentials(
+            input_model=mock_input_model,
+            input_data=input_data,
+            creds_manager=manager,
+            user_id="consumer-1",
+            credentials_owner_id="owner-1",
+            owner_field_values={"spreadsheet": owner_value},
+        )
+
+        # cred-id-123 is a graph-referenced id -> resolves against the owner.
+        manager.acquire_lease.assert_awaited_once_with("owner-1", "cred-id-123")
+        assert extra_kwargs["credentials"] == mock_creds
+        assert input_data["spreadsheet"]["id"] == "owner-resource"
+
+    @pytest.mark.asyncio
+    async def test_consumer_picked_id_not_in_allowlist_resolves_against_consumer(
+        self,
+        google_drive_file_data,
+        mock_input_model,
+        mock_creds_manager,
+    ):
+        from backend.executor.auto_credentials import acquire_auto_credentials
+
+        manager, _, _ = mock_creds_manager
+        input_data = {"spreadsheet": google_drive_file_data["valid"]}
+
+        await acquire_auto_credentials(
+            input_model=mock_input_model,
+            input_data=input_data,
+            creds_manager=manager,
+            user_id="consumer-1",
+            credentials_owner_id="owner-1",
+            owner_field_values={"another_picker": google_drive_file_data["valid"]},
+        )
+
+        # Not a graph-referenced id -> the consumer's own store, never the owner's.
+        manager.acquire_lease.assert_awaited_once_with("consumer-1", "cred-id-123")
+
+    @pytest.mark.asyncio
+    async def test_missing_owner_credential_raises_owner_specific_error(
+        self,
+        google_drive_file_data,
+        mock_input_model,
+        mock_creds_manager,
+    ):
+        from backend.executor.auto_credentials import acquire_auto_credentials
+
+        manager, _, _ = mock_creds_manager
+        manager.acquire_lease.side_effect = ValueError(
+            "Credentials #cred-id-123 for user #owner-1 not found"
+        )
+        input_data = {"spreadsheet": google_drive_file_data["valid"]}
+
+        with pytest.raises(ValueError, match="run on the graph owner's account"):
+            await acquire_auto_credentials(
+                input_model=mock_input_model,
+                input_data=input_data,
+                creds_manager=manager,
+                user_id="consumer-1",
+                credentials_owner_id="owner-1",
+                owner_field_values={"spreadsheet": google_drive_file_data["valid"]},
+            )
+
+    @pytest.mark.asyncio
+    async def test_same_owner_id_in_another_field_stays_consumer_owned(
+        self, mocker, google_drive_file_data, mock_creds_manager
+    ):
+        from backend.executor.auto_credentials import acquire_auto_credentials
+
+        manager, _, _ = mock_creds_manager
+        input_model = mocker.MagicMock()
+        input_model.get_auto_credentials_fields.return_value = {
+            "first_credentials": {
+                "field_name": "first_file",
+                "config": {"provider": "google"},
+            },
+            "second_credentials": {
+                "field_name": "second_file",
+                "config": {"provider": "google"},
+            },
+        }
+        owner_value = {
+            **google_drive_file_data["valid"],
+            "id": "owner-resource",
+        }
+        consumer_value = {
+            **google_drive_file_data["valid"],
+            "id": "consumer-resource",
+        }
+        input_data = {
+            "first_file": {**consumer_value, "id": "injected-resource"},
+            "second_file": consumer_value,
+        }
+
+        await acquire_auto_credentials(
+            input_model=input_model,
+            input_data=input_data,
+            creds_manager=manager,
+            user_id="consumer-1",
+            credentials_owner_id="owner-1",
+            owner_field_values={"first_file": owner_value},
+        )
+
+        assert manager.acquire_lease.await_args_list == [
+            call("owner-1", "cred-id-123"),
+            call("consumer-1", "cred-id-123"),
+        ]
+        assert input_data["first_file"]["id"] == "owner-resource"
+
+    @pytest.mark.asyncio
+    async def test_provider_mismatch_fails_and_releases_lock(
+        self, mock_input_model, mock_creds_manager, google_drive_file_data
+    ):
+        from backend.executor.auto_credentials import acquire_auto_credentials
+
+        manager, mock_creds, mock_lease = mock_creds_manager
+        mock_creds.provider = "dropbox"
+
+        with pytest.raises(ValueError, match="expected 'google'"):
+            await acquire_auto_credentials(
+                input_model=mock_input_model,
+                input_data={"spreadsheet": google_drive_file_data["valid"]},
+                creds_manager=manager,
+                user_id="consumer-1",
+            )
+
+        mock_lease.release.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_type_mismatch_fails_and_releases_lock(
+        self, mock_input_model, mock_creds_manager, google_drive_file_data
+    ):
+        from backend.executor.auto_credentials import acquire_auto_credentials
+
+        manager, mock_creds, mock_lease = mock_creds_manager
+        mock_creds.type = "api_key"
+
+        with pytest.raises(ValueError, match="expected 'oauth2'"):
+            await acquire_auto_credentials(
+                input_model=mock_input_model,
+                input_data={"spreadsheet": google_drive_file_data["valid"]},
+                creds_manager=manager,
+                user_id="consumer-1",
+            )
+
+        mock_lease.release.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -496,7 +674,7 @@ async def test_auto_credentials_expert_is_refused_an_ungranted_credential(
         )
 
     experts.expert_allowed_credential_ids.assert_awaited_once_with("user-1", "expert-a")
-    manager.acquire.assert_not_called()
+    manager.acquire_lease.assert_not_called()
 
 
 @pytest.mark.asyncio

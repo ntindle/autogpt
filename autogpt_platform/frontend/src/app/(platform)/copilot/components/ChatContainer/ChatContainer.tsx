@@ -1,5 +1,6 @@
 "use client";
 import { ChatInput } from "@/app/(platform)/copilot/components/ChatInput/ChatInput";
+import { CopilotTenantScopeProvider } from "../../CopilotTenantScopeContext";
 import { ChatComposerFrame } from "./components/ChatComposerFrame";
 import {
   Tooltip,
@@ -77,6 +78,8 @@ export interface ChatContainerProps {
   status: string;
   error: Error | undefined;
   sessionId: string | null;
+  sessionOrganizationId?: string | null;
+  sessionTeamId?: string | null;
   sessionChatStatus?: string;
   sessionSentFrom?: SentFrom | null;
   /** The approval mode stored on the session, when it has one. */
@@ -136,6 +139,10 @@ export interface ChatContainerProps {
   isAdoptingExpertSession?: boolean;
   /** True until a newly hired expert's first kickoff has been handed off. */
   isKickoffStarting?: boolean;
+  createTeamId: string | null;
+  onCreateTeamChange: (teamId: string | null) => void;
+  isTeamContextReady: boolean;
+  canSelectCreateTeam: boolean;
   /** Follow a turn the server started, e.g. after an approval card is answered. */
   onBackendTurn?: () => void;
   /** Which layout floats its controls over the chat's top-left corner on
@@ -151,6 +158,8 @@ export const ChatContainer = ({
   status,
   error,
   sessionId,
+  sessionOrganizationId = null,
+  sessionTeamId = null,
   sessionChatStatus,
   sessionSentFrom,
   sessionAutopilotMode = null,
@@ -187,6 +196,10 @@ export const ChatContainer = ({
   isResolvingExpertIdentity,
   isAdoptingExpertSession,
   isKickoffStarting,
+  createTeamId,
+  onCreateTeamChange,
+  isTeamContextReady,
+  canSelectCreateTeam,
   onBackendTurn,
   floatingControls,
 }: ChatContainerProps) => {
@@ -388,226 +401,238 @@ export const ChatContainer = ({
   }, [guardedOnSend, messages]);
 
   return (
-    <CopilotChatActionsProvider
-      onSend={guardedOnSend}
-      onBackendTurn={onBackendTurn}
-      sessionId={sessionId}
-      assistantName={expertIdentity?.name ?? "Otto"}
+    <CopilotTenantScopeProvider
+      organizationId={sessionOrganizationId}
+      teamId={sessionTeamId}
     >
-      <LayoutGroup id="copilot-2-chat-layout">
-        <div className="flex h-full min-h-0 w-full flex-col px-2 lg:px-0">
-          {/* The chat column runs full width: the max-w-3xl cap lives on the
+      <CopilotChatActionsProvider
+        onSend={guardedOnSend}
+        onBackendTurn={onBackendTurn}
+        sessionId={sessionId}
+        assistantName={expertIdentity?.name ?? "Otto"}
+      >
+        <LayoutGroup id="copilot-2-chat-layout">
+          <div className="flex h-full min-h-0 w-full flex-col px-2 lg:px-0">
+            {/* The chat column runs full width: the max-w-3xl cap lives on the
                 message list and the input instead, so the expert thread header
                 can span edge to edge while staying aligned with the messages. */}
-          {sessionId && isSessionNotFound ? (
-            <SessionNotFound />
-          ) : sessionId ? (
-            <div className="relative flex h-full min-h-0 w-full flex-col bg-white">
-              <div className="absolute right-0 top-0 z-30">
-                <ContextPanelToggle
-                  sessionId={sessionId}
-                  expert={chatExpert}
-                  hideIntegrationsOnMobile={floatingControls === "newLayout"}
-                />
-              </div>
-              <NewChatOnboarding
-                expertId={expertIdentity?.id ?? null}
-                enabled={
-                  messages.length === 0 &&
-                  !isInputDisabled &&
-                  !isLimitReached &&
-                  !isStreaming &&
-                  !isCreatingSession &&
-                  !isExpertArchived
-                }
-              >
-                <ChatMessagesContainer
-                  messages={messages}
-                  status={status}
-                  error={error}
-                  isLoading={isLoadingSession}
-                  isRestoringActiveSession={isRestoringActiveSession}
-                  restoreStatusMessage={restoreStatusMessage}
-                  activeStreamStartedAt={activeStreamStartedAt}
-                  sessionID={sessionId}
-                  sessionChatStatus={sessionChatStatus}
-                  sessionSentFrom={sessionSentFrom}
-                  hasMoreMessages={hasMoreMessages}
-                  isLoadingMore={isLoadingMore}
-                  onLoadMore={onLoadMore}
-                  onRetry={handleRetry}
-                  turnStats={turnStats}
-                  queuedMessages={queuedMessages}
-                  pendingSend={pendingSend}
-                  bottomContentPadding={usageCardHeight + composerTabInset}
-                  expertIdentity={expertIdentity}
-                  isResolvingExpertIdentity={isResolvingExpertIdentity}
-                  floatingControls={floatingControls}
-                />
-              </NewChatOnboarding>
-              {archivedExpertIdentity ? (
-                <>
-                  {hasComposerTab && (
-                    <div className="mx-auto w-full max-w-3xl px-3">
-                      <ComposerPanelTab expert={null} />
-                    </div>
-                  )}
-                  <ArchivedExpertNotice
-                    expertName={archivedExpertIdentity.name}
-                    reason={archivedExpertIdentity.readOnlyReason ?? "fired"}
+            {sessionId && isSessionNotFound ? (
+              <SessionNotFound />
+            ) : sessionId ? (
+              <div className="relative flex h-full min-h-0 w-full flex-col bg-white">
+                <div className="absolute right-0 top-0 z-30">
+                  <ContextPanelToggle
+                    sessionId={sessionId}
+                    expert={chatExpert}
+                    hideIntegrationsOnMobile={floatingControls === "newLayout"}
                   />
-                </>
-              ) : (
-                <ChatComposerFrame
-                  className={cn(hasComposerTab && "max-lg:pt-0")}
-                  paused={isLimitReached && !atReset}
-                  noticeRef={usageCardRef}
-                  notice={
-                    isLimitReached ? (
-                      <UsageLimitReachedCard
-                        sessionID={sessionId}
-                        failure={usageFailure}
-                        onDismiss={onDismissUsage}
-                        refresh={usageRefresh}
-                      />
-                    ) : null
+                </div>
+                <NewChatOnboarding
+                  expertId={expertIdentity?.id ?? null}
+                  enabled={
+                    messages.length === 0 &&
+                    !isInputDisabled &&
+                    !isLimitReached &&
+                    !isStreaming &&
+                    !isCreatingSession &&
+                    !isExpertArchived
                   }
                 >
-                  <SharedChatNotice sessionId={sessionId} />
-                  {hasComposerTab && <ComposerPanelTab expert={chatExpert} />}
-                  {isTaskBarEnabled && (
-                    <div className="relative z-10">
-                      <TaskProgressBar
-                        todos={getLatestTaskList(messages) ?? []}
-                        isStreaming={isStreaming}
-                      />
-                    </div>
-                  )}
-                  {composer.scheduled.pending && (
-                    <ScheduledSendChip
-                      job={composer.scheduled.pending}
-                      onEdit={() => void composer.scheduled.edit()}
-                      onCancel={() => void composer.scheduled.cancel()}
-                      isBusy={composer.scheduled.isBusy}
+                  <ChatMessagesContainer
+                    messages={messages}
+                    status={status}
+                    error={error}
+                    isLoading={isLoadingSession}
+                    isRestoringActiveSession={isRestoringActiveSession}
+                    restoreStatusMessage={restoreStatusMessage}
+                    activeStreamStartedAt={activeStreamStartedAt}
+                    sessionID={sessionId}
+                    organizationId={sessionOrganizationId}
+                    teamId={sessionTeamId}
+                    sessionChatStatus={sessionChatStatus}
+                    sessionSentFrom={sessionSentFrom}
+                    hasMoreMessages={hasMoreMessages}
+                    isLoadingMore={isLoadingMore}
+                    onLoadMore={onLoadMore}
+                    onRetry={handleRetry}
+                    turnStats={turnStats}
+                    queuedMessages={queuedMessages}
+                    pendingSend={pendingSend}
+                    bottomContentPadding={usageCardHeight + composerTabInset}
+                    expertIdentity={expertIdentity}
+                    isResolvingExpertIdentity={isResolvingExpertIdentity}
+                    floatingControls={floatingControls}
+                  />
+                </NewChatOnboarding>
+                {archivedExpertIdentity ? (
+                  <>
+                    {hasComposerTab && (
+                      <div className="mx-auto w-full max-w-3xl px-3">
+                        <ComposerPanelTab expert={null} />
+                      </div>
+                    )}
+                    <ArchivedExpertNotice
+                      expertName={archivedExpertIdentity.name}
+                      reason={archivedExpertIdentity.readOnlyReason ?? "fired"}
                     />
-                  )}
-                  <Tooltip
-                    open={canShowUsageTooltip && isUsageTooltipOpen}
-                    onOpenChange={(open) =>
-                      setIsUsageTooltipOpen(open && canShowUsageTooltip)
+                  </>
+                ) : (
+                  <ChatComposerFrame
+                    className={cn(hasComposerTab && "max-lg:pt-0")}
+                    paused={isLimitReached && !atReset}
+                    noticeRef={usageCardRef}
+                    notice={
+                      isLimitReached ? (
+                        <UsageLimitReachedCard
+                          sessionID={sessionId}
+                          failure={usageFailure}
+                          onDismiss={onDismissUsage}
+                          refresh={usageRefresh}
+                        />
+                      ) : null
                     }
                   >
-                    <TooltipTrigger asChild>
-                      <div>
-                        <ChatInput
-                          inputId={SESSION_COMPOSER_ID}
-                          draftKey={sessionDraftKey(sessionId)}
-                          onSend={guardedOnSend}
-                          disabled={isInputDisabled}
-                          sendDisabled={isLimitReached && !atReset}
-                          atReset={atReset}
+                    <SharedChatNotice sessionId={sessionId} />
+                    {hasComposerTab && <ComposerPanelTab expert={chatExpert} />}
+                    {isTaskBarEnabled && (
+                      <div className="relative z-10">
+                        <TaskProgressBar
+                          todos={getLatestTaskList(messages) ?? []}
                           isStreaming={isStreaming}
-                          isTurnStarting={status === "submitted"}
-                          isUploadingFiles={isUploadingFiles}
-                          onStop={onStop}
-                          onEnqueue={onEnqueue}
-                          placeholder={
-                            (atReset && composer.placeholder) ||
-                            "What else can I help with?"
-                          }
-                          droppedFiles={droppedFiles}
-                          onDroppedFilesConsumed={onDroppedFilesConsumed}
-                          hasSession={!!sessionId}
-                          sessionId={sessionId}
-                          expertId={expertIdentity?.id ?? null}
-                          modeSelector={modeSelector}
-                          expertName={expertIdentity?.name ?? null}
-                          voiceToggle={
-                            isVoiceModeEnabled ? (
-                              <VoiceModeButton
-                                isActive={voice.isActive}
-                                disabled={
-                                  isInputDisabled ||
-                                  isSendLocked ||
-                                  voice.isStarting
-                                }
-                                onClick={voice.toggle}
-                              />
-                            ) : undefined
-                          }
-                          voiceBar={
-                            voice.isActive ? (
-                              <VoiceModeBar
-                                state={voice.state}
-                                statusLabel={voice.statusLabel}
-                                failure={voice.failure}
-                                onRetry={voice.retryFailedUtterance}
-                                onDownload={voice.downloadFailedUtterance}
-                                leaveButton={
-                                  <VoiceModeButton
-                                    isActive
-                                    speaking={voice.state === "speaking"}
-                                    onClick={voice.toggle}
-                                  />
-                                }
-                              />
-                            ) : undefined
-                          }
                         />
                       </div>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-sm">
-                      Sending is paused. Your draft is saved and you can keep
-                      editing it.
-                    </TooltipContent>
-                  </Tooltip>
-                  {composer.showLowHint && usage && (
+                    )}
+                    {composer.scheduled.pending && (
+                      <ScheduledSendChip
+                        job={composer.scheduled.pending}
+                        onEdit={() => void composer.scheduled.edit()}
+                        onCancel={() => void composer.scheduled.cancel()}
+                        isBusy={composer.scheduled.isBusy}
+                      />
+                    )}
+                    <Tooltip
+                      open={canShowUsageTooltip && isUsageTooltipOpen}
+                      onOpenChange={(open) =>
+                        setIsUsageTooltipOpen(open && canShowUsageTooltip)
+                      }
+                    >
+                      <TooltipTrigger asChild>
+                        <div>
+                          <ChatInput
+                            inputId={SESSION_COMPOSER_ID}
+                            draftKey={sessionDraftKey(sessionId)}
+                            onSend={guardedOnSend}
+                            disabled={isInputDisabled}
+                            sendDisabled={isLimitReached && !atReset}
+                            atReset={atReset}
+                            isStreaming={isStreaming}
+                            isTurnStarting={status === "submitted"}
+                            isUploadingFiles={isUploadingFiles}
+                            onStop={onStop}
+                            onEnqueue={onEnqueue}
+                            placeholder={
+                              (atReset && composer.placeholder) ||
+                              "What else can I help with?"
+                            }
+                            droppedFiles={droppedFiles}
+                            onDroppedFilesConsumed={onDroppedFilesConsumed}
+                            hasSession={!!sessionId}
+                            sessionId={sessionId}
+                            expertId={expertIdentity?.id ?? null}
+                            modeSelector={modeSelector}
+                            expertName={expertIdentity?.name ?? null}
+                            voiceToggle={
+                              isVoiceModeEnabled ? (
+                                <VoiceModeButton
+                                  isActive={voice.isActive}
+                                  disabled={
+                                    isInputDisabled ||
+                                    isSendLocked ||
+                                    voice.isStarting
+                                  }
+                                  onClick={voice.toggle}
+                                />
+                              ) : undefined
+                            }
+                            voiceBar={
+                              voice.isActive ? (
+                                <VoiceModeBar
+                                  state={voice.state}
+                                  statusLabel={voice.statusLabel}
+                                  failure={voice.failure}
+                                  onRetry={voice.retryFailedUtterance}
+                                  onDownload={voice.downloadFailedUtterance}
+                                  leaveButton={
+                                    <VoiceModeButton
+                                      isActive
+                                      speaking={voice.state === "speaking"}
+                                      onClick={voice.toggle}
+                                    />
+                                  }
+                                />
+                              ) : undefined
+                            }
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-sm">
+                        Sending is paused. Your draft is saved and you can keep
+                        editing it.
+                      </TooltipContent>
+                    </Tooltip>
+                    {composer.showLowHint && usage && (
+                      <BudgetLowHint usage={usage} />
+                    )}
+                  </ChatComposerFrame>
+                )}
+              </div>
+            ) : (
+              <EmptySession
+                createTeamId={createTeamId}
+                onCreateTeamChange={onCreateTeamChange}
+                isTeamContextReady={isTeamContextReady}
+                canSelectCreateTeam={canSelectCreateTeam}
+                isCreatingSession={isCreatingSession}
+                onCreateSession={onCreateSession}
+                onSend={guardedOnSend}
+                modeSelector={modeSelector}
+                voiceToggle={
+                  isVoiceModeEnabled ? (
+                    <VoiceModeButton
+                      isActive={false}
+                      disabled={
+                        isInputDisabled || isSendLocked || isCreatingSession
+                      }
+                      onClick={handleStartVoiceInNewChat}
+                    />
+                  ) : undefined
+                }
+                isUploadingFiles={isUploadingFiles}
+                droppedFiles={droppedFiles}
+                onDroppedFilesConsumed={onDroppedFilesConsumed}
+                isInteractionLocked={
+                  (isSendLocked && !composer.atReset) ||
+                  !!isAdoptingExpertSession
+                }
+                atReset={composer.atReset}
+                usageNotice={
+                  isLimitReached ? (
+                    <UsageLimitReachedCard refresh={usageRefresh} />
+                  ) : undefined
+                }
+                lowHint={
+                  composer.showLowHint && usage ? (
                     <BudgetLowHint usage={usage} />
-                  )}
-                </ChatComposerFrame>
-              )}
-            </div>
-          ) : (
-            <EmptySession
-              isCreatingSession={isCreatingSession}
-              onCreateSession={onCreateSession}
-              onSend={guardedOnSend}
-              modeSelector={modeSelector}
-              voiceToggle={
-                isVoiceModeEnabled ? (
-                  <VoiceModeButton
-                    isActive={false}
-                    disabled={
-                      isInputDisabled || isSendLocked || isCreatingSession
-                    }
-                    onClick={handleStartVoiceInNewChat}
-                  />
-                ) : undefined
-              }
-              isUploadingFiles={isUploadingFiles}
-              droppedFiles={droppedFiles}
-              onDroppedFilesConsumed={onDroppedFilesConsumed}
-              isInteractionLocked={
-                (isSendLocked && !composer.atReset) || !!isAdoptingExpertSession
-              }
-              atReset={composer.atReset}
-              usageNotice={
-                isLimitReached ? (
-                  <UsageLimitReachedCard refresh={usageRefresh} />
-                ) : undefined
-              }
-              lowHint={
-                composer.showLowHint && usage ? (
-                  <BudgetLowHint usage={usage} />
-                ) : undefined
-              }
-              isKickoffStarting={isKickoffStarting}
-              expertName={expertIdentity?.name}
-              expertId={expertIdentity?.id ?? null}
-            />
-          )}
-        </div>
-      </LayoutGroup>
-    </CopilotChatActionsProvider>
+                  ) : undefined
+                }
+                isKickoffStarting={isKickoffStarting}
+                expertName={expertIdentity?.name}
+                expertId={expertIdentity?.id ?? null}
+              />
+            )}
+          </div>
+        </LayoutGroup>
+      </CopilotChatActionsProvider>
+    </CopilotTenantScopeProvider>
   );
 };

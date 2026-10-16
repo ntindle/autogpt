@@ -30,7 +30,7 @@ function ArtifactContentLoader({
   isSourceView,
   classification,
 }: Props) {
-  const { content, pdfUrl, isLoading, error, scrollRef, retry } =
+  const { content, pdfUrl, mediaUrl, isLoading, error, scrollRef, retry } =
     useArtifactContent(artifact, classification);
 
   if (isLoading) {
@@ -67,6 +67,7 @@ function ArtifactContentLoader({
           artifact={artifact}
           content={content}
           pdfUrl={pdfUrl}
+          mediaUrl={mediaUrl}
           isSourceView={isSourceView}
           classification={classification}
         />
@@ -175,12 +176,14 @@ function ArtifactRenderer({
   artifact,
   content,
   pdfUrl,
+  mediaUrl,
   isSourceView,
   classification,
 }: {
   artifact: ArtifactRef;
   content: string | null;
   pdfUrl: string | null;
+  mediaUrl: string | null;
   isSourceView: boolean;
   classification: ArtifactClassification;
 }) {
@@ -189,7 +192,7 @@ function ArtifactRenderer({
     return (
       <ArtifactImage
         key={artifact.sourceUrl}
-        src={artifact.sourceUrl}
+        src={mediaUrl ?? artifact.sourceUrl}
         alt={artifact.title}
       />
     );
@@ -197,7 +200,12 @@ function ArtifactRenderer({
 
   // Video: render with <video> controls (no content fetch)
   if (classification.type === "video") {
-    return <ArtifactVideo key={artifact.sourceUrl} src={artifact.sourceUrl} />;
+    return (
+      <ArtifactVideo
+        key={artifact.sourceUrl}
+        src={mediaUrl ?? artifact.sourceUrl}
+      />
+    );
   }
 
   if (classification.type === "pdf" && pdfUrl) {
