@@ -1,10 +1,13 @@
 import {
   getListSkillLearningDecisionsQueryKey,
   getListSkillLearningHistoryQueryKey,
-  useDecideSkillLearningProposal,
+} from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
+import {
   useListSkillLearningDecisions,
   useListSkillLearningHistory,
-} from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
+} from "@/services/skill-learning/scoped-queries";
+import { useDecideSkillLearningProposal } from "@/services/skill-learning/scoped-mutations";
+import { useOrgTeamStore } from "@/services/org-team/store";
 import { DecisionRequestAction } from "@/app/api/__generated__/models/decisionRequestAction";
 import { SkillVersionSummary } from "@/app/api/__generated__/models/skillVersionSummary";
 import { okData } from "@/app/api/helpers";
@@ -57,6 +60,9 @@ export function readOpenRecordFromUrl(): OpenLearningRecord | null {
 export function useLearningHistory(scopeExpertID: string | null) {
   const enabled = Boolean(useGetFlag(Flag.DREAM_SKILL_LEARNING_ENABLED));
   const queryClient = useQueryClient();
+  const organizationId = useOrgTeamStore((state) => state.activeOrgID);
+  const isReady = useOrgTeamStore((state) => state.isLoaded);
+  const scope = { organizationId, teamId: null, isReady };
   const [origin, setOrigin] = useState("all");
   const [state, setState] = useState("all");
   const [openRecord, setOpenRecord] = useState<OpenLearningRecord | null>(
@@ -69,36 +75,49 @@ export function useLearningHistory(scopeExpertID: string | null) {
     state: state === "all" ? undefined : state,
     limit: HISTORY_LIMIT,
   };
-  const historyQuery = useListSkillLearningHistory(params, {
-    query: { enabled, select: (res) => okData(res)?.items ?? [] },
-  });
-  const decisionsQuery = useListSkillLearningDecisions({
-    query: { enabled, select: (res) => okData(res)?.items ?? [] },
-  });
+  const historyQuery = useListSkillLearningHistory(
+    params,
+    {
+      query: { enabled, select: (res) => okData(res)?.items ?? [] },
+    },
+    undefined,
+    scope,
+  );
+  const decisionsQuery = useListSkillLearningDecisions(
+    {
+      query: { enabled, select: (res) => okData(res)?.items ?? [] },
+    },
+    undefined,
+    scope,
+  );
 
   const { mutate: decide, isPending: isDeciding } =
-    useDecideSkillLearningProposal({
-      mutation: {
-        onSuccess: (res) => {
-          const data = okData(res);
-          toast({
-            title: data?.status_label ?? "Decision recorded",
-            description: data?.reason || undefined,
-          });
-          queryClient.invalidateQueries({
-            queryKey: getListSkillLearningDecisionsQueryKey(),
-          });
-          queryClient.invalidateQueries({
-            queryKey: getListSkillLearningHistoryQueryKey(params),
-          });
+    useDecideSkillLearningProposal(
+      {
+        mutation: {
+          onSuccess: (res) => {
+            const data = okData(res);
+            toast({
+              title: data?.status_label ?? "Decision recorded",
+              description: data?.reason || undefined,
+            });
+            queryClient.invalidateQueries({
+              queryKey: getListSkillLearningDecisionsQueryKey(),
+            });
+            queryClient.invalidateQueries({
+              queryKey: getListSkillLearningHistoryQueryKey(params),
+            });
+          },
+          onError: () =>
+            toast({
+              title: "Could not record the decision",
+              variant: "destructive",
+            }),
         },
-        onError: () =>
-          toast({
-            title: "Could not record the decision",
-            variant: "destructive",
-          }),
       },
-    });
+      undefined,
+      scope,
+    );
 
   function decideProposal(
     proposal: SkillVersionSummary,

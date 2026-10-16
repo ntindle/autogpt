@@ -12,10 +12,12 @@ import {
   useListMyExpertMemoryFacts,
   useListMyMemoryFacts,
 } from "@/app/api/__generated__/endpoints/memory/memory";
-import { useListExperts } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExperts } from "@/services/experts/scoped-queries";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+import { useOrgTeamStore } from "@/services/org-team/store";
 import {
   getActiveExperts,
   getScopeName,
@@ -30,10 +32,21 @@ export function useMemoryPage(memoryEnabled = true) {
     readExpertScopeFromUrl,
   );
   const queryClient = useQueryClient();
+  const organizationID = useOrgTeamStore((state) => state.activeOrgID);
+  const isLoaded = useOrgTeamStore((state) => state.isLoaded);
+  const request = getTenantRequestInit(organizationID, null, isLoaded);
+
+  function scopedKey(key: readonly unknown[]) {
+    return ["organization-memory", organizationID, ...key];
+  }
 
   // Deliberately not gated on HIRE_EXPERTS: expert memory scopes must stay
   // manageable here even if the hiring UI is dark.
-  const expertsQuery = useListExperts();
+  const expertsQuery = useListExperts(undefined, undefined, {
+    organizationId: organizationID,
+    teamId: null,
+    isReady: isLoaded,
+  });
   const expertsSettled = expertsQuery.data?.status === 200;
   const experts = getActiveExperts(
     expertsQuery.data?.status === 200 ? expertsQuery.data.data : undefined,
@@ -50,22 +63,50 @@ export function useMemoryPage(memoryEnabled = true) {
 
   const accountFacts = useListMyMemoryFacts(
     { limit: RECENT_FACTS_LIMIT },
-    { query: { enabled: memoryEnabled && scopeExpertID === null } },
+    {
+      query: {
+        queryKey: scopedKey(
+          getListMyMemoryFactsQueryKey({ limit: RECENT_FACTS_LIMIT }),
+        ),
+        enabled: isLoaded && memoryEnabled && scopeExpertID === null,
+      },
+      request,
+    },
   );
   const expertFacts = useListMyExpertMemoryFacts(
     scopeExpertID ?? "",
     { limit: RECENT_FACTS_LIMIT },
-    { query: { enabled: memoryEnabled && scopeExpertID !== null } },
+    {
+      query: {
+        queryKey: scopedKey(
+          getListMyExpertMemoryFactsQueryKey(scopeExpertID ?? "", {
+            limit: RECENT_FACTS_LIMIT,
+          }),
+        ),
+        enabled: isLoaded && memoryEnabled && scopeExpertID !== null,
+      },
+      request,
+    },
   );
   const factsQuery = scopeExpertID === null ? accountFacts : expertFacts;
   const facts =
     factsQuery.data?.status === 200 ? factsQuery.data.data.items : [];
 
   const accountOverview = useGetMyMemoryOverview({
-    query: { enabled: memoryEnabled && scopeExpertID === null },
+    query: {
+      queryKey: scopedKey(getGetMyMemoryOverviewQueryKey()),
+      enabled: isLoaded && memoryEnabled && scopeExpertID === null,
+    },
+    request,
   });
   const expertOverview = useGetMyExpertMemoryOverview(scopeExpertID ?? "", {
-    query: { enabled: memoryEnabled && scopeExpertID !== null },
+    query: {
+      queryKey: scopedKey(
+        getGetMyExpertMemoryOverviewQueryKey(scopeExpertID ?? ""),
+      ),
+      enabled: isLoaded && memoryEnabled && scopeExpertID !== null,
+    },
+    request,
   });
   const overviewQuery =
     scopeExpertID === null ? accountOverview : expertOverview;
@@ -75,18 +116,18 @@ export function useMemoryPage(memoryEnabled = true) {
   function invalidateScopeQueries() {
     if (scopeExpertID === null) {
       queryClient.invalidateQueries({
-        queryKey: getListMyMemoryFactsQueryKey(),
+        queryKey: scopedKey(getListMyMemoryFactsQueryKey()),
       });
       queryClient.invalidateQueries({
-        queryKey: getGetMyMemoryOverviewQueryKey(),
+        queryKey: scopedKey(getGetMyMemoryOverviewQueryKey()),
       });
       return;
     }
     queryClient.invalidateQueries({
-      queryKey: getListMyExpertMemoryFactsQueryKey(scopeExpertID),
+      queryKey: scopedKey(getListMyExpertMemoryFactsQueryKey(scopeExpertID)),
     });
     queryClient.invalidateQueries({
-      queryKey: getGetMyExpertMemoryOverviewQueryKey(scopeExpertID),
+      queryKey: scopedKey(getGetMyExpertMemoryOverviewQueryKey(scopeExpertID)),
     });
   }
 
@@ -104,9 +145,11 @@ export function useMemoryPage(memoryEnabled = true) {
   }
 
   const forgetAccountFact = useForgetMyMemoryFact({
+    request,
     mutation: { onSuccess: onForgotten, onError: onForgetError },
   });
   const forgetExpertFact = useForgetMyExpertMemoryFact({
+    request,
     mutation: { onSuccess: onForgotten, onError: onForgetError },
   });
 
@@ -146,9 +189,11 @@ export function useMemoryPage(memoryEnabled = true) {
   }
 
   const eraseAccount = useEraseMyMemory({
+    request,
     mutation: { onSuccess: onErased, onError: onEraseError },
   });
   const eraseExpert = useEraseMyExpertMemory({
+    request,
     mutation: { onSuccess: onErased, onError: onEraseError },
   });
 
