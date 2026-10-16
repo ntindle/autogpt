@@ -1,3 +1,6 @@
+import { useSearchParams } from "next/navigation";
+import { decodeBuilderTenantScope } from "@/services/org-team/builder";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
 import { isValidUUID } from "@/lib/utils";
@@ -134,11 +137,28 @@ export function useCopilotPage({
   const activeOrgID = useOrgTeamStore((s) => s.activeOrgID);
   const { mutate: completeGreeting } = useCompleteBrainDumpGreeting();
   const {
-    teamId: createTeamId,
+    teamId: selectedCreateTeamId,
     setTeamId: setCreateTeamId,
-    teamRequestInit,
-    isReady: isTeamContextReady,
+    isReady: isSelectedTeamContextReady,
   } = useCreateTeamSelection(CreateSurface.Copilot);
+  const searchParams = useSearchParams();
+  const explicitCreateScope = decodeBuilderTenantScope(
+    searchParams.get("organizationId"),
+    searchParams.get("teamId"),
+  );
+  const createOrganizationId = explicitCreateScope
+    ? explicitCreateScope.organizationId
+    : activeOrgID;
+  const createTeamId = explicitCreateScope
+    ? explicitCreateScope.teamId
+    : selectedCreateTeamId;
+  const isTeamContextReady =
+    explicitCreateScope !== null || isSelectedTeamContextReady;
+  const teamRequestInit = getTenantRequestInit(
+    createOrganizationId,
+    createTeamId,
+    isTeamContextReady,
+  );
 
   const {
     sessionId,
@@ -201,10 +221,10 @@ export function useCopilotPage({
     setArtifactTenantScope(
       sessionId
         ? (sessionTenantScope ?? null)
-        : { organizationId: activeOrgID, teamId: createTeamId },
+        : { organizationId: createOrganizationId, teamId: createTeamId },
     );
   }, [
-    activeOrgID,
+    createOrganizationId,
     createTeamId,
     sessionId,
     sessionTenantScope,
@@ -406,8 +426,10 @@ export function useCopilotPage({
   } = useSendMessage({
     sessionId,
     isSessionScopeReady: sessionTenantScope !== undefined,
-    sessionOrganizationId: sessionOrganizationId ?? activeOrgID,
-    sessionTeamId: sessionId ? (sessionTeamId ?? createTeamId) : createTeamId,
+    sessionOrganizationId: sessionId
+      ? sessionOrganizationId
+      : createOrganizationId,
+    sessionTeamId: sessionId ? sessionTeamId : createTeamId,
     sendMessage,
     createSession,
     isUserStoppingRef,
@@ -547,7 +569,9 @@ export function useCopilotPage({
 
   return {
     sessionId,
-    sessionOrganizationId: sessionId ? sessionOrganizationId : activeOrgID,
+    sessionOrganizationId: sessionId
+      ? sessionOrganizationId
+      : createOrganizationId,
     sessionTeamId: sessionId ? sessionTeamId : createTeamId,
     messages: displayMessages,
     status,

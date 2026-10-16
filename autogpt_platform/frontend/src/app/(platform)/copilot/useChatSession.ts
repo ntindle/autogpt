@@ -291,10 +291,19 @@ export function useChatSession({
     }, [freshSessionData, sessionId, hasActiveStream, activeStreamStartedAt]);
 
   const { mutateAsync: createSessionMutation, isPending: isCreatingSession } =
-    usePostV2CreateSession({ request: createRequestInit });
+    usePostV2CreateSession({
+      request: explicitScope
+        ? getTenantRequestInit(
+            explicitScope.organizationId,
+            explicitScope.teamId,
+          )
+        : createRequestInit,
+    });
 
   async function createSession(options?: { expertKickoff?: boolean }) {
     if (sessionId) return sessionId;
+    if (!isRequestScopeReady)
+      throw new ReportedSendError("Organization is still loading");
     // Latched for the life of this mount, including on failure: once the user
     // has asked for a new thread, auto-navigating them into an old one is
     // never the right recovery.

@@ -1,7 +1,9 @@
 "use client";
 
 import { CopilotPage } from "../copilot/CopilotPage";
+import { useOrgTeamStore } from "@/services/org-team/store";
 
 export default function HomePage() {
-  return <CopilotPage />;
+  const organizationId = useOrgTeamStore((state) => state.activeOrgID);
+  return <CopilotPage key={organizationId ?? "personal"} />;
 }
