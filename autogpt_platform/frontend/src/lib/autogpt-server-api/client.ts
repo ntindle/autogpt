@@ -1,3 +1,4 @@
+import { getOrgContextHeaders } from "@/services/org-team/headers";
 import { IMPERSONATION_HEADER_NAME } from "@/lib/constants";
 import { getWebSocketToken } from "@/lib/auth/actions";
 import { ImpersonationState } from "@/lib/impersonation";
@@ -131,7 +132,7 @@ export default class BackendAPI {
   }
 
   private getTenantHeaders(): Record<string, string> {
-    if (!this.tenantScope) return {};
+    if (!this.tenantScope) return getOrgContextHeaders();
     const headers: Record<string, string> = {};
     if (this.tenantScope.organizationId) {
       headers[ORG_HEADER_NAME] = this.tenantScope.organizationId;
@@ -755,6 +756,7 @@ export default class BackendAPI {
     path: string,
     formData: FormData,
   ): Promise<string> {
+    const tenantHeaders = this.getTenantHeaders();
     // Dynamic import is required even for client-only functions because helpers.ts
     // has server-only imports (like getBackendAuthToken) at the top level. Static imports
     // would bundle server-only code into the client bundle, causing runtime errors.
@@ -764,7 +766,7 @@ export default class BackendAPI {
 
     const response = await fetch(uploadUrl, {
       method: "POST",
-      headers: this.getTenantHeaders(),
+      headers: tenantHeaders,
       body: formData,
       credentials: "include",
     });
@@ -913,6 +915,7 @@ export default class BackendAPI {
     path: string,
     payload?: Record<string, any>,
   ) {
+    const tenantHeaders = this.getTenantHeaders();
     // Dynamic import is required even for client-only functions because helpers.ts
     // has server-only imports (like getBackendAuthToken) at the top level. Static imports
     // would bundle server-only code into the client bundle, causing runtime errors.
@@ -934,7 +937,7 @@ export default class BackendAPI {
     // Prepare headers with admin impersonation support
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      ...this.getTenantHeaders(),
+      ...tenantHeaders,
     };
 
     const impersonatedUserId = ImpersonationState.get();

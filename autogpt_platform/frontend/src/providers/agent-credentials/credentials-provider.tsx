@@ -1,3 +1,4 @@
+import { useOrgTeamStore } from "@/services/org-team/store";
 import { useToastOnFail } from "@/components/molecules/Toast/use-toast";
 import type { CredentialsMetaResponse as GeneratedCredentialsMetaResponse } from "@/app/api/__generated__/models/credentialsMetaResponse";
 import {
@@ -17,7 +18,7 @@ import {
 import { useBackendAPI } from "@/lib/autogpt-server-api/context";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
 import { toDisplayName } from "@/providers/agent-credentials/helper";
-import { hashKey, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useEffect, useState, useRef } from "react";
 
 type APIKeyCredentialsCreatable = Omit<
@@ -149,6 +150,24 @@ export default function CredentialsProvider({
 }: {
   children: React.ReactNode;
 }) {
+  const organizationID = useOrgTeamStore((state) => state.activeOrgID);
+  return (
+    <ScopedCredentialsProvider
+      key={organizationID ?? "personal"}
+      organizationID={organizationID}
+    >
+      {children}
+    </ScopedCredentialsProvider>
+  );
+}
+
+function ScopedCredentialsProvider({
+  children,
+  organizationID,
+}: {
+  children: React.ReactNode;
+  organizationID: string | null;
+}) {
   const [providers, setProviders] =
     useState<CredentialsProvidersContextType | null>(null);
   const [providerNames, setProviderNames] = useState<string[]>([]);
@@ -156,7 +175,7 @@ export default function CredentialsProvider({
     new Set(),
   );
   const { isLoggedIn, isUserLoading } = useAuth();
-  const api = useBackendAPI();
+  const api = useBackendAPI({ organizationId: organizationID, teamId: null });
   const onFailToast = useToastOnFail();
   const queryClient = useQueryClient();
 
@@ -214,7 +233,13 @@ export default function CredentialsProvider({
     ): Promise<CredentialsMetaResponse> => {
       try {
         const credsMeta = await api.oAuthCallback(provider, code, state_token);
-        upsertCredentials(provider, credsMeta);
+        if (
+          (await api.listCredentials()).some(
+            (credential) => credential.id === credsMeta.id,
+          )
+        ) {
+          upsertCredentials(provider, credsMeta);
+        }
         return credsMeta;
       } catch (error) {
         onFailToast("complete OAuth authentication")(error);
@@ -232,11 +257,14 @@ export default function CredentialsProvider({
       iss?: string,
     ): Promise<CredentialsMetaResponse> => {
       try {
-        const response = await postV2ExchangeOauthCodeForMcpTokens({
-          code,
-          state_token,
-          iss,
-        });
+        const response = await postV2ExchangeOauthCodeForMcpTokens(
+          {
+            code,
+            state_token,
+            iss,
+          },
+          { headers: { "X-Org-Id": organizationID ?? "", "X-Team-Id": "" } },
+        );
         if (response.status !== 200) throw response.data;
         const credsMeta: CredentialsMetaResponse = {
           ...response.data,
@@ -245,14 +273,20 @@ export default function CredentialsProvider({
           username: response.data.username ?? undefined,
           host: response.data.host ?? undefined,
         };
-        upsertCredentials("mcp", credsMeta);
+        if (
+          (await api.listCredentials()).some(
+            (credential) => credential.id === credsMeta.id,
+          )
+        ) {
+          upsertCredentials("mcp", credsMeta);
+        }
         return credsMeta;
       } catch (error) {
         onFailToast("complete MCP OAuth authentication")(error);
         throw error;
       }
     },
-    [upsertCredentials, onFailToast],
+    [upsertCredentials, onFailToast, organizationID, api],
   );
 
   /** Stores a manual MCP credential, and adds the result to the internal credentials store. */
@@ -261,10 +295,13 @@ export default function CredentialsProvider({
       server_url: string,
       token: string,
     ): Promise<CredentialsMetaResponse> => {
-      const response = await postV2StoreABearerTokenForAnMcpServer({
-        server_url,
-        token,
-      });
+      const response = await postV2StoreABearerTokenForAnMcpServer(
+        {
+          server_url,
+          token,
+        },
+        { headers: { "X-Org-Id": organizationID ?? "", "X-Team-Id": "" } },
+      );
       if (response.status !== 200) throw response.data;
       const credsMeta: CredentialsMetaResponse = {
         ...response.data,
@@ -276,7 +313,7 @@ export default function CredentialsProvider({
       upsertCredentials("mcp", credsMeta);
       return credsMeta;
     },
-    [upsertCredentials],
+    [upsertCredentials, organizationID],
   );
 
   /** Wraps `BackendAPI.createAPIKeyCredentials`, and adds the result to the internal credentials store. */
@@ -547,17 +584,10 @@ export default function CredentialsProvider({
   // flows using generated hooks) will trigger a reload here, so the builder
   // never sees stale credentials without callers having to opt in.
   //
-  // Match by `queryHash` (computed via the public `hashKey` helper) instead
-  // of comparing `queryKey[0]` so any future parameterisation of the key
-  // still works. Listen for both `invalidate` (set isInvalidated=true) and
-  // `success` (refetch landed) actions so we cover active and inactive
-  // queries — for active queries the refetch following invalidate produces
-  // the `success` event with fresh data; for inactive queries only the
-  // `invalidate` action fires.
   useEffect(() => {
-    const targetHash = hashKey(getGetV1ListCredentialsQueryKey());
+    const targetKey = getGetV1ListCredentialsQueryKey()[0];
     const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
-      if (event.query.queryHash !== targetHash) return;
+      if (event.query.queryKey[0] !== targetKey) return;
       if (event.type !== "updated") return;
       const actionType = event.action.type;
       if (actionType === "invalidate" || actionType === "success") {

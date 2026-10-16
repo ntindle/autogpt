@@ -113,10 +113,13 @@ describe("CredentialsProvider.mcpStoreToken", () => {
     await waitFor(() =>
       expect(screen.getByTestId("saved-ids").textContent).toBe("cred-stored"),
     );
-    expect(mocks.storeToken).toHaveBeenCalledWith({
-      server_url: "https://mcp.example.com/mcp",
-      token: "Basic dXNlcjpwdw==",
-    });
+    expect(mocks.storeToken).toHaveBeenCalledWith(
+      {
+        server_url: "https://mcp.example.com/mcp",
+        token: "Basic dXNlcjpwdw==",
+      },
+      { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+    );
   });
 
   it("does not publish anything when the endpoint refuses the credential", async () => {

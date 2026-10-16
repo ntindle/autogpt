@@ -1,3 +1,4 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import { useState } from "react";
 import { useGetV1ListCredentials } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import { useMCPAuthScheme } from "@/components/contextual/MCPAuthSchemeField/useMCPAuthScheme";
@@ -13,8 +14,11 @@ export function useMCPManualAuth(
   allowedSchemes: MCPAuthScheme[],
 ) {
   const [token, setToken] = useState("");
+  const credentialsScope = useOrgConnectionScope("credentials");
   const { data: credentials } = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       select: (response) => (response.status === 200 ? response.data : []),
     },
   });

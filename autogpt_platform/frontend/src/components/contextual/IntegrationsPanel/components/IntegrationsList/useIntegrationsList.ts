@@ -1,5 +1,7 @@
 "use client";
 
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+
 import {
   useGetV1ListCredentials,
   useGetV1ListProviders,
@@ -22,8 +24,11 @@ import { useIntegrationsSelection } from "./useIntegrationsSelection";
 export function useIntegrationsList(query: string) {
   const debouncedQuery = useDebouncedValue(query, 250);
 
+  const credentialsScope = useOrgConnectionScope("credentials");
   const credentialsQuery = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       select: (response) =>
         response.status === 200 ? filterSystemCredentials(response.data) : [],
     },

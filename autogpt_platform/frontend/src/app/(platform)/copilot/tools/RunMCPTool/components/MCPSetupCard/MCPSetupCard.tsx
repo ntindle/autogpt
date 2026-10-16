@@ -1,5 +1,7 @@
 "use client";
 
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+
 import { useListExpertCredentials } from "@/app/api/__generated__/endpoints/experts/experts";
 import { useGetV1ListCredentials } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import {
@@ -35,6 +37,7 @@ import { ContentMessage } from "../../../../components/ToolAccordion/AccordionCo
 import { ChainActionsContext } from "../../../../components/ToolChain/chainActions";
 import { CredentialRejectionNotice } from "../../../../components/CredentialRejectionNotice/CredentialRejectionNotice";
 import { coerceExpertGrant } from "../../../../components/SetupRequirementsCard/helpers";
+import { useCopilotTenantScope } from "../../../../CopilotTenantScopeContext";
 
 interface Props {
   output: SetupRequirementsResponse;
@@ -94,12 +97,19 @@ export function MCPSetupCard({ output, retryInstruction }: Props) {
   // Connect successfully in this component, ``localConnected`` stays
   // true even if the live-cred query is briefly stale.
   const normalizedServer = normalizeMcpUrl(serverUrl);
+  const tenantScope = useCopilotTenantScope();
+  const credentialsScope = useOrgConnectionScope(
+    "credentials",
+    tenantScope.organizationId,
+  );
   const {
     data: liveCredsRes,
     isFetchedAfterMount: liveCredsFetched,
     isError: liveCredsError,
   } = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       select: (res) => (res.status === 200 ? res.data : null),
       // No staleTime — when this card mounts (e.g. immediately after the
       // backend's ``invalidate_mcp_credential`` deleted a stale row),
@@ -221,6 +231,7 @@ export function MCPSetupCard({ output, retryInstruction }: Props) {
           queryClient,
           expertGrant.expertId,
           credentialId,
+          credentialsScope.request,
         );
       } finally {
         grantInFlight.current = false;
@@ -255,6 +266,7 @@ export function MCPSetupCard({ output, retryInstruction }: Props) {
       const credential = await connectMCPOAuth({
         serverURL: serverUrl,
         signal,
+        request: credentialsScope.request,
         exchange: allProviders?.mcp?.mcpOAuthCallback,
       });
       signal.throwIfAborted();
@@ -315,10 +327,13 @@ export function MCPSetupCard({ output, retryInstruction }: Props) {
     setGrantError(null);
     try {
       // Probe before storing so a rejected credential never shows as Connected.
-      const probe = await postV2DiscoverAvailableToolsOnAnMcpServer({
-        server_url: serverUrl,
-        auth_token: token,
-      });
+      const probe = await postV2DiscoverAvailableToolsOnAnMcpServer(
+        {
+          server_url: serverUrl,
+          auth_token: token,
+        },
+        credentialsScope.request,
+      );
       if (probe.status !== 200) {
         const probeDetail =
           probe.data && typeof probe.data === "object" && "detail" in probe.data
@@ -331,10 +346,13 @@ export function MCPSetupCard({ output, retryInstruction }: Props) {
         );
       }
 
-      const res = await postV2StoreABearerTokenForAnMcpServer({
-        server_url: serverUrl,
-        token,
-      });
+      const res = await postV2StoreABearerTokenForAnMcpServer(
+        {
+          server_url: serverUrl,
+          token,
+        },
+        credentialsScope.request,
+      );
       if (!(res.status >= 200 && res.status < 300)) {
         const detail =
           res.data && typeof res.data === "object" && "detail" in res.data

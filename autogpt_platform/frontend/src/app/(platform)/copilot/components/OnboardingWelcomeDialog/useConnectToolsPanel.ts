@@ -1,5 +1,7 @@
 "use client";
 
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+
 import { useGetBrainDumpRecommendedProviders } from "@/app/api/__generated__/endpoints/brain-dump/brain-dump";
 import {
   useGetV1ListCredentials,
@@ -42,8 +44,11 @@ export function useConnectToolsPanel() {
 
   // Connected state per provider; the OAuth and API-key flows invalidate
   // this query on success, so freshly connected rows flip immediately.
+  const credentialsScope = useOrgConnectionScope("credentials");
   const credentialsQuery = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       select: (response) => (response.status === 200 ? response.data : []),
     },
   });

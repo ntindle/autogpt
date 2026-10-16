@@ -1,3 +1,4 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
   getGetExpertQueryKey,
   useListExperts,
@@ -58,8 +59,11 @@ export function useSkillPage(slug: string) {
     (expert) => !expert.is_template && !expert.is_archived,
   );
 
+  const credentialsScope = useOrgConnectionScope("credentials");
   const credentials = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       enabled: isLoggedIn,
       select: (response) => okData(response) ?? [],
     },

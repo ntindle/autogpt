@@ -14,11 +14,13 @@ import {
   preOpenOAuthPopup,
 } from "@/lib/oauth-popup";
 import type { CredentialsMetaResponse } from "@/app/api/__generated__/models/credentialsMetaResponse";
+import { getOrgContextHeaders } from "@/services/org-team/headers";
 
 interface Args {
   serverURL: string;
   scopes?: string[];
   signal: AbortSignal;
+  request?: RequestInit;
   exchange?: (
     code: string,
     state: string,
@@ -37,6 +39,9 @@ export async function connectMCPOAuth({
   scopes,
   signal,
   exchange,
+  request = {
+    headers: { "X-Org-Id": "", "X-Team-Id": "", ...getOrgContextHeaders() },
+  },
 }: Args) {
   signal.throwIfAborted();
   const preOpenedWindow = preOpenOAuthPopup();
@@ -58,7 +63,7 @@ export async function connectMCPOAuth({
           server_url: serverURL,
           ...(scopes === undefined ? {} : { scopes }),
         },
-        { signal },
+        { ...request, signal },
       );
       signal.throwIfAborted();
       if (login.status !== 200)
@@ -110,7 +115,7 @@ export async function connectMCPOAuth({
         state_token,
         iss: result.iss,
       },
-      { signal },
+      { ...request, signal },
     );
     signal.throwIfAborted();
     if (exchanged.status !== 200)

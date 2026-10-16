@@ -1,3 +1,4 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
   useGrantExpertCredentials,
   useListExpertCredentials,
@@ -26,8 +27,11 @@ export function useExpertIntegrationsSection(expertId: string) {
   });
   // System credentials (platform LLM keys) are filtered out because they are
   // never granted and never revocable — offering them would suggest otherwise.
+  const credentialsScope = useOrgConnectionScope("credentials");
   const connectedQuery = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       select: (response) =>
         response.status === 200 ? filterSystemCredentials(response.data) : [],
     },

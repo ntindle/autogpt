@@ -1,3 +1,4 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
   useGetV1ListCredentials,
   useGetV1ListProviders,
@@ -55,8 +56,11 @@ export function useExpertConnectServiceDialog({
       select: (response) => (response.status === 200 ? response.data : []),
     },
   });
+  const credentialsScope = useOrgConnectionScope("credentials");
   const credentialsQuery = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       enabled: open,
       select: (response) => (response.status === 200 ? response.data : []),
     },

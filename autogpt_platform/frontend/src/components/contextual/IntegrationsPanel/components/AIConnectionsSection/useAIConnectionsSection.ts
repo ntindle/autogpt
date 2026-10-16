@@ -1,5 +1,7 @@
 "use client";
 
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+
 import { useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -25,8 +27,10 @@ export function useAIConnectionsSection() {
   // a connection is called, what backs it, and which models each tier uses
   // are product statements, and a client that derives them drifts from the
   // server that enforces them.
+  const connectionsScope = useOrgConnectionScope("connections");
   const connectionsQuery = useGetV2ListChatConnections({
-    query: { refetchOnWindowFocus: true },
+    request: connectionsScope.request,
+    query: { queryKey: connectionsScope.queryKey, refetchOnWindowFocus: true },
   });
 
   const offers: AIConnectionOffer[] = visibleOffers(
@@ -39,8 +43,11 @@ export function useAIConnectionsSection() {
   // than asked of the provider: this is the identity the user linked, so it is
   // true without a live call, and it cannot go stale the way a usage window
   // can.
+  const credentialsScope = useOrgConnectionScope("credentials");
   const credentialsQuery = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       select: (response) => (response.status === 200 ? response.data : []),
     },
   });

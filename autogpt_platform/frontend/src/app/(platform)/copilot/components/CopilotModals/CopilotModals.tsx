@@ -7,11 +7,18 @@ import { SkillsPanel } from "@/components/contextual/SkillsPanel/SkillsPanel";
 import { Dialog } from "@/components/molecules/Dialog/Dialog";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { grantToExpert } from "@/services/experts/grant-to-expert";
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+import { useCopilotTenantScope } from "../../CopilotTenantScopeContext";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCopilotUIStore } from "../../store";
 import { useCopilotModal } from "../../useCopilotModal";
 
 export function CopilotModals() {
+  const tenantScope = useCopilotTenantScope();
+  const credentialsScope = useOrgConnectionScope(
+    "credentials",
+    tenantScope.organizationId,
+  );
   const { modal, closeModal } = useCopilotModal();
   const setInitialPrompt = useCopilotUIStore((s) => s.setInitialPrompt);
   const expert = useCopilotUIStore((s) => s.contextPanelExpert);
@@ -29,7 +36,12 @@ export function CopilotModals() {
 
   async function handleConnected(credential: { id: string }) {
     if (!expert) return;
-    const ok = await grantToExpert(queryClient, expert.id, credential.id);
+    const ok = await grantToExpert(
+      queryClient,
+      expert.id,
+      credential.id,
+      credentialsScope.request,
+    );
     if (!ok) {
       toast({
         title: `Connected, but could not give ${expert.name} access`,

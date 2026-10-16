@@ -1,5 +1,7 @@
 "use client";
 
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+
 import { useGetV2ListChatConnections } from "@/app/api/__generated__/endpoints/chat/chat";
 import type { AIConnectionOffer } from "@/app/api/__generated__/models/aIConnectionOffer";
 import { useOAuthConnect } from "@/components/contextual/IntegrationsPanel/components/ConnectServiceDialog/components/DetailView/useOAuthConnect";
@@ -15,8 +17,14 @@ import {
 import { useLockedTierFallback } from "./useLockedTierFallback";
 
 export function useConnectionPicker() {
+  const connectionsScope = useOrgConnectionScope("connections");
   const query = useGetV2ListChatConnections({
-    query: { refetchOnWindowFocus: true, staleTime: 0 },
+    request: connectionsScope.request,
+    query: {
+      queryKey: connectionsScope.queryKey,
+      refetchOnWindowFocus: true,
+      staleTime: 0,
+    },
   });
   const {
     copilotLlmAuth,

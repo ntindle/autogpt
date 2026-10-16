@@ -1,5 +1,7 @@
 "use client";
 
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+
 import {
   getGetV2ListChatConnectionsQueryKey,
   useGetV2ListChatConnections,
@@ -14,8 +16,10 @@ export function useConnectStep() {
   const nextStep = useOnboardingWizardStore((s) => s.nextStep);
   const queryClient = useQueryClient();
 
+  const connectionsScope = useOrgConnectionScope("connections");
   const connectionsQuery = useGetV2ListChatConnections({
-    query: { refetchOnWindowFocus: false },
+    request: connectionsScope.request,
+    query: { queryKey: connectionsScope.queryKey, refetchOnWindowFocus: false },
   });
   const offers =
     connectionsQuery.data?.status === 200

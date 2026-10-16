@@ -1,10 +1,14 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import { useGetV1ListCredentials } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import { useListExpertCredentials } from "@/app/api/__generated__/endpoints/experts/experts";
 import { connectedIntegrationsFromCredentials } from "./helpers";
 
 export function useConnectedIntegrations(expertId?: string | null) {
+  const credentialsScope = useOrgConnectionScope("credentials");
   const credentials = useGetV1ListCredentials({
+    request: credentialsScope.request,
     query: {
+      queryKey: credentialsScope.queryKey,
       enabled: !expertId,
       select: (response) => (response.status === 200 ? response.data : []),
     },
