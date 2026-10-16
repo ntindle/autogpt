@@ -1,5 +1,7 @@
 "use client";
 
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
+
 import { Skeleton } from "@/components/atoms/Skeleton/Skeleton";
 import { ErrorCard } from "@/components/molecules/ErrorCard/ErrorCard";
 import { TaskCapture } from "./components/TaskCapture";
@@ -10,6 +12,11 @@ import { TasksHeader } from "./components/TasksHeader";
 import { useTasksPage } from "./useTasksPage";
 
 export default function TasksPage() {
+  const scope = useTaskScope();
+  return <TasksPageContent key={scope.organizationId ?? "personal"} />;
+}
+
+function TasksPageContent() {
   const page = useTasksPage();
   if (page.query.isLoading)
     return (

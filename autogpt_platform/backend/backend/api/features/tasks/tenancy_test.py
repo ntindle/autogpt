@@ -6,6 +6,7 @@ from fastapi import HTTPException
 
 from backend.api.features.tasks import db, routes
 from backend.api.features.tasks.models import TaskCreate
+from backend.util.exceptions import NotFoundError
 
 
 @pytest.mark.asyncio
@@ -43,10 +44,19 @@ async def test_child_tasks_keep_the_parent_team(owner):
     parent = await db.create_workspace_task(
         owner, TaskCreate(title="Outcome"), "org-a", team_id="team-a"
     )
+    with pytest.raises(NotFoundError):
+        await db.create_workspace_task(
+            owner,
+            TaskCreate(title="Step", parent_id=parent.id),
+            "org-b",
+            team_id="team-b",
+        )
     child = await db.create_workspace_task(
-        owner, TaskCreate(title="Step", parent_id=parent.id), "org-b", team_id="team-b"
+        owner, TaskCreate(title="Step", parent_id=parent.id), "org-a", team_id="team-b"
     )
     persisted = next(
-        task for task in await db.list_workspace_tasks(owner) if task.id == child.id
+        task
+        for task in await db.list_workspace_tasks(owner, organization_id="org-a")
+        if task.id == child.id
     )
     assert (persisted.organization_id, persisted.team_id) == ("org-a", "team-a")

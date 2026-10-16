@@ -145,6 +145,7 @@ async def test_chat_can_find_and_link_owned_cross_project_work_without_gaining_a
 
 @pytest.mark.asyncio
 async def test_cross_project_links_cannot_access_another_owners_task(owner):
+    await db.prisma.chatsession.create(data={"id": "regular-chat", "userId": owner})
     stranger = str(uuid4())
     await db.prisma.user.create(
         data={"id": stranger, "email": f"{stranger}@tasks.example.invalid"}

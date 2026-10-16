@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { getGetV2GetSessionQueryKey } from "@/app/api/__generated__/endpoints/chat/chat";
@@ -32,8 +33,15 @@ export function TaskQuestionsForm({
   taskBinding,
   variant = "chain",
 }: Props) {
+  const scope = useTaskScope();
   const query = useListWorkspaceTasks({
-    query: { select: okData, refetchInterval: 5000 },
+    request: scope.request,
+    query: {
+      select: okData,
+      refetchInterval: 5000,
+      enabled: scope.ready,
+      queryKey: scope.queryKey(["/api/tasks"]),
+    },
   });
   const answer = useTaskQuestionAnswer();
   const cache = useQueryClient();
@@ -81,13 +89,17 @@ export function TaskQuestionsForm({
   async function route(keyword: string, target: TaskAssignee) {
     if (!task?.id || !task.question)
       throw new Error("Refresh the question before redirecting it.");
-    const response = await commandWorkspaceTask(task.id, {
-      operation: "route_question",
-      version: task.version ?? 1,
-      question_id: task.question.id,
-      question_keyword: keyword,
-      question_target: target,
-    });
+    const response = await commandWorkspaceTask(
+      task.id,
+      {
+        operation: "route_question",
+        version: task.version ?? 1,
+        question_id: task.question.id,
+        question_keyword: keyword,
+        question_target: target,
+      },
+      scope.request,
+    );
     if (!okData(response))
       throw new Error("Could not redirect the question. Please try again.");
     await invalidateTaskSurfaces(cache);

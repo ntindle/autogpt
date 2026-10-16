@@ -1,4 +1,5 @@
-import { useCreateWorkspaceTask } from "@/app/api/__generated__/endpoints/tasks/tasks";
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
+import { createWorkspaceTask } from "@/app/api/__generated__/endpoints/tasks/tasks";
 import { useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 
@@ -13,7 +14,8 @@ interface Options {
 }
 
 export function useTaskCapture({ project, refresh, report }: Options) {
-  const create = useCreateWorkspaceTask();
+  const scope = useTaskScope();
+  const [isCapturing, setIsCapturing] = useState(false);
   const [draft, setDraft] = useState("");
   const [addParent, setAddParent] = useState<string | null>(null);
   const queue = useRef<{
@@ -44,16 +46,18 @@ export function useTaskCapture({ project, refresh, report }: Options) {
       };
     }
     capturing.current = true;
+    setIsCapturing(true);
     const batch = queue.current;
     try {
       while (batch.entries.length) {
-        const response = await create.mutateAsync({
-          data: {
+        const response = await createWorkspaceTask(
+          {
             ...batch.entries[0],
             parent_id: batch.parent,
             project: batch.project,
           },
-        });
+          scope.request,
+        );
         if (response.status !== 201) throw new Error("Could not save the task");
         batch.entries.shift();
       }
@@ -63,6 +67,7 @@ export function useTaskCapture({ project, refresh, report }: Options) {
     } finally {
       setDraft(batch.entries.map((entry) => entry.title).join("\n"));
       capturing.current = false;
+      setIsCapturing(false);
       await refresh();
     }
   }
@@ -73,6 +78,6 @@ export function useTaskCapture({ project, refresh, report }: Options) {
     addParent,
     setAddParent,
     capture,
-    isCapturing: create.isPending,
+    isCapturing,
   };
 }

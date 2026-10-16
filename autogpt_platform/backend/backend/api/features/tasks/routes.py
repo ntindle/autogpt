@@ -50,13 +50,15 @@ Context = Annotated[auth.RequestContext, Security(auth.get_request_context)]
 
 @router.get("", operation_id="list_workspace_tasks")
 async def list_tasks(
-    user_id: UserID, background_tasks: BackgroundTasks
+    user_id: UserID, background_tasks: BackgroundTasks, ctx: Context
 ) -> TaskListResponse:
-    tasks = await tasks_db().list_workspace_tasks(user_id)
-    background_tasks.add_task(reconsider_unassigned_workspace_tasks, user_id)
+    tasks = await tasks_db().list_workspace_tasks(user_id, organization_id=ctx.org_id)
+    background_tasks.add_task(
+        reconsider_unassigned_workspace_tasks, user_id, ctx.org_id
+    )
     return TaskListResponse(
         tasks=tasks,
-        assignees=await task_assignees(user_id),
+        assignees=await task_assignees(user_id, organization_id=ctx.org_id),
     )
 
 
@@ -71,7 +73,12 @@ async def create_task(
         task = await tasks_db().create_workspace_task(
             user_id, request, ctx.org_id, team_id=ctx.team_id
         )
-        background_tasks.add_task(suggest_task_assignee, user_id, task.id)
+        background_tasks.add_task(
+            suggest_task_assignee,
+            user_id,
+            task.id,
+            organization_id=task.organization_id,
+        )
         return task
     except NotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -95,10 +102,12 @@ async def get_task_session_scope(session_id: str, user_id: UserID) -> TaskSessio
 
 @router.post("/{task_id}/commands", operation_id="command_workspace_task")
 async def command_task(
-    task_id: str, request: TaskCommand, user_id: UserID
+    task_id: str, request: TaskCommand, user_id: UserID, ctx: Context
 ) -> WorkspaceTask:
     try:
-        return await execute_task_command(user_id, task_id, request)
+        return await execute_task_command(
+            user_id, task_id, request, organization_id=ctx.org_id
+        )
     except NotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     except (TaskConflict, ValueError) as exc:
@@ -106,16 +115,18 @@ async def command_task(
 
 
 @router.get("/schedules", operation_id="list_task_schedules")
-async def get_schedules(user_id: UserID) -> list[TaskScheduleInfo]:
-    return await list_task_schedules(user_id)
+async def get_schedules(user_id: UserID, ctx: Context) -> list[TaskScheduleInfo]:
+    return await list_task_schedules(user_id, organization_id=ctx.org_id)
 
 
 @router.post("/{task_id}/schedule", operation_id="schedule_workspace_task")
 async def create_task_schedule(
-    task_id: str, request: TaskScheduleRequest, user_id: UserID
+    task_id: str, request: TaskScheduleRequest, user_id: UserID, ctx: Context
 ) -> WorkspaceTask:
     try:
-        return await schedule_task(user_id, task_id, request)
+        return await schedule_task(
+            user_id, task_id, request, organization_id=ctx.org_id
+        )
     except NotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     except ValueError as exc:
@@ -123,28 +134,38 @@ async def create_task_schedule(
 
 
 @router.post("/schedules/{schedule_id}/pause", operation_id="pause_task_schedule")
-async def pause_task_schedule(schedule_id: str, user_id: UserID) -> dict[str, bool]:
-    await set_schedule_paused(user_id, schedule_id, True)
+async def pause_task_schedule(
+    schedule_id: str, user_id: UserID, ctx: Context
+) -> dict[str, bool]:
+    await set_schedule_paused(user_id, schedule_id, True, organization_id=ctx.org_id)
     return {"paused": True}
 
 
 @router.post("/schedules/{schedule_id}/resume", operation_id="resume_task_schedule")
-async def resume_task_schedule(schedule_id: str, user_id: UserID) -> dict[str, bool]:
-    await set_schedule_paused(user_id, schedule_id, False)
+async def resume_task_schedule(
+    schedule_id: str, user_id: UserID, ctx: Context
+) -> dict[str, bool]:
+    await set_schedule_paused(user_id, schedule_id, False, organization_id=ctx.org_id)
     return {"paused": False}
 
 
 @router.post("/{task_id}/suggest", operation_id="suggest_workspace_task_owner")
 async def suggest_owner(
-    task_id: str, user_id: UserID, background_tasks: BackgroundTasks
+    task_id: str, user_id: UserID, background_tasks: BackgroundTasks, ctx: Context
 ) -> WorkspaceTask:
     try:
-        task = await tasks_db().begin_workspace_task_suggestion(user_id, task_id, True)
+        task = await tasks_db().begin_workspace_task_suggestion(
+            user_id, task_id, True, organization_id=ctx.org_id
+        )
         if task:
             background_tasks.add_task(generate_task_suggestion, user_id, task)
             return task
         return next(
-            t for t in await tasks_db().list_workspace_tasks(user_id) if t.id == task_id
+            t
+            for t in await tasks_db().list_workspace_tasks(
+                user_id, organization_id=ctx.org_id
+            )
+            if t.id == task_id
         )
     except NotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
@@ -156,10 +177,11 @@ async def preview_breakdown(
     request: TaskBreakdownRequest,
     user_id: UserID,
     background_tasks: BackgroundTasks,
+    ctx: Context,
 ) -> WorkspaceTask:
     try:
         task = await tasks_db().begin_workspace_task_breakdown(
-            user_id, task_id, request
+            user_id, task_id, request, organization_id=ctx.org_id
         )
         background_tasks.add_task(generate_task_breakdown, user_id, task)
         return task
@@ -173,10 +195,12 @@ async def preview_breakdown(
     "/{task_id}/breakdown/accept", operation_id="accept_workspace_task_breakdown"
 )
 async def accept_breakdown(
-    task_id: str, request: TaskBreakdownAccept, user_id: UserID
+    task_id: str, request: TaskBreakdownAccept, user_id: UserID, ctx: Context
 ) -> WorkspaceTask:
     try:
-        return await accept_task_breakdown(user_id, task_id, request)
+        return await accept_task_breakdown(
+            user_id, task_id, request, organization_id=ctx.org_id
+        )
     except NotFoundError as exc:
         raise HTTPException(404, str(exc)) from exc
     except (TaskConflict, ValueError) as exc:
@@ -184,8 +208,10 @@ async def accept_breakdown(
 
 
 @router.get("/conversation/{session_id}", operation_id="get_workspace_task_context")
-async def conversation_context(session_id: str, user_id: UserID) -> TaskContextResponse:
-    tasks = await tasks_db().list_workspace_tasks(user_id)
+async def conversation_context(
+    session_id: str, user_id: UserID, ctx: Context
+) -> TaskContextResponse:
+    tasks = await tasks_db().list_workspace_tasks(user_id, organization_id=ctx.org_id)
     task = next((t for t in tasks if t.session_id == session_id), None)
     if not task:
         raise HTTPException(404, "No task is linked to this conversation")

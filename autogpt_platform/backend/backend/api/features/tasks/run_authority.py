@@ -2,7 +2,7 @@ from pydantic import BaseModel
 
 from backend.api.features.tasks.domain import ancestors, planning_hold, record
 from backend.api.features.tasks.models import WorkspaceTask
-from backend.api.features.tasks.repository import _load, _lock, _save
+from backend.api.features.tasks.repository import _load_for_session, _lock, _save
 from backend.data.db import prisma
 
 
@@ -17,7 +17,7 @@ async def start_workspace_task_run(
 ) -> TaskRunAuthority:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load_for_session(tx, user_id, session_id)
         task = next((task for task in tasks if task.session_id == session_id), None)
         if task is None:
             return TaskRunAuthority()

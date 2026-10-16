@@ -14,8 +14,10 @@ from backend.util.llm.providers import ProviderResponse, call_provider
 T = TypeVar("T", bound=BaseModel)
 
 
-async def planning_roster(user_id: str) -> tuple[list[TaskAssignee], list[dict]]:
-    candidates = await task_assignees(user_id)
+async def planning_roster(
+    user_id: str, organization_id: str | None = None
+) -> tuple[list[TaskAssignee], list[dict]]:
+    candidates = await task_assignees(user_id, organization_id=organization_id)
     experts = {
         e.id: e for e in await experts_db().list_experts(user_id, with_metrics=False)
     }

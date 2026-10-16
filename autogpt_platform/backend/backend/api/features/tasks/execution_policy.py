@@ -22,5 +22,8 @@ async def task_execution_policy(
             "authorized tools, but do not assume delegation from the missing task."
         )
     return permissions, execution_context(
-        authority.task, await tasks_db().list_workspace_tasks(session.user_id)
+        authority.task,
+        await tasks_db().list_workspace_tasks(
+            session.user_id, organization_id=session.organization_id
+        ),
     )

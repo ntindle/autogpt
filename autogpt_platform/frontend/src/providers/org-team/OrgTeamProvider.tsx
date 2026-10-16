@@ -9,6 +9,7 @@ import { getQueryClient } from "@/lib/react-query/queryClient";
 import { ORG_HEADER_NAME, TEAM_HEADER_NAME } from "@/services/org-team/headers";
 import { Flag, useFlagStatus } from "@/services/feature-flags/use-get-flag";
 import { useEffect, useRef, useState } from "react";
+import { TaskScopeContext } from "@/services/tasks/TaskScopeContext";
 
 interface Props {
   children: React.ReactNode;
@@ -324,5 +325,15 @@ export default function OrgTeamProvider({ children }: Props) {
     }
   }
 
-  return <>{children}</>;
+  return (
+    <TaskScopeContext.Provider
+      value={{
+        organizationId: activeOrgID,
+        teamId: activeTeamID,
+        ready: isLoaded,
+      }}
+    >
+      {children}
+    </TaskScopeContext.Provider>
+  );
 }

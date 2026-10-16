@@ -14,7 +14,7 @@ from backend.api.features.tasks.question_routing import (
 )
 from backend.api.features.tasks.question_sync import sync_task_question
 from backend.api.features.tasks.repository import (
-    _load,
+    _load_for_session,
     _lock,
     _prepare_dispatches,
     _save,
@@ -26,7 +26,12 @@ async def workspace_task_for_session(
     user_id: str, session_id: str
 ) -> WorkspaceTask | None:
     return next(
-        (t for t in await _load(prisma, user_id) if t.session_id == session_id), None
+        (
+            t
+            for t in await _load_for_session(prisma, user_id, session_id)
+            if t.session_id == session_id
+        ),
+        None,
     )
 
 
@@ -45,7 +50,7 @@ async def workspace_task_run_event(
         return None
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load_for_session(tx, user_id, session_id)
         task = next((t for t in tasks if t.session_id == session_id), None)
         if (
             task is None

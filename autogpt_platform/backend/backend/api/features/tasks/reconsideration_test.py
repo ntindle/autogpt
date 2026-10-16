@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from backend.api.features.tasks import db as task_db
+from backend.api.features.tasks.domain import TaskConflict
 from backend.api.features.tasks.models import (
     TaskAssignee,
     TaskBreakdownRequest,
@@ -13,6 +14,7 @@ from backend.api.features.tasks.models import (
     TaskCreate,
     WorkspaceTask,
 )
+from backend.api.features.tasks.repository import _save
 from backend.data import db
 
 pytestmark = pytest.mark.skipif(
@@ -265,7 +267,9 @@ async def test_pending_planning_capacity_prevents_polling_from_fanning_out_model
     jobs = await task_db.reconsider_workspace_task_plans(owner)
     assert len(jobs) == 4 and all(job.owner and not job.breakdown for job in jobs)
     assert await task_db.reconsider_workspace_task_plans(owner) == []
-    assert owner in await task_db.workspace_task_planning_users()
+    assert owner in [
+        scope.user_id for scope in await task_db.workspace_task_planning_users()
+    ]
 
 
 @pytest.mark.asyncio
@@ -292,9 +296,15 @@ async def test_planning_context_excludes_another_users_experts_and_source_chat(o
                 "sequence": 0,
             }
         )
+        with pytest.raises(TaskConflict):
+            await task_db.create_workspace_task(
+                owner, TaskCreate(title="Choose packaging"), source_session_id=chat.id
+            )
         task = await task_db.create_workspace_task(
-            owner, TaskCreate(title="Choose packaging"), source_session_id=chat.id
+            owner, TaskCreate(title="Choose packaging")
         )
+        task.source_session_id = chat.id
+        await _save(db.prisma, task)
         inputs = await task_db.workspace_task_planning_inputs(owner, task.id)
         assert inputs.context["conversations"] == []
         assert "Private" not in str(inputs.context)

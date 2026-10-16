@@ -46,9 +46,14 @@ class TaskScheduleInfo(BaseModel):
     task_id: str | None = None
 
 
-async def list_task_schedules(user_id: str) -> list[TaskScheduleInfo]:
+async def list_task_schedules(
+    user_id: str, organization_id: str | None = None
+) -> list[TaskScheduleInfo]:
     jobs = await get_scheduler_client().get_execution_schedules(
         user_id=user_id, include_paused=True
+    )
+    organizations = await tasks_db().workspace_task_organizations(
+        user_id, organization_id
     )
     return [
         TaskScheduleInfo(
@@ -67,11 +72,15 @@ async def list_task_schedules(user_id: str) -> list[TaskScheduleInfo]:
             ),
         )
         for job in jobs
+        if (job.organization_id or None) in organizations
     ]
 
 
 async def schedule_task(
-    user_id: str, task_id: str, request: TaskScheduleRequest
+    user_id: str,
+    task_id: str,
+    request: TaskScheduleRequest,
+    organization_id: str | None = None,
 ) -> WorkspaceTask:
     _build_trigger(
         cron=request.cron, run_at=request.run_at, user_timezone=request.timezone
@@ -83,6 +92,7 @@ async def schedule_task(
         TaskSchedule(
             cron=request.cron, run_at=request.run_at, timezone=request.timezone
         ),
+        organization_id=organization_id,
     )
     assert task.schedule
     await get_scheduler_client().add_copilot_turn_schedule(
@@ -105,8 +115,10 @@ async def schedule_task(
     return task
 
 
-async def set_schedule_paused(user_id: str, schedule_id: str, paused: bool) -> None:
-    jobs = await list_task_schedules(user_id)
+async def set_schedule_paused(
+    user_id: str, schedule_id: str, paused: bool, organization_id: str | None = None
+) -> None:
+    jobs = await list_task_schedules(user_id, organization_id=organization_id)
     job = next((job for job in jobs if job.id == schedule_id), None)
     if job is None:
         raise NotFoundError("Schedule not found")
@@ -118,13 +130,19 @@ async def set_schedule_paused(user_id: str, schedule_id: str, paused: bool) -> N
     if job.task_id:
         task = next(
             t
-            for t in await tasks_db().list_workspace_tasks(user_id)
+            for t in await tasks_db().list_workspace_tasks(
+                user_id, organization_id=organization_id
+            )
             if t.id == job.task_id
         )
         if task.schedule:
             task.schedule.paused = paused
             await tasks_db().configure_workspace_task_schedule(
-                user_id, task.id, task.version, task.schedule
+                user_id,
+                task.id,
+                task.version,
+                task.schedule,
+                organization_id=organization_id,
             )
 
 
@@ -137,5 +155,6 @@ async def run_task_occurrence(args: CopilotTurnJobArgs) -> None:
         args.workspace_task_id,
         args.schedule_id,
         scheduled_for.isoformat(),
+        organization_id=args.organization_id,
     )
-    await dispatch_user_tasks(args.user_id)
+    await dispatch_user_tasks(args.user_id, organization_id=args.organization_id)

@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import { useState } from "react";
 import {
   usePreviewWorkspaceTaskBreakdown,
@@ -23,8 +24,14 @@ export function useTaskBreakdown({
 }: Props) {
   const [taskId, setTaskId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const preview = usePreviewWorkspaceTaskBreakdown();
-  const accept = useAcceptWorkspaceTaskBreakdown();
+  const usePreviewWorkspaceTaskBreakdownScope = useTaskScope();
+  const preview = usePreviewWorkspaceTaskBreakdown({
+    request: usePreviewWorkspaceTaskBreakdownScope.request,
+  });
+  const useAcceptWorkspaceTaskBreakdownScope = useTaskScope();
+  const accept = useAcceptWorkspaceTaskBreakdown({
+    request: useAcceptWorkspaceTaskBreakdownScope.request,
+  });
   const task = tasks.find((item) => item.id === taskId);
 
   async function generate(item: Task, data: TaskBreakdownRequest = {}) {

@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import {
   useScheduleWorkspaceTask,
   getListTaskSchedulesQueryKey,
@@ -21,7 +22,10 @@ export function TaskScheduleEditor({ task }: Props) {
   const [timezone, setTimezone] = useState(
     task.schedule?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
   );
-  const mutation = useScheduleWorkspaceTask();
+  const useScheduleWorkspaceTaskScope = useTaskScope();
+  const mutation = useScheduleWorkspaceTask({
+    request: useScheduleWorkspaceTaskScope.request,
+  });
   const cache = useQueryClient();
   const { toast } = useToast();
   async function save() {

@@ -18,32 +18,17 @@ from backend.copilot.rate_limit import (
 )
 from backend.copilot.session_permissions import resolve_session_permissions
 from backend.copilot.transports import resolve_default_chat_route
-from backend.data.db_accessors import experts_db, tasks_db
+from backend.data.db_accessors import tasks_db
 from backend.integrations.codex.access import enforce_codex_access_http
 from backend.util.exceptions import NotFoundError
 
 logger = logging.getLogger(__name__)
 
 
-async def task_assignees(user_id: str) -> list[TaskAssignee]:
-    experts = await experts_db().list_experts(user_id, with_metrics=False)
-    return [
-        TaskAssignee(kind="human", id=user_id, name="You"),
-        TaskAssignee(kind="auto", id="auto", name="AutoPilot"),
-        *[
-            TaskAssignee(
-                kind="expert",
-                id=e.id,
-                name=e.name,
-                avatar_url=e.avatar_url,
-                reason=e.role,
-                role=e.role,
-                color=e.color,
-            )
-            for e in experts
-            if not e.schedules_paused_at
-        ],
-    ]
+async def task_assignees(
+    user_id: str, organization_id: str | None = None
+) -> list[TaskAssignee]:
+    return await tasks_db().workspace_task_assignees(user_id, organization_id)
 
 
 async def execute_task_command(
@@ -51,9 +36,10 @@ async def execute_task_command(
     task_id: str,
     command: TaskCommand,
     manager_session_id: str | None = None,
+    organization_id: str | None = None,
 ) -> WorkspaceTask:
     if command.question_target:
-        candidates = await task_assignees(user_id)
+        candidates = await task_assignees(user_id, organization_id=organization_id)
         target = next(
             (
                 a
@@ -67,7 +53,7 @@ async def execute_task_command(
             raise NotFoundError("Question recipient is not available in your workspace")
         command.question_target = target
     if command.assignee:
-        candidates = await task_assignees(user_id)
+        candidates = await task_assignees(user_id, organization_id=organization_id)
         assignee = next(
             (
                 a
@@ -80,15 +66,21 @@ async def execute_task_command(
             raise NotFoundError("Assignee not available in your workspace")
         command.assignee = assignee
     previous = (
-        await tasks_db().list_workspace_tasks(user_id)
+        await tasks_db().list_workspace_tasks(user_id, organization_id=organization_id)
         if command.operation == "route_question"
         else []
     )
     task = await tasks_db().command_workspace_task(
-        user_id, task_id, command, manager_session_id=manager_session_id
+        user_id,
+        task_id,
+        command,
+        manager_session_id=manager_session_id,
+        organization_id=organization_id,
     )
     if previous:
-        current = await tasks_db().list_workspace_tasks(user_id)
+        current = await tasks_db().list_workspace_tasks(
+            user_id, organization_id=organization_id
+        )
         for old in previous:
             if (
                 old.session_id
@@ -99,11 +91,17 @@ async def execute_task_command(
     if command.operation == "pause" and task.session_id:
         await enqueue_cancel_task(task.session_id)
     if command.operation == "discuss":
-        task = await tasks_db().bind_workspace_task_session(user_id, task_id)
+        task = await tasks_db().bind_workspace_task_session(
+            user_id, task_id, organization_id=organization_id
+        )
         await ensure_task_session(task)
-    await dispatch_user_tasks(user_id)
+    await dispatch_user_tasks(user_id, organization_id=organization_id)
     return next(
-        t for t in await tasks_db().list_workspace_tasks(user_id) if t.id == task_id
+        t
+        for t in await tasks_db().list_workspace_tasks(
+            user_id, organization_id=organization_id
+        )
+        if t.id == task_id
     )
 
 
@@ -137,8 +135,10 @@ async def ensure_task_session(task: WorkspaceTask):
     return session
 
 
-async def dispatch_user_tasks(user_id: str) -> None:
-    for task in await tasks_db().list_workspace_tasks(user_id):
+async def dispatch_user_tasks(user_id: str, organization_id: str | None = None) -> None:
+    for task in await tasks_db().list_workspace_tasks(
+        user_id, organization_id=organization_id
+    ):
         if task.dispatch_state == "pending":
             await dispatch_task(task)
 
@@ -146,7 +146,9 @@ async def dispatch_user_tasks(user_id: str) -> None:
 async def dispatch_task(task: WorkspaceTask) -> None:
     if task.session_id and await is_turn_in_flight(task.session_id):
         return
-    claimed = await tasks_db().claim_workspace_task_dispatch(task.user_id, task.id)
+    claimed = await tasks_db().claim_workspace_task_dispatch(
+        task.user_id, task.id, organization_id=task.organization_id
+    )
     if not claimed or not claimed.dispatch_id:
         return
     try:
@@ -164,7 +166,11 @@ async def dispatch_task(task: WorkspaceTask) -> None:
             permissions=resolve_session_permissions(session),
         )
         await tasks_db().update_workspace_task_dispatch(
-            claimed.user_id, claimed.id, claimed.dispatch_id, "sent"
+            claimed.user_id,
+            claimed.id,
+            claimed.dispatch_id,
+            "sent",
+            organization_id=claimed.organization_id,
         )
     except ConcurrentTurnLimitError:
         await tasks_db().update_workspace_task_dispatch(
@@ -174,6 +180,7 @@ async def dispatch_task(task: WorkspaceTask) -> None:
             "pending",
             "Waiting for an available execution slot",
             claimed.dispatch_message,
+            organization_id=claimed.organization_id,
         )
     except Exception as exc:
         logger.exception("Task dispatch failed for %s", claimed.id)
@@ -184,6 +191,7 @@ async def dispatch_task(task: WorkspaceTask) -> None:
             "failed",
             f"Could not start: {str(exc)[:300] or type(exc).__name__}. Open chat to resolve, then retry.",
             claimed.dispatch_message,
+            organization_id=claimed.organization_id,
         )
 
 

@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import {
   useListTaskSchedules,
   usePauseTaskSchedule,
@@ -14,8 +15,15 @@ import { Clock, Repeat } from "@phosphor-icons/react";
 import Link from "next/link";
 
 export function TaskSchedules() {
+  const scope = useTaskScope();
   const query = useListTaskSchedules({
-    query: { select: okData, refetchInterval: 15000 },
+    request: scope.request,
+    query: {
+      select: okData,
+      refetchInterval: 15000,
+      enabled: scope.ready,
+      queryKey: scope.queryKey(getListTaskSchedulesQueryKey()),
+    },
   });
   if (query.isLoading)
     return (
@@ -59,8 +67,14 @@ export function TaskSchedules() {
 }
 
 function ScheduleRow({ schedule }: { schedule: TaskScheduleInfo }) {
-  const pause = usePauseTaskSchedule();
-  const resume = useResumeTaskSchedule();
+  const usePauseTaskScheduleScope = useTaskScope();
+  const pause = usePauseTaskSchedule({
+    request: usePauseTaskScheduleScope.request,
+  });
+  const useResumeTaskScheduleScope = useTaskScope();
+  const resume = useResumeTaskSchedule({
+    request: useResumeTaskScheduleScope.request,
+  });
   const cache = useQueryClient();
   const { toast } = useToast();
   async function toggle() {

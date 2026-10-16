@@ -272,7 +272,9 @@ class ManageTasksTool(BaseTool):
                 message="Captured; ownership is suggested, not delegated.", tasks=[task]
             )
         if operation == "list":
-            tasks = await tasks_db().list_workspace_tasks(user_id)
+            tasks = await tasks_db().list_workspace_tasks(
+                user_id, organization_id=session.organization_id
+            )
             if task_id:
                 if not any(task.id == task_id for task in tasks):
                     return ErrorResponse(message="Task not found in your workspace")
@@ -286,7 +288,9 @@ class ManageTasksTool(BaseTool):
             return ErrorResponse(
                 message="Open a task's linked conversation to manage its work. You can capture tasks here without starting them."
             )
-        tasks = await tasks_db().list_workspace_tasks(user_id)
+        tasks = await tasks_db().list_workspace_tasks(
+            user_id, organization_id=session.organization_id
+        )
         scope = branch(root.id, tasks)
         if operation in ("accept_result", "request_changes") and (
             planning_hold(root, tasks)
@@ -373,6 +377,10 @@ class ManageTasksTool(BaseTool):
             feedback=evidence,
         )
         updated = await tasks_db().command_workspace_task(
-            user_id, target.id, command, actor="Auto"
+            user_id,
+            target.id,
+            command,
+            actor="Auto",
+            organization_id=session.organization_id,
         )
         return WorkspaceTasksResponse(message="Review recorded", tasks=[updated])

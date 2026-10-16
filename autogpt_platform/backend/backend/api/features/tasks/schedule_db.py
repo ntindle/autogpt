@@ -14,11 +14,15 @@ from backend.data.db import prisma
 
 
 async def configure_workspace_task_schedule(
-    user_id: str, task_id: str, version: int, schedule: TaskSchedule
+    user_id: str,
+    task_id: str,
+    version: int,
+    schedule: TaskSchedule,
+    organization_id: str | None = None,
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        task = _get(await _load(tx, user_id), task_id)
+        task = _get(await _load(tx, user_id, organization_id=organization_id), task_id)
         if task.version != version:
             raise TaskConflict("The task changed. Refresh and try again.")
         can_edit_execution(task)
@@ -37,11 +41,15 @@ async def configure_workspace_task_schedule(
 
 
 async def create_workspace_task_occurrence(
-    user_id: str, task_id: str, schedule_id: str, occurrence_key: str
+    user_id: str,
+    task_id: str,
+    schedule_id: str,
+    occurrence_key: str,
+    organization_id: str | None = None,
 ) -> WorkspaceTask | None:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         template = _get(tasks, task_id)
         if (
             not template.schedule

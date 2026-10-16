@@ -19,7 +19,11 @@ async def reconcile_task_dispatches() -> None:
             if session and session.status == "running":
                 if task.dispatch_state == "claimed":
                     await tasks_db().update_workspace_task_dispatch(
-                        task.user_id, task.id, task.dispatch_id, "sent"
+                        task.user_id,
+                        task.id,
+                        task.dispatch_id,
+                        "sent",
+                        organization_id=task.organization_id,
                     )
                 continue
             if session:

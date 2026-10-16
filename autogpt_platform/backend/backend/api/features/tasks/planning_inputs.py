@@ -3,12 +3,13 @@ import json
 from datetime import UTC, datetime, timedelta
 
 from prisma import Prisma
+from prisma.enums import ResourceVisibility
 from pydantic import BaseModel, Field
 
 from backend.api.features.tasks.context import planning_context
 from backend.api.features.tasks.domain import ancestors
 from backend.api.features.tasks.models import TaskAssignee, WorkspaceTask
-from backend.api.features.tasks.repository import _get, _load
+from backend.api.features.tasks.repository import _get, _load, organization_scope
 from backend.data.db import prisma
 
 
@@ -27,25 +28,30 @@ class TaskPlanningInputs(BaseModel):
 
 
 async def workspace_task_planning_inputs(
-    user_id: str, task_id: str
+    user_id: str, task_id: str, organization_id: str | None = None
 ) -> TaskPlanningInputs:
-    tasks = await _load(prisma, user_id)
+    tasks = await _load(prisma, user_id, organization_id=organization_id)
     task = _get(tasks, task_id)
     environment = await load_planning_environment(
-        prisma, user_id, ancestors(task, tasks)
+        prisma, user_id, ancestors(task, tasks), organization_id=task.organization_id
     )
     return task_planning_inputs(task, tasks, environment)
 
 
 async def load_planning_environment(
-    tx: Prisma, user_id: str, scope: list[WorkspaceTask]
+    tx: Prisma,
+    user_id: str,
+    scope: list[WorkspaceTask],
+    organization_id: str | None = None,
 ) -> PlanningEnvironment:
+    organizations = await organization_scope(tx, user_id, organization_id)
     experts = await tx.expert.find_many(
         where={
+            "OR": [{"organizationId": org} for org in organizations],
             "ownerUserId": user_id,
             "isTemplate": False,
             "isArchived": False,
-            "visibility": "PRIVATE",
+            "visibility": ResourceVisibility.PRIVATE,
             "schedulesPausedAt": None,
         },
         order={"id": "asc"},
@@ -102,7 +108,11 @@ async def load_planning_environment(
     if not session_ids:
         return environment
     sessions = await tx.chatsession.find_many(
-        where={"userId": user_id, "id": {"in": sorted(session_ids)}},
+        where={
+            "userId": user_id,
+            "id": {"in": sorted(session_ids)},
+            "OR": [{"organizationId": org} for org in organizations],
+        },
         include={
             "Messages": {
                 "where": {
@@ -131,6 +141,20 @@ async def load_planning_environment(
             if message.content
         ]
     return environment
+
+
+async def workspace_task_assignees(
+    user_id: str, organization_id: str | None = None
+) -> list[TaskAssignee]:
+    return (
+        await load_planning_environment(prisma, user_id, [], organization_id)
+    ).candidates
+
+
+async def workspace_task_organizations(
+    user_id: str, organization_id: str | None = None
+) -> list[str | None]:
+    return await organization_scope(prisma, user_id, organization_id)
 
 
 def task_planning_inputs(

@@ -21,12 +21,13 @@ class TaskPlanningJob(BaseModel):
 
 class PlanningUser(BaseModel):
     user_id: str
+    organization_id: str | None = None
 
 
-async def workspace_task_planning_users() -> list[str]:
+async def workspace_task_planning_users() -> list[PlanningUser]:
     rows = await query_raw_with_schema(
         """
-        SELECT DISTINCT "userId" AS user_id FROM {schema_prefix}"WorkspaceTask"
+        SELECT DISTINCT "userId" AS user_id, payload->>'organization_id' AS organization_id FROM {schema_prefix}"WorkspaceTask"
         WHERE (payload->>'assignee') IS NULL
           AND COALESCE(payload->>'status', 'todo') NOT IN ('done', 'canceled')
           AND (payload->>'review_of') IS NULL AND (payload->>'schedule') IS NULL
@@ -34,15 +35,15 @@ async def workspace_task_planning_users() -> list[str]:
     """,
         model=PlanningUser,
     )
-    return [row.user_id for row in rows]
+    return rows
 
 
 async def reconsider_workspace_task_plans(
-    user_id: str, limit: int = 10
+    user_id: str, limit: int = 10, organization_id: str | None = None
 ) -> list[TaskPlanningJob]:
     async with prisma.tx(timeout=timedelta(seconds=30)) as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         eligible = [
             task
             for task in tasks
@@ -84,7 +85,9 @@ async def reconsider_workspace_task_plans(
                 item.id: item for task in eligible for item in ancestors(task, tasks)
             }.values()
         )
-        environment = await load_planning_environment(tx, user_id, scope)
+        environment = await load_planning_environment(
+            tx, user_id, scope, organization_id
+        )
         jobs = []
         for task in eligible:
             inputs = task_planning_inputs(task, tasks, environment)

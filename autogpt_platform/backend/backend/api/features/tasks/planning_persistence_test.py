@@ -302,6 +302,7 @@ async def test_coordinator_cannot_present_an_unfinished_plan_as_the_final_outcom
 async def test_regular_chat_can_nest_by_parent_id_without_inheriting_execution_authority(
     owner,
 ):
+    await db.prisma.chatsession.create(data={"id": "regular-chat", "userId": owner})
     from datetime import UTC, datetime
 
     from backend.copilot.model import ChatSession

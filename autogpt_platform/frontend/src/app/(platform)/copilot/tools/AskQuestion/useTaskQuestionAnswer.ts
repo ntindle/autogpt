@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import {
   commandWorkspaceTask,
   listWorkspaceTasks,
@@ -8,13 +9,14 @@ import { useQueryClient } from "@tanstack/react-query";
 
 export function useTaskQuestionAnswer() {
   const cache = useQueryClient();
+  const scope = useTaskScope();
   async function answer(
     taskID: string,
     questionID: string,
     answers: Record<string, string>,
     feedback = "",
   ) {
-    const data = okData(await listWorkspaceTasks());
+    const data = okData(await listWorkspaceTasks(scope.request));
     const task =
       data?.tasks.find(
         (task) => task.id === taskID && task.question?.id === questionID,
@@ -23,13 +25,17 @@ export function useTaskQuestionAnswer() {
       throw new Error(
         "This question is no longer waiting for an answer. Refresh the conversation.",
       );
-    const response = await commandWorkspaceTask(task.id ?? taskID, {
-      operation: "answer",
-      version: task.version ?? 1,
-      question_id: questionID,
-      answers,
-      feedback,
-    });
+    const response = await commandWorkspaceTask(
+      task.id ?? taskID,
+      {
+        operation: "answer",
+        version: task.version ?? 1,
+        question_id: questionID,
+        answers,
+        feedback,
+      },
+      scope.request,
+    );
     if (!okData(response))
       throw new Error("Could not submit the answer. Please try again.");
     await invalidateTaskSurfaces(cache);
