@@ -359,7 +359,7 @@ async def test_manager_permissions_use_persisted_session_and_cannot_touch_anothe
     denied = await tool._execute(
         owner, expert_session, operation="edit", task_id=target.id, title="Escalated"
     )
-    assert isinstance(denied, ErrorResponse) and "Only AutoPilot" in denied.message
+    assert isinstance(denied, ErrorResponse) and "Only Otto" in denied.message
     stale = await tool._execute(
         owner,
         session,

@@ -23,7 +23,7 @@ async def manage_existing_task(
 
     try:
         if session.expert_id:
-            raise TaskConflict("Only AutoPilot can manage tasks across your workspace")
+            raise TaskConflict("Only Otto can manage tasks across your workspace")
         tasks = await tasks_db().list_workspace_tasks(
             user_id, organization_id=session.organization_id
         )
