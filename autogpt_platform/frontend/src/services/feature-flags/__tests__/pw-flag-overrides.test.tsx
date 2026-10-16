@@ -1,6 +1,11 @@
 import { renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// These read LaunchDarkly; `flag-backend` picks the vendor once, at load.
+vi.hoisted(() => {
+  process.env.NEXT_PUBLIC_FEATURE_FLAG_BACKEND = "launchdarkly";
+});
+
 vi.mock("launchdarkly-react-client-sdk", () => ({
   useFlags: () => ({}),
 }));
@@ -10,7 +15,10 @@ vi.mock("@/app/(platform)/marketplace/components/HeroSection/helpers", () => ({
 }));
 
 vi.mock("@/services/environment", () => ({
-  environment: { areFeatureFlagsEnabled: () => false },
+  environment: {
+    isServerSide: () => false,
+    areFeatureFlagsEnabled: () => false,
+  },
 }));
 
 const STORAGE_KEY = "autogpt-pw-flag-overrides";

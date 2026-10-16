@@ -27,7 +27,17 @@ from backend.util.feature_flag import (
     mock_flag_variation,
     shutdown_launchdarkly,
 )
-from backend.util.settings import AppEnvironment
+from backend.util.settings import AppEnvironment, FeatureFlagBackend
+
+
+@pytest.fixture(autouse=True)
+def launchdarkly_serves(mocker):
+    # This file covers the LaunchDarkly path, which is no longer the default.
+    mocker.patch.object(
+        feature_flag_module.settings.config,
+        "feature_flag_backend",
+        FeatureFlagBackend.LAUNCHDARKLY,
+    )
 
 
 @pytest.fixture
@@ -152,11 +162,11 @@ class TestEnvFlagOverride:
     ):
         monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "")
         monkeypatch.setenv("NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS", "")
-        ld_client.variation.return_value = enabled
+        ld_client.variation_detail.return_value = served(enabled)
 
         assert await is_feature_enabled(Flag.SHOW_ORG_SETTINGS, "user123") is enabled
-        ld_client.variation.assert_called_once()
-        assert ld_client.variation.call_args.args[0] == "SHOW_ORG_SETTINGS"
+        ld_client.variation_detail.assert_called_once()
+        assert ld_client.variation_detail.call_args.args[0] == "SHOW_ORG_SETTINGS"
 
     def test_force_flag_true(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("FORCE_FLAG_AUTOMOD", "true")
