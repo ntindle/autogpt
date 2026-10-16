@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, Security
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.api.credential_scope import credential_user_id
 from backend.api.features.experts import experts_db
 from backend.api.live_auth import requires_live_resource_permission
 from backend.blocks.desktop._api import DesktopStream
@@ -822,7 +823,7 @@ async def list_sessions(
     dependencies=[Security(auth.requires_user)],
 )
 async def list_chat_transports(
-    user_id: Annotated[str, Security(auth.get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> ChatTransportsResponse:
     """Every transport the user can chat over.
 
@@ -837,7 +838,7 @@ async def list_chat_transports(
     dependencies=[Security(auth.requires_user)],
 )
 async def list_chat_connections(
-    user_id: Annotated[str, Security(auth.get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> AIConnectionOffersResponse:
     """Every AI connection the user can chat over, described by the server.
 
@@ -893,7 +894,7 @@ class SetDefaultTransportRequest(BaseModel):
     },
 )
 async def set_default_chat_transport(
-    user_id: Annotated[str, Security(auth.get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
     request: SetDefaultTransportRequest,
 ) -> ChatTransportsResponse:
     """Save the connection every new chat starts on.
@@ -1289,7 +1290,8 @@ class CredentialSelectionRequest(BaseModel):
 async def select_session_credentials_route(
     session_id: str,
     request: CredentialSelectionRequest,
-    user_id: Annotated[str, Security(auth.get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
 ) -> dict:
     """Keep the account the user chose on a connect card for the rest of the chat.
 
@@ -1301,13 +1303,8 @@ async def select_session_credentials_route(
     Every id is checked against the caller's own credentials and the provider
     it is filed under; one bad entry rejects the request and records nothing.
     """
-    if await get_chat_session_metadata(session_id, user_id) is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Session {session_id} not found or access denied",
-        )
-
-    store = IntegrationCredentialsManager().store
+    session = await _validate_and_get_session(session_id, user_id, ctx, "execute")
+    store = IntegrationCredentialsManager().scoped(session.organization_id).store
     selections: dict[str, str] = {}
     for provider, credential_id in request.selections.items():
         provider = provider.strip().lower()
@@ -1341,7 +1338,8 @@ class ChangeSessionConnectionRequest(BaseModel):
 async def change_session_connection_route(
     session_id: str,
     request: ChangeSessionConnectionRequest,
-    user_id: Annotated[str, Security(auth.get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(_view_resource_context)],
 ) -> dict:
     """Move a chat onto another connection, from the next turn onward.
 
@@ -1358,6 +1356,7 @@ async def change_session_connection_route(
     ran on, so a chat that hit a limit and carried on elsewhere reads as
     exactly that.
     """
+    await _validate_and_get_session(session_id, user_id, ctx, "execute")
     auth_provider = request.llm_auth_provider
     credential_id = request.llm_credential_id
 

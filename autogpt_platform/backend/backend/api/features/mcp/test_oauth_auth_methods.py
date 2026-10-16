@@ -6,8 +6,8 @@ import fastapi
 import httpx
 import pytest
 import pytest_asyncio
-from autogpt_libs.auth import get_user_id
 
+from backend.api.credential_scope import credential_user_id
 from backend.api.features.mcp.routes import NO_OAUTH_CODE, router
 from backend.data.model import OAuth2Credentials
 from backend.integrations.creds_manager import create_mcp_oauth_handler
@@ -15,7 +15,7 @@ from backend.util.request import HTTPClientError
 
 app = fastapi.FastAPI()
 app.include_router(router)
-app.dependency_overrides[get_user_id] = lambda: "test-user-id"
+app.dependency_overrides[credential_user_id] = lambda: "test-user-id"
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -107,7 +107,7 @@ async def test_registered_method_survives_token_lifecycle(
         "" if registered == "none" else "<test secret>"
     )
     assert "client_secret" not in response.text
-    state = MagicMock()
+    state = MagicMock(organization_id=None)
     state.state_metadata = state_metadata
     state.scopes = ["read"]
     state.code_verifier = "pkce-verifier"
@@ -455,7 +455,7 @@ async def test_reconnect_replaces_credentials_under_either_url(client, oauth_moc
     manager.store.get_creds_by_provider = AsyncMock(return_value=[stale, legacy])
     manager.store.delete_creds_by_id = AsyncMock()
 
-    state = MagicMock()
+    state = MagicMock(organization_id=None)
     state.state_metadata = {
         "server_url": sign_in_url,
         "client_id": "client:id",

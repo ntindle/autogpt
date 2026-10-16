@@ -3,6 +3,7 @@ import hashlib
 import logging
 import secrets
 from contextlib import asynccontextmanager
+from copy import copy
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -19,6 +20,7 @@ from backend.data.model import (
     UserPasswordCredentials,
 )
 from backend.data.redis_client import get_redis_async
+from backend.integrations.credential_scope import credential_organization_id
 from backend.util.cache import thread_cached
 from backend.util.settings import Settings
 
@@ -304,6 +306,22 @@ def is_system_provider(provider: str) -> bool:
 
 
 class IntegrationCredentialsStore:
+    def __init__(self):
+        self._organization_id: str | None = None
+        self._scope_bound = False
+
+    @property
+    def organization_id(self) -> str | None:
+        return (
+            self._organization_id if self._scope_bound else credential_organization_id()
+        )
+
+    def scoped(self, organization_id: str | None) -> "IntegrationCredentialsStore":
+        store = copy(self)
+        store._organization_id = organization_id
+        store._scope_bound = True
+        return store
+
     @thread_cached
     async def locks(self) -> AsyncRedisKeyedMutex:
         # Per-thread: copilot executor runs worker threads with separate event
@@ -337,7 +355,11 @@ class IntegrationCredentialsStore:
         ``locked_user_integrations(user_id)``, so the list it writes back
         can't drop a concurrent write.
         """
-        return list(await self.db_manager.get_user_credentials(user_id=user_id))
+        return list(
+            await self.db_manager.get_user_credentials(
+                user_id=user_id, organization_id=self.organization_id
+            )
+        )
 
     async def add_creds(self, user_id: str, credentials: Credentials) -> None:
         async with await self.locked_user_integrations(user_id):
@@ -547,7 +569,7 @@ class IntegrationCredentialsStore:
 
     async def has_managed_credential(self, user_id: str, provider: str) -> bool:
         """Check if a managed credential exists for *provider*."""
-        persisted = await self.db_manager.get_user_credentials(user_id=user_id)
+        persisted = await self._get_persisted_user_creds_unlocked(user_id)
         return any(c.provider == provider and c.is_managed for c in persisted)
 
     async def add_managed_credential(
@@ -596,6 +618,7 @@ class IntegrationCredentialsStore:
             expires_at=int(expires_at.timestamp()),
             scopes=scopes,
             credential_id=credential_id,
+            organization_id=self.organization_id,
             # External API OAuth flow fields
             callback_url=callback_url,
             state_metadata=state_metadata or {},
@@ -727,7 +750,9 @@ class IntegrationCredentialsStore:
     ) -> None:
         # Remove default credentials from the list
         credentials = [c for c in credentials if c not in DEFAULT_CREDENTIALS]
-        await self.db_manager.set_user_credentials(user_id, credentials)
+        await self.db_manager.set_user_credentials(
+            user_id, credentials, organization_id=self.organization_id
+        )
 
     async def _get_user_integrations(self, user_id: str) -> UserIntegrations:
         return await self.db_manager.get_user_integrations(user_id=user_id)
@@ -742,7 +767,20 @@ class IntegrationCredentialsStore:
         ``_get_user_integrations`` or the edit-as-read trick, which would
         otherwise trigger a spurious DB write + Redis lock round-trip.
         """
-        return await self._get_user_integrations(user_id)
+        integrations = await self._get_user_integrations(user_id)
+        if not await self.is_personal_scope(user_id):
+            integrations = integrations.model_copy(deep=True)
+            integrations.credentials = []
+            integrations.managed_credentials.ayrshare_profile_key = None
+        return integrations
+
+    async def is_personal_scope(self, user_id: str) -> bool:
+        if self.organization_id is None:
+            return True
+        personal_org_id = await self.db_manager.get_user_personal_organization_id(
+            user_id=user_id
+        )
+        return self.organization_id == personal_org_id
 
     async def locked_user_integrations(self, user_id: str):
         key = (f"user:{user_id}", "integrations")

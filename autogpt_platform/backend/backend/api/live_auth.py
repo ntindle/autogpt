@@ -12,6 +12,7 @@ from backend.data.tenancy import (
     live_org_permission_barrier,
     live_resource_permission_barrier,
 )
+from backend.integrations.credential_scope import credential_scope
 
 _T = TypeVar("_T")
 
@@ -41,7 +42,8 @@ def requires_live_resource_permission(
         ) as allowed:
             if not allowed:
                 raise HTTPException(403, detail="Resource scope is inactive")
-            yield ctx
+            with credential_scope(ctx.org_id):
+                yield ctx
 
     return cast(autogpt_auth_lib.RequestContext, live_dependency(dependency))
 
@@ -61,7 +63,8 @@ def requires_live_org_permission(
         ) as allowed:
             if not allowed:
                 raise HTTPException(403, detail="Organization access is inactive")
-            yield ctx
+            with credential_scope(ctx.org_id):
+                yield ctx
 
     return cast(autogpt_auth_lib.RequestContext, live_dependency(dependency))
 
@@ -81,7 +84,8 @@ def requires_live_actor_org_permission(
         ) as allowed:
             if not allowed:
                 raise HTTPException(403, detail="Organization access is inactive")
-            yield ctx
+            with credential_scope(ctx.org_id):
+                yield ctx
 
     return cast(autogpt_auth_lib.RequestContext, live_dependency(dependency))
 

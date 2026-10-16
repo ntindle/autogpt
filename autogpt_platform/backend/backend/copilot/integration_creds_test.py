@@ -82,13 +82,13 @@ def clear_caches():
 
 class TestInvalidateUserProviderCache:
     def test_removes_token_entry(self):
-        key = (_USER, _PROVIDER)
+        key = (_USER, _PROVIDER, None, frozenset(), None)
         _token_cache[key] = "tok"
         invalidate_user_provider_cache(_USER, _PROVIDER)
         assert key not in _token_cache
 
     def test_removes_null_entry(self):
-        key = (_USER, _PROVIDER)
+        key = (_USER, _PROVIDER, None, frozenset(), None)
         _null_cache[key] = True
         invalidate_user_provider_cache(_USER, _PROVIDER)
         assert key not in _null_cache
@@ -98,50 +98,50 @@ class TestInvalidateUserProviderCache:
         invalidate_user_provider_cache("no-such-user", _PROVIDER)
 
     def test_only_removes_targeted_key(self):
-        other_key = ("other-user", _PROVIDER)
+        other_key = ("other-user", _PROVIDER, None, frozenset(), None)
         _token_cache[other_key] = "other-tok"
         invalidate_user_provider_cache(_USER, _PROVIDER)
         assert other_key in _token_cache
 
     def test_clears_gh_identity_cache_for_github_provider(self):
         """When provider is 'github', identity caches must also be cleared."""
-        _gh_identity_cache[(_USER, None)] = {
+        _gh_identity_cache[(_USER, None, None)] = {
             "GIT_AUTHOR_NAME": "Old Name",
             "GIT_AUTHOR_EMAIL": "old@example.com",
             "GIT_COMMITTER_NAME": "Old Name",
             "GIT_COMMITTER_EMAIL": "old@example.com",
         }
         invalidate_user_provider_cache(_USER, "github")
-        assert (_USER, None) not in _gh_identity_cache
+        assert (_USER, None, None) not in _gh_identity_cache
 
     def test_clears_gh_identity_null_cache_for_github_provider(self):
         """When provider is 'github', the identity null-cache must also be cleared."""
-        _gh_identity_null_cache[(_USER, None)] = True
+        _gh_identity_null_cache[(_USER, None, None)] = True
         invalidate_user_provider_cache(_USER, "github")
-        assert (_USER, None) not in _gh_identity_null_cache
+        assert (_USER, None, None) not in _gh_identity_null_cache
 
     def test_clears_the_identity_of_every_github_account_the_user_has(self):
         """A picked account's identity is cached under its own key; a change
         to the user's GitHub credentials must drop all of them, not just the
         unpicked one."""
-        _gh_identity_cache[(_USER, None)] = {"GIT_AUTHOR_NAME": "a"}
-        _gh_identity_cache[(_USER, "cred-b")] = {"GIT_AUTHOR_NAME": "b"}
-        _gh_identity_cache[("other-user", "cred-b")] = {"GIT_AUTHOR_NAME": "o"}
+        _gh_identity_cache[(_USER, None, None)] = {"GIT_AUTHOR_NAME": "a"}
+        _gh_identity_cache[(_USER, None, "cred-b")] = {"GIT_AUTHOR_NAME": "b"}
+        _gh_identity_cache[("other-user", None, "cred-b")] = {"GIT_AUTHOR_NAME": "o"}
         invalidate_user_provider_cache(_USER, "github")
-        assert (_USER, None) not in _gh_identity_cache
-        assert (_USER, "cred-b") not in _gh_identity_cache
-        assert ("other-user", "cred-b") in _gh_identity_cache
+        assert (_USER, None, None) not in _gh_identity_cache
+        assert (_USER, None, "cred-b") not in _gh_identity_cache
+        assert ("other-user", None, "cred-b") in _gh_identity_cache
 
     def test_does_not_clear_gh_identity_cache_for_other_providers(self):
         """When provider is NOT 'github', identity caches must be left alone."""
-        _gh_identity_cache[(_USER, None)] = {
+        _gh_identity_cache[(_USER, None, None)] = {
             "GIT_AUTHOR_NAME": "Some Name",
             "GIT_AUTHOR_EMAIL": "some@example.com",
             "GIT_COMMITTER_NAME": "Some Name",
             "GIT_COMMITTER_EMAIL": "some@example.com",
         }
         invalidate_user_provider_cache(_USER, "some-other-provider")
-        assert (_USER, None) in _gh_identity_cache
+        assert (_USER, None, None) in _gh_identity_cache
 
 
 class TestGitHubIdentityFollowsThePick:
@@ -161,14 +161,14 @@ class TestGitHubIdentityFollowsThePick:
             await get_github_user_git_identity(_USER, "cred-a")
             await get_github_user_git_identity(_USER, "cred-b")
         assert [c.args[3] for c in lookup.await_args_list] == ["cred-a", "cred-b"]
-        assert (_USER, "cred-a") in _gh_identity_null_cache
-        assert (_USER, "cred-b") in _gh_identity_null_cache
+        assert (_USER, None, "cred-a") in _gh_identity_null_cache
+        assert (_USER, None, "cred-b") in _gh_identity_null_cache
 
 
 class TestGetProviderToken:
     @pytest.mark.asyncio(loop_scope="session")
     async def test_returns_cached_token_without_db_hit(self):
-        _token_cache[(_USER, _PROVIDER)] = "cached-tok"
+        _token_cache[(_USER, _PROVIDER, None, frozenset(), None)] = "cached-tok"
 
         mock_manager = MagicMock()
         with patch("backend.copilot.integration_creds._manager", mock_manager):
@@ -179,7 +179,7 @@ class TestGetProviderToken:
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_returns_none_for_null_cached_provider(self):
-        _null_cache[(_USER, _PROVIDER)] = True
+        _null_cache[(_USER, _PROVIDER, None, frozenset(), None)] = True
 
         mock_manager = MagicMock()
         with patch("backend.copilot.integration_creds._manager", mock_manager):
@@ -198,7 +198,10 @@ class TestGetProviderToken:
             result = await get_provider_token(_USER, _PROVIDER)
 
         assert result == "my-api-key"
-        assert _token_cache.get((_USER, _PROVIDER)) == "my-api-key"
+        assert (
+            _token_cache.get((_USER, _PROVIDER, None, frozenset(), None))
+            == "my-api-key"
+        )
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_oauth2_preferred_over_api_key(self):
@@ -236,7 +239,7 @@ class TestGetProviderToken:
         # Stale tokens must NOT be returned — forces re-auth.
         assert result is None
         # Must NOT cache negative result when refresh failed — next call retries.
-        assert (_USER, _PROVIDER) not in _null_cache
+        assert (_USER, _PROVIDER, None, frozenset(), None) not in _null_cache
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_no_credentials_caches_null_entry(self):
@@ -247,7 +250,7 @@ class TestGetProviderToken:
             result = await get_provider_token(_USER, _PROVIDER)
 
         assert result is None
-        assert _null_cache.get((_USER, _PROVIDER)) is True
+        assert _null_cache.get((_USER, _PROVIDER, None, frozenset(), None)) is True
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_db_exception_returns_none_without_caching(self):
@@ -261,8 +264,8 @@ class TestGetProviderToken:
 
         assert result is None
         # DB errors are not cached — next call will retry
-        assert (_USER, _PROVIDER) not in _token_cache
-        assert (_USER, _PROVIDER) not in _null_cache
+        assert (_USER, _PROVIDER, None, frozenset(), None) not in _token_cache
+        assert (_USER, _PROVIDER, None, frozenset(), None) not in _null_cache
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_strict_raises_on_a_db_failure_instead_of_not_connected(self):
@@ -275,7 +278,7 @@ class TestGetProviderToken:
         with patch("backend.copilot.integration_creds._manager", mock_manager):
             with pytest.raises(ProviderTokenUnavailable):
                 await get_provider_token(_USER, _PROVIDER, strict=True)
-        assert (_USER, _PROVIDER) not in _null_cache
+        assert (_USER, _PROVIDER, None, frozenset(), None) not in _null_cache
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_strict_raises_when_the_only_refresh_fails(self):
@@ -370,7 +373,7 @@ class TestRequiredScopes:
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_a_cached_unscoped_token_is_not_served_for_a_scoped_ask(self):
-        _token_cache[(_USER, _PROVIDER)] = "tok-older"
+        _token_cache[(_USER, _PROVIDER, None, frozenset(), None)] = "tok-older"
         manager = self._manager([self.older, self.newer])
         with patch("backend.copilot.integration_creds._manager", manager):
             token = await get_provider_token(
@@ -381,14 +384,14 @@ class TestRequiredScopes:
     def test_invalidation_accepts_the_enum_repr_a_stored_credential_may_carry(self):
         # Rows written under Python 3.13's str(StrEnum) have this provider, and
         # change events pass it on as stored; cache keys use the canonical one.
-        scoped = (_USER, _PROVIDER, frozenset({"repo"}))
-        _token_cache[(_USER, _PROVIDER)] = "tok"
+        scoped = (_USER, _PROVIDER, None, frozenset({"repo"}), None)
+        _token_cache[(_USER, _PROVIDER, None, frozenset(), None)] = "tok"
         _token_cache[scoped] = "tok"
-        _gh_identity_cache[(_USER, None)] = {"GIT_AUTHOR_NAME": "x"}
+        _gh_identity_cache[(_USER, None, None)] = {"GIT_AUTHOR_NAME": "x"}
         invalidate_user_provider_cache(_USER, "ProviderName.GITHUB")
-        assert (_USER, _PROVIDER) not in _token_cache
+        assert (_USER, _PROVIDER, None, frozenset(), None) not in _token_cache
         assert scoped not in _token_cache
-        assert (_USER, None) not in _gh_identity_cache
+        assert (_USER, None, None) not in _gh_identity_cache
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_the_credential_picked_in_the_chat_is_the_only_candidate(self):
@@ -414,14 +417,22 @@ class TestRequiredScopes:
         assert token is None
 
     def test_invalidation_drops_scoped_entries_too(self):
-        scoped = (_USER, _PROVIDER, frozenset({"repo", "read:org"}))
+        scoped = (_USER, _PROVIDER, None, frozenset({"repo", "read:org"}), None)
         _token_cache[scoped] = "tok"
         _null_cache[scoped] = True
-        _token_cache[("other-user", _PROVIDER, frozenset({"repo"}))] = "keep"
+        _token_cache[("other-user", _PROVIDER, None, frozenset({"repo"}), None)] = (
+            "keep"
+        )
         invalidate_user_provider_cache(_USER, _PROVIDER)
         assert scoped not in _token_cache
         assert scoped not in _null_cache
-        assert ("other-user", _PROVIDER, frozenset({"repo"})) in _token_cache
+        assert (
+            "other-user",
+            _PROVIDER,
+            None,
+            frozenset({"repo"}),
+            None,
+        ) in _token_cache
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_env_vars_use_the_scopes_asked_for_per_provider(self):
@@ -516,6 +527,7 @@ class TestRefreshUnlockedPath:
 
         manager = IntegrationCredentialsManager()
         creds = _make_oauth2_creds()
+        manager.store.get_creds_by_id = AsyncMock(return_value=creds)
 
         mock_handler = MagicMock()
         mock_handler.needs_refresh = MagicMock(return_value=False)
@@ -535,7 +547,7 @@ class TestRefreshUnlockedPath:
 class TestGetIntegrationEnvVars:
     @pytest.mark.asyncio(loop_scope="session")
     async def test_injects_all_env_vars_for_provider(self):
-        _token_cache[(_USER, "github")] = "gh-tok"
+        _token_cache[(_USER, "github", None, frozenset(), None)] = "gh-tok"
 
         result = await get_integration_env_vars(_USER)
 
@@ -544,7 +556,7 @@ class TestGetIntegrationEnvVars:
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_empty_dict_when_no_credentials(self):
-        _null_cache[(_USER, "github")] = True
+        _null_cache[(_USER, "github", None, frozenset(), None)] = True
 
         result = await get_integration_env_vars(_USER)
 
@@ -556,15 +568,18 @@ class TestCacheInvalidationListener:
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_drops_exactly_the_affected_entry(self):
-        _token_cache[(_USER, "github")] = "stale"
-        _token_cache[(_USER, "notion")] = "untouched"
-        _token_cache[("other-user", "github")] = "untouched"
+        _token_cache[(_USER, "github", None, frozenset(), None)] = "stale"
+        _token_cache[(_USER, "notion", None, frozenset(), None)] = "untouched"
+        _token_cache[("other-user", "github", None, frozenset(), None)] = "untouched"
 
         await _consume(CredentialsChangedEvent(user_id=_USER, provider="github"))
 
-        assert (_USER, "github") not in _token_cache
-        assert _token_cache[(_USER, "notion")] == "untouched"
-        assert _token_cache[("other-user", "github")] == "untouched"
+        assert (_USER, "github", None, frozenset(), None) not in _token_cache
+        assert _token_cache[(_USER, "notion", None, frozenset(), None)] == "untouched"
+        assert (
+            _token_cache[("other-user", "github", None, frozenset(), None)]
+            == "untouched"
+        )
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_resubscribes_when_the_stream_ends(self):
@@ -597,7 +612,10 @@ class TestCacheInvalidationListener:
             assert await get_provider_token(_USER, _PROVIDER) == "old-scopes-token"
 
         published = await _write_credential_as_another_process()
-        assert _token_cache[(_USER, _PROVIDER)] == "old-scopes-token"
+        assert (
+            _token_cache[(_USER, _PROVIDER, None, frozenset(), None)]
+            == "old-scopes-token"
+        )
 
         for event in published:
             await _consume(event)

@@ -10,11 +10,17 @@ from urllib.parse import quote_plus
 from autogpt_libs.auth.models import DEFAULT_USER_ID
 from fastapi import HTTPException
 from prisma import Prisma
-from prisma.enums import BriefingFrequency, SubscriptionTier
+from prisma.enums import BriefingFrequency, CredentialOwnerType, SubscriptionTier
 from prisma.errors import RecordNotFoundError, UniqueViolationError
 from prisma.models import AuthAccount, AuthUser
 from prisma.models import User as PrismaUser
-from prisma.types import JsonFilter, UserCreateInput, UserUpdateInput, UserWhereInput
+from prisma.types import (
+    IntegrationCredentialCreateInput,
+    JsonFilter,
+    UserCreateInput,
+    UserUpdateInput,
+    UserWhereInput,
+)
 from pydantic import BaseModel, ConfigDict
 
 from backend.data.db import prisma, query_raw_with_schema, transaction
@@ -433,16 +439,18 @@ async def update_user_integrations(user_id: str, data: UserIntegrations):
     get_user_by_id.cache_delete(user_id)
 
 
-async def get_user_credentials(user_id: str) -> list[Credentials]:
-    """Read the user's credentials from the IntegrationCredential table.
-
-    Source of truth post blob→table migration (the UserIntegrations blob
-    is retained only as a rollback artifact). Returns USER-scoped active
-    rows. Team and organization credentials are not part of the current
-    execution credential contract.
-    """
+async def get_user_credentials(
+    user_id: str, organization_id: str | None = None
+) -> list[Credentials]:
+    """Read private connections in one org; legacy callers use the personal org."""
+    org_id = organization_id or await _personal_org_id(prisma, user_id)
     rows = await prisma.integrationcredential.find_many(
-        where={"ownerType": "USER", "ownerId": user_id, "status": "active"},
+        where={
+            "ownerType": CredentialOwnerType.USER,
+            "ownerId": user_id,
+            "organizationId": org_id,
+            "status": "active",
+        },
         order={"createdAt": "asc"},
     )
     cryptor = JSONCryptor()
@@ -462,8 +470,12 @@ async def get_user_credentials(user_id: str) -> list[Credentials]:
     return credentials
 
 
-async def set_user_credentials(user_id: str, credentials: list[Credentials]) -> None:
-    """Full-list replace of the user's USER-scoped credential rows.
+async def set_user_credentials(
+    user_id: str,
+    credentials: list[Credentials],
+    organization_id: str | None = None,
+) -> None:
+    """Full-list replace of one owner's private connections in one org.
 
     Mirrors the old blob replace semantics the credential store is built
     around: rows missing from ``credentials`` are revoked (soft delete),
@@ -479,12 +491,16 @@ async def set_user_credentials(user_id: str, credentials: list[Credentials]) -> 
     incoming_ids = {c.id for c in credentials}
     async with transaction() as tx:
         await _lock_user_credentials(tx, user_id)
+        org_id = organization_id or await _personal_org_id(tx, user_id)
         existing_rows = await tx.integrationcredential.find_many(
-            where={"ownerType": "USER", "ownerId": user_id},
+            where={
+                "ownerType": CredentialOwnerType.USER,
+                "ownerId": user_id,
+                "organizationId": org_id,
+            },
         )
         existing_ids = {row.id for row in existing_rows}
 
-        org_id: str | None = None
         for cred in credentials:
             encrypted = cryptor.encrypt(cred.model_dump())
             if cred.id in existing_ids:
@@ -497,21 +513,18 @@ async def set_user_credentials(user_id: str, credentials: list[Credentials]) -> 
                     },
                 )
                 continue
-            if org_id is None:
-                org_id = await _personal_org_id(tx, user_id)
-            await tx.integrationcredential.create(
-                data={
-                    "id": cred.id,
-                    "organizationId": org_id,
-                    "ownerType": "USER",
-                    "ownerId": user_id,
-                    "provider": cred.provider,
-                    "credentialType": cred.type,
-                    "displayName": cred.title or cred.provider,
-                    "encryptedPayload": encrypted,
-                    "createdByUserId": user_id,
-                }
+            create_data = IntegrationCredentialCreateInput(
+                id=cred.id,
+                organizationId=org_id,
+                ownerType=CredentialOwnerType.USER,
+                ownerId=user_id,
+                provider=cred.provider,
+                credentialType=cred.type,
+                displayName=cred.title or cred.provider,
+                encryptedPayload=encrypted,
+                createdByUserId=user_id,
             )
+            await tx.integrationcredential.create(data=create_data)
 
         for row in existing_rows:
             if row.id not in incoming_ids and row.status == "active":
@@ -534,6 +547,10 @@ async def _lock_user_credentials(tx: Prisma, user_id: str) -> None:
         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
         f"integration-credentials:{user_id}",
     )
+
+
+async def get_user_personal_organization_id(user_id: str) -> str:
+    return await _personal_org_id(prisma, user_id)
 
 
 async def _personal_org_id(tx: Prisma, user_id: str) -> str:
@@ -804,7 +821,15 @@ async def cleanup_user_managed_credentials(
 
     if store is None:
         store = IntegrationCredentialsStore()
-    await cleanup_managed_credentials(user_id, store)
+    rows = await prisma.integrationcredential.find_many(
+        where={
+            "ownerType": CredentialOwnerType.USER,
+            "ownerId": user_id,
+            "status": "active",
+        }
+    )
+    for organization_id in {row.organizationId for row in rows}:
+        await cleanup_managed_credentials(user_id, store.scoped(organization_id))
 
 
 # Strong refs to fire-and-forget tasks — the event loop only keeps weak

@@ -32,6 +32,7 @@ from cachetools import TTLCache
 from backend.copilot.providers import SUPPORTED_PROVIDERS
 from backend.data.model import APIKeyCredentials, OAuth2Credentials
 from backend.integrations.credential_lease import CredentialLease
+from backend.integrations.credential_scope import credential_organization_id
 from backend.integrations.creds_events import listen_creds_changed
 from backend.integrations.creds_manager import (
     IntegrationCredentialsManager,
@@ -103,7 +104,7 @@ class _LockedTTLCache(TTLCache):
 
 # (user_id, provider) → token string, or (user_id, provider, required_scopes)
 # when the caller asked for specific scopes.  TTLCache handles expiry + eviction.
-_CacheKey = tuple[str, str] | tuple[str, str, frozenset[str], str | None]
+_CacheKey = tuple[str, str, str | None, frozenset[str], str | None]
 _token_cache: _LockedTTLCache = _LockedTTLCache(
     maxsize=_CACHE_MAX_SIZE, ttl=_TOKEN_CACHE_TTL
 )
@@ -112,12 +113,12 @@ _null_cache: _LockedTTLCache = _LockedTTLCache(
     maxsize=_CACHE_MAX_SIZE, ttl=_NULL_CACHE_TTL
 )
 
-# GitHub user identity caches, keyed (user_id, credential_id): a user with two
+# GitHub user identity caches, keyed (user_id, organization_id, credential_id): a user with two
 # GitHub accounts has two identities, and a chat that picked one must not be
 # served the other's. credential_id is None when no account was picked.
 # Declared here so invalidate_user_provider_cache() can reference them.
 _GH_IDENTITY_CACHE_TTL = 600.0  # 10 min — profile data rarely changes
-_IdentityKey = tuple[str, str | None]
+_IdentityKey = tuple[str, str | None, str | None]
 _gh_identity_cache: _LockedTTLCache = _LockedTTLCache(
     maxsize=_CACHE_MAX_SIZE, ttl=_GH_IDENTITY_CACHE_TTL
 )
@@ -179,9 +180,7 @@ _manager = IntegrationCredentialsManager()
 def _cache_key(
     user_id: str, provider: str, required: frozenset[str], credential_id: str | None
 ) -> _CacheKey:
-    if required or credential_id:
-        return (user_id, provider, required, credential_id)
-    return (user_id, provider)
+    return (user_id, provider, credential_organization_id(), required, credential_id)
 
 
 class ProviderTokenUnavailable(Exception):
@@ -434,7 +433,7 @@ async def get_github_user_git_identity(
     Results are cached for 10 minutes; "not connected" results are cached for
     60 s (same as null-token cache).
     """
-    key: _IdentityKey = (user_id, credential_id)
+    key: _IdentityKey = (user_id, credential_organization_id(), credential_id)
     if key in _gh_identity_null_cache:
         return None
     if cached := _gh_identity_cache.get(key):

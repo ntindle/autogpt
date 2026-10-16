@@ -48,10 +48,16 @@ async def _owned_expert(user_id: str, expert_id: str) -> prisma.models.Expert:
     return row
 
 
-async def _user_credentials(user_id: str) -> list[Credentials]:
+async def _user_credentials(
+    user_id: str, organization_id: str | None
+) -> list[Credentials]:
     from backend.integrations.creds_manager import IntegrationCredentialsManager
 
-    return await IntegrationCredentialsManager().store.get_all_creds(user_id)
+    return (
+        await IntegrationCredentialsManager()
+        .scoped(organization_id)
+        .store.get_all_creds(user_id)
+    )
 
 
 async def _derive_from_workflows(
@@ -86,10 +92,15 @@ async def _derive_from_workflows(
             # will; that is a complete answer, not a failure to retry.
             if graph is None:
                 continue
-            matched, _ = await match_user_credentials_to_graph(user_id, graph)
+            matched, _ = await match_user_credentials_to_graph(
+                user_id, graph, organization_id=expert.organizationId
+            )
             pickers = _picker_credential_ids(graph)
             if pickers and owned_ids is None:
-                owned_ids = {c.id for c in await _user_credentials(user_id)}
+                owned_ids = {
+                    c.id
+                    for c in await _user_credentials(user_id, expert.organizationId)
+                }
         except Exception:
             logger.warning(
                 f"Could not derive credentials for workflow #{workflow.id} on "
@@ -220,7 +231,9 @@ async def list_expert_credentials(
 ) -> list[ExpertCredentialRef]:
     expert = await _owned_expert(user_id, expert_id)
     await _seed_if_needed(user_id, expert)
-    grants, credentials = await _grants(expert_id), await _user_credentials(user_id)
+    grants, credentials = await _grants(expert_id), await _user_credentials(
+        user_id, expert.organizationId
+    )
     return _to_refs(grants, credentials)
 
 
@@ -233,7 +246,7 @@ async def grant_expert_credentials(
     looking at a management list that disagrees with what they just added.
     """
     expert = await _owned_expert(user_id, expert_id)
-    credentials = await _user_credentials(user_id)
+    credentials = await _user_credentials(user_id, expert.organizationId)
     by_id = {c.id: c for c in credentials}
 
     unknown = [
@@ -277,7 +290,10 @@ async def revoke_expert_credential(
     # Finalize even if the seed was left pending by a failed derivation, or the
     # next read would re-derive exactly the credential just revoked.
     await _stamp_seeded(expert_id)
-    return _to_refs(await _grants(expert_id), await _user_credentials(user_id))
+    return _to_refs(
+        await _grants(expert_id),
+        await _user_credentials(user_id, expert.organizationId),
+    )
 
 
 async def settle_credential_seed(user_id: str, expert_id: str) -> None:

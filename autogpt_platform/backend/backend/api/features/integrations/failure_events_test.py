@@ -67,10 +67,12 @@ def _attach(name: str):
 
 
 @pytest.fixture(autouse=True)
-def setup_auth(mock_jwt_user):
-    from autogpt_libs.auth.jwt_utils import get_jwt_payload
+def setup_auth():
+    from backend.api.credential_scope import credential_user_id
 
-    app.dependency_overrides[get_jwt_payload] = mock_jwt_user["get_jwt_payload"]
+    app.dependency_overrides[credential_user_id] = (
+        lambda: "3e53486c-cf57-477e-ba2a-cb02dc828e1a"
+    )
     yield
     app.dependency_overrides.clear()
 

@@ -343,7 +343,7 @@ async def execute_block(
         }
 
         # Inject credentials
-        creds_manager = IntegrationCredentialsManager()
+        creds_manager = IntegrationCredentialsManager().scoped(organization_id)
         credential_leases: dict[str, CredentialLease] = {}
         credential_field_name = "credentials"
         try:

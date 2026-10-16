@@ -99,6 +99,8 @@ class AyrshareManagedProvider(ManagedCredentialProvider):
         See :meth:`ManagedCredentialProvider.post_provision` for retry
         semantics (idempotent, failures are swallowed and logged).
         """
+        if not await store.is_personal_scope(user_id):
+            return
         _ = credential  # unused; the side channel is provider-specific
         async with store.edit_user_integrations(user_id) as user_integrations:
             if user_integrations.managed_credentials.ayrshare_profile_key is not None:

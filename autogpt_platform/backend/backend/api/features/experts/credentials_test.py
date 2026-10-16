@@ -105,6 +105,7 @@ async def test_derivation_reports_incomplete_when_a_workflow_fails(
     mocker.patch("backend.data.graph.get_graph", side_effect=RuntimeError("db is down"))
     expert = SimpleNamespace(
         id="expert-1",
+        organizationId="expert-org",
         Workflows=[
             SimpleNamespace(
                 id="wf-1",
@@ -128,6 +129,7 @@ async def test_a_workflow_whose_graph_is_gone_still_counts_as_complete(
     mocker.patch("backend.data.graph.get_graph", return_value=None)
     expert = SimpleNamespace(
         id="expert-1",
+        organizationId="expert-org",
         Workflows=[
             SimpleNamespace(
                 id="wf-1",
@@ -246,6 +248,7 @@ async def test_derivation_includes_picker_credentials_the_user_owns(
     )
     expert = SimpleNamespace(
         id="expert-1",
+        organizationId="expert-org",
         Workflows=[
             SimpleNamespace(
                 id="wf-1",
@@ -291,6 +294,7 @@ async def test_a_failed_credential_read_leaves_the_seed_pending(
     )
     expert = SimpleNamespace(
         id="expert-1",
+        organizationId="expert-org",
         Workflows=[
             SimpleNamespace(
                 id="wf-1",

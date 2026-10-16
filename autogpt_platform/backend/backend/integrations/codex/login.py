@@ -18,6 +18,7 @@ from backend.integrations.codex.models import (
     CodexDeviceCodeDetails,
     CodexLoginCompletion,
 )
+from backend.integrations.credential_scope import credential_organization_id
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,7 @@ class CodexDeviceLoginState(BaseModel):
 
 
 class CodexSharedLoginState(CodexDeviceLoginState):
+    organization_id: str | None = None
     user_id: str
     credential_id: str | None = None
 
@@ -213,7 +215,11 @@ class CodexLoginCoordinator:
 
     async def start(self, user_id: str) -> CodexDeviceLogin:
         login_id = secrets.token_urlsafe(24)
-        state = CodexSharedLoginState(user_id=user_id, status="pending")
+        state = CodexSharedLoginState(
+            user_id=user_id,
+            status="pending",
+            organization_id=credential_organization_id(),
+        )
         async with self._state_store.locked(user_id):
             active_login_id = await self._state_store.get_active(user_id)
             if active_login_id is not None:
@@ -292,9 +298,9 @@ class CodexLoginCoordinator:
                 raise CodexLoginPendingError("Codex login is still pending")
             if state.status != "completed" or state.credential_id is None:
                 raise CodexLoginFailedError(state.error or "Codex login failed")
-            credentials = await self._credentials_manager.store.get_creds_by_id(
-                user_id, state.credential_id
-            )
+            credentials = await self._credentials_manager.scoped(
+                state.organization_id
+            ).store.get_creds_by_id(user_id, state.credential_id)
             if not _is_codex_credentials(credentials):
                 raise CodexLoginFailedError("Stored Codex credential is unavailable")
             await self._state_store.delete(user_id, login_id)
@@ -502,9 +508,11 @@ class CodexLoginCoordinator:
     ) -> None:
         await enforce_codex_access(user_id)
         credentials = credentials_from_bundle(completion.bundle)
-        async with self._credentials_manager.locked_provider_credentials(
-            user_id, credentials.provider
-        ):
+        origin = await self._state_store.get(user_id, login_id)
+        if origin is None or origin.status != "pending":
+            return
+        manager = self._credentials_manager.scoped(origin.organization_id)
+        async with manager.locked_provider_credentials(user_id, credentials.provider):
             async with self._state_store.locked(user_id):
                 state = await self._state_store.get(user_id, login_id)
                 if state is None or state.status != "pending":
@@ -535,9 +543,9 @@ class CodexLoginCoordinator:
         state: CodexSharedLoginState,
         credentials: OAuth2Credentials,
     ) -> None:
-        stored = await self._credentials_manager.upsert_single_provider_locked(
-            user_id, credentials
-        )
+        stored = await self._credentials_manager.scoped(
+            state.organization_id
+        ).upsert_single_provider_locked(user_id, credentials)
         if not _is_codex_credentials(stored):
             raise RuntimeError("Stored Codex credential type changed")
         state.status = "completed"

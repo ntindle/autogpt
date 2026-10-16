@@ -66,6 +66,7 @@ from backend.integrations.credential_lease import (
     CredentialLease,
     iterate_with_credential_lease_guard,
 )
+from backend.integrations.credential_scope import credential_scope
 from backend.integrations.credentials_store import provider_matches
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.monitoring.instrumentation import record_graph_run_completion
@@ -439,51 +440,54 @@ async def execute_node(
     nodes_input_masks: Optional[NodesInputMasks] = None,
     nodes_to_skip: Optional[set[str]] = None,
 ) -> BlockOutput:
-    grant_id = data.execution_context.credentials_grant_id
-    lease_id: str | None = None
-    attachment_guard: AgentGraphAttachmentLeaseGuard | None = None
-    db_client = get_db_async_client()
-    try:
-        if grant_id is not None:
-            lease_id = await db_client.acquire_agent_graph_attachment_lease(
-                [data.graph_id]
-            )
-            attachment_guard = AgentGraphAttachmentLeaseGuard(db_client, lease_id)
-        await _revalidate_owner_credentials(
-            data.execution_context,
-            user_id=data.user_id,
-            graph_id=data.graph_id,
-            graph_version=data.graph_version,
-        )
-        iterator = _execute_node_authorized(
-            node,
-            data,
-            execution_processor,
-            execution_stats,
-            nodes_input_masks,
-            nodes_to_skip,
-        )
+    with credential_scope(data.execution_context.organization_id):
+        grant_id = data.execution_context.credentials_grant_id
+        lease_id: str | None = None
+        attachment_guard: AgentGraphAttachmentLeaseGuard | None = None
+        db_client = get_db_async_client()
         try:
-            while True:
-                action = anext(iterator)
-                try:
-                    output = (
-                        await attachment_guard.run(action)
-                        if attachment_guard is not None
-                        else await action
-                    )
-                except StopAsyncIteration:
-                    break
-                yield output
-        finally:
-            await iterator.aclose()
-    finally:
-        if lease_id is not None:
-            released = await db_client.release_agent_graph_attachment_lease(lease_id)
-            if not released:
-                raise RuntimeError(
-                    "OWNER grant authorization lease expired during execution"
+            if grant_id is not None:
+                lease_id = await db_client.acquire_agent_graph_attachment_lease(
+                    [data.graph_id]
                 )
+                attachment_guard = AgentGraphAttachmentLeaseGuard(db_client, lease_id)
+            await _revalidate_owner_credentials(
+                data.execution_context,
+                user_id=data.user_id,
+                graph_id=data.graph_id,
+                graph_version=data.graph_version,
+            )
+            iterator = _execute_node_authorized(
+                node,
+                data,
+                execution_processor,
+                execution_stats,
+                nodes_input_masks,
+                nodes_to_skip,
+            )
+            try:
+                while True:
+                    action = anext(iterator)
+                    try:
+                        output = (
+                            await attachment_guard.run(action)
+                            if attachment_guard is not None
+                            else await action
+                        )
+                    except StopAsyncIteration:
+                        break
+                    yield output
+            finally:
+                await iterator.aclose()
+        finally:
+            if lease_id is not None:
+                released = await db_client.release_agent_graph_attachment_lease(
+                    lease_id
+                )
+                if not released:
+                    raise RuntimeError(
+                        "OWNER grant authorization lease expired during execution"
+                    )
 
 
 async def _execute_node_authorized(
@@ -515,7 +519,9 @@ async def _execute_node_authorized(
     node_id = data.node_id
     node_block = node.block
     execution_context = data.execution_context
-    creds_manager = execution_processor.creds_manager
+    creds_manager = execution_processor.creds_manager.scoped(
+        execution_context.organization_id
+    )
 
     log_metadata = LogMetadata(
         logger=_logger,

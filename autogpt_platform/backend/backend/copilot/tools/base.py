@@ -15,6 +15,7 @@ from backend.copilot.turn_tracing import tool_transaction
 from backend.data.activity_event import ActivityEventDraft
 from backend.data.db_accessors import activity_event_db, live_resource_lease
 from backend.data.tenancy import ResourceAccess
+from backend.integrations.credential_scope import credential_scope
 from backend.util import tracing
 from backend.util.truncate import truncate
 
@@ -431,7 +432,10 @@ class BaseTool:
             Pydantic response object
 
         """
-        with tool_transaction(self.name, tool_call_id, session.session_id) as span:
+        with (
+            credential_scope(session.organization_id),
+            tool_transaction(self.name, tool_call_id, session.session_id) as span,
+        ):
             output = await self._execute_checked(
                 user_id, session, tool_call_id, **kwargs
             )

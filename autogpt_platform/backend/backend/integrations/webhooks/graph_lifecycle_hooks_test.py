@@ -56,6 +56,7 @@ async def test_before_graph_activate_oauth_refresh_failure_raises_clear_error():
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.cached_getter.return_value = failing_getter
         with pytest.raises(GraphActivationError) as excinfo:
             await _before_graph_activate(graph, "user-1")
@@ -84,6 +85,7 @@ async def test_before_graph_activate_clears_optional_unloadable_credentials():
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.cached_getter.return_value = failing_getter
         await _before_graph_activate(graph, "user-1")
 
@@ -101,6 +103,7 @@ async def test_before_graph_activate_missing_required_credential_raises_clear_er
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.cached_getter.return_value = AsyncMock(return_value=None)
         with pytest.raises(GraphActivationError) as excinfo:
             await _before_graph_activate(graph, "user-1")
@@ -122,6 +125,7 @@ async def test_before_graph_activate_succeeds_when_credentials_resolve():
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.cached_getter.return_value = AsyncMock(return_value=MagicMock())
         await _before_graph_activate(graph, "user-1")
 
@@ -142,6 +146,7 @@ async def test_before_graph_activate_ignores_credential_meta_without_id():
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.cached_getter.return_value = getter
         await _before_graph_activate(graph, "user-1")
 
@@ -181,6 +186,7 @@ async def test_before_graph_activate_keeps_only_files_picked_with_own_credential
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.store.get_all_creds = AsyncMock(return_value=[MagicMock(id="own-cred")])
         mgr.cached_getter.return_value = AsyncMock(return_value=None)
         await before_graph_activate(graph, "user-1")
@@ -203,6 +209,7 @@ async def test_before_graph_activate_skips_the_lookup_without_picked_files():
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.store.get_all_creds = AsyncMock(return_value=[])
         mgr.cached_getter.return_value = AsyncMock(return_value=None)
         await before_graph_activate(graph, "user-1")
@@ -225,6 +232,7 @@ async def test_on_graph_deactivate_ignores_credential_meta_without_id():
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.cached_getter.return_value = getter
         await on_graph_deactivate(graph, "user-1")
 
@@ -256,6 +264,7 @@ async def test_on_graph_deactivate_keeps_first_resolved_credential():
     with patch(
         "backend.integrations.webhooks.graph_lifecycle_hooks.credentials_manager"
     ) as mgr:
+        mgr.scoped.return_value = mgr
         mgr.cached_getter.return_value = getter
         with patch(
             "backend.integrations.webhooks.graph_lifecycle_hooks.on_node_deactivate",

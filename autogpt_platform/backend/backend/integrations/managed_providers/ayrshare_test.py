@@ -190,6 +190,7 @@ class TestPostProvisionClearsLegacy:
         cm.__aexit__ = AsyncMock(return_value=None)
 
         store = MagicMock()
+        store.is_personal_scope = AsyncMock(return_value=True)
         store.edit_user_integrations = MagicMock(return_value=cm)
         return store, user_integrations
 

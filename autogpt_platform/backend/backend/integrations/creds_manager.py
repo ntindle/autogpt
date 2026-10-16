@@ -2,6 +2,7 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from copy import copy
 from datetime import datetime
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
@@ -124,6 +125,11 @@ class IntegrationCredentialsManager:
     def __init__(self):
         self.store = IntegrationCredentialsStore()
 
+    def scoped(self, organization_id: str | None) -> "IntegrationCredentialsManager":
+        manager = copy(self)
+        manager.store = self.store.scoped(organization_id)
+        return manager
+
     async def locks(self) -> AsyncRedisKeyedMutex:
         # Delegate to store's @thread_cached locks.  Manager uses these for
         # fine-grained per-credential locking (refresh, acquire); the store
@@ -205,8 +211,9 @@ class IntegrationCredentialsManager:
 
     async def acquire_lease(self, user_id: str, credentials_id: str) -> CredentialLease:
         credentials, lock = await self.acquire(user_id, credentials_id)
-        checkpoint = partial(self.update_acquired, user_id)
-        delete = partial(self.delete_acquired, user_id)
+        manager = self.scoped(self.store.organization_id)
+        checkpoint = partial(manager.update_acquired, user_id)
+        delete = partial(manager.delete_acquired, user_id)
         lease = CredentialLease(credentials, lock, checkpoint, delete)
         lease.start_heartbeat()
         return lease
@@ -215,12 +222,13 @@ class IntegrationCredentialsManager:
         self, user_id: str
     ) -> Callable[[str], "Coroutine[Any, Any, Credentials | None]"]:
         all_credentials = None
+        manager = self.scoped(self.store.organization_id)
 
         async def get_credentials(creds_id: str) -> "Credentials | None":
             nonlocal all_credentials
             if not all_credentials:
                 # Fetch credentials on first necessity
-                all_credentials = await self.store.get_all_creds(user_id)
+                all_credentials = await manager.store.get_all_creds(user_id)
 
             credential = next((c for c in all_credentials if c.id == creds_id), None)
             if not credential:
@@ -234,13 +242,21 @@ class IntegrationCredentialsManager:
                 return credential
 
             # Credential is OAuth2 credential and has expiration timestamp
-            return await self.refresh_if_needed(user_id, credential)
+            return await manager.refresh_if_needed(user_id, credential)
 
         return get_credentials
 
     async def refresh_if_needed(
         self, user_id: str, credentials: OAuth2Credentials, lock: bool = True
     ) -> OAuth2Credentials:
+        current = await self.store.get_creds_by_id(user_id, credentials.id)
+        if (
+            current is None
+            or current.type != "oauth2"
+            or current.provider != credentials.provider
+        ):
+            raise ValueError("Credentials are unavailable in this organization")
+        credentials = current
         if credentials.refresh_strategy == "provider_runtime":
             return credentials
 

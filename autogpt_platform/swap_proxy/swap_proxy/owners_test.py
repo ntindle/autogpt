@@ -134,3 +134,10 @@ async def test_an_owner_without_a_user_has_nobody_to_swap_for():
     assert owner is not None and owner.swaps is True
     assert owner.user_id is None and owner.sandbox_id is None
     assert owner.swap_user_id is None
+
+
+async def test_saved_organization_is_part_of_authenticated_owner():
+    owner = await authenticate(record(organization_id="org-a"))
+    assert owner is not None and owner.organization_id == "org-a"
+    legacy = await authenticate(record())
+    assert legacy is not None and legacy.organization_id is None

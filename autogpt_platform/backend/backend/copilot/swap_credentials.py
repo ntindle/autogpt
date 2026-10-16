@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from backend.copilot.integration_creds import get_provider_token
 from backend.copilot.providers import SUPPORTED_PROVIDERS
+from backend.integrations.credential_scope import credential_scope
 
 
 class SwapCredential(BaseModel):
@@ -58,7 +59,7 @@ async def get_swap_bindings() -> dict[str, list[str]]:
 
 
 async def resolve_swap_credential(
-    user_id: str, name: str, host: str
+    user_id: str, name: str, host: str, organization_id: str | None = None
 ) -> Optional[SwapCredential]:
     """*user_id*'s credential called *name*, if it may be sent to *host*.
 
@@ -72,7 +73,8 @@ async def resolve_swap_credential(
     entry = SUPPORTED_PROVIDERS.get(name)
     if entry is None or not _host_is_bound(host, entry["swap_hosts"]):
         return None
-    token = await get_provider_token(user_id, name, strict=True)
+    with credential_scope(organization_id):
+        token = await get_provider_token(user_id, name, strict=True)
     if not token:
         return None
     return SwapCredential(

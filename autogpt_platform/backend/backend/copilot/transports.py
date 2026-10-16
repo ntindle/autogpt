@@ -24,6 +24,11 @@ from backend.data.user import set_user_default_chat_route
 from backend.integrations.codex.access import has_codex_access_for_discovery
 from backend.integrations.codex.auth_bundle import CodexAuthBundleError
 from backend.integrations.codex.credential_codec import bundle_from_credentials
+from backend.integrations.credential_scope import (
+    CurrentCredentialScope,
+    credential_organization_id,
+    credential_scope,
+)
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.integrations.oauth.microsoft_365_copilot import (
     Microsoft365CopilotDeviceAuthHandler,
@@ -123,16 +128,30 @@ async def get_chat_transports(user_id: str) -> list[ChatTransportResponse]:
 
 async def resolve_default_chat_route(
     user_id: str,
+    *,
+    organization_id: (
+        str | None | CurrentCredentialScope
+    ) = CurrentCredentialScope.CURRENT,
 ) -> tuple[CopilotLlmAuthProvider, str | None]:
     """The route for a chat nobody routed — bot links, schedules, briefings.
+
+    An omitted organization uses the trusted ambient scope; explicit None uses
+    the original personal organization. A saved preference is only honored
+    when its credential appears in that organization's available transports.
 
     Never raises and never asks. Where the HTTP path can answer "pick one"
     with a 409, these callers have no user in front of them, so an
     unresolvable default falls back to ``platform`` — which is exactly what
     every one of them passed before this setting existed.
     """
+    scope = (
+        credential_organization_id()
+        if organization_id is CurrentCredentialScope.CURRENT
+        else organization_id
+    )
     try:
-        transports = await get_chat_transports(user_id)
+        with credential_scope(scope):
+            transports = await get_chat_transports(user_id)
     except Exception:
         logger.warning(
             "Could not resolve the default chat route for user ...%s; using platform",

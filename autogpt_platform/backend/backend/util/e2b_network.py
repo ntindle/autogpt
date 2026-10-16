@@ -50,6 +50,7 @@ from e2b.sandbox.sandbox_api import (
 from pydantic import BaseModel, ConfigDict
 
 from backend.data.redis_client import get_redis_async
+from backend.integrations.credential_scope import credential_organization_id
 from backend.util.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -301,6 +302,7 @@ async def _remember(
     record = {
         "owner": owner.label,
         "user_id": owner.user_id,
+        "organization_id": credential_organization_id(),
         # Absent or false means the proxy swaps nothing for this box.
         "swaps": owner.swaps,
         "sandbox_id": sandbox_id,

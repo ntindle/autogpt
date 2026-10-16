@@ -20,6 +20,10 @@ from backend.data.model import (
     HostScopedCredentials,
     OAuth2Credentials,
 )
+from backend.integrations.credential_scope import (
+    CurrentCredentialScope,
+    credential_organization_id,
+)
 from backend.integrations.credentials_store import is_system_credential
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.integrations.providers import ProviderName
@@ -487,6 +491,10 @@ async def match_user_credentials_to_graph(
     graph: GraphModel,
     expert_id: str | None = None,
     session_id: str | None = None,
+    *,
+    organization_id: (
+        str | None | CurrentCredentialScope
+    ) = CurrentCredentialScope.CURRENT,
 ) -> tuple[dict[str, CredentialsMetaInput], list[str]]:
     """
     Match user's available credentials against graph's required credentials.
@@ -497,6 +505,7 @@ async def match_user_credentials_to_graph(
     Args:
         user_id: The user's ID
         graph: The Graph with credential requirements
+        organization_id: Omitted inherits trusted scope; None selects personal.
 
     Returns:
         tuple[matched_credentials dict, missing_credential_descriptions list]
@@ -514,7 +523,11 @@ async def match_user_credentials_to_graph(
         return graph_credentials_inputs, missing_creds
 
     # Get the credentials available for the user, narrowed to the expert's grants
-    creds_manager = IntegrationCredentialsManager()
+    creds_manager = IntegrationCredentialsManager().scoped(
+        credential_organization_id()
+        if organization_id is CurrentCredentialScope.CURRENT
+        else organization_id
+    )
     available_creds = keep_to_pins(
         await scope_credentials_to_expert(
             user_id, expert_id, await creds_manager.store.get_all_creds(user_id)

@@ -478,6 +478,7 @@ CredentialsType = Literal[
 
 
 class OAuthState(BaseModel):
+    organization_id: str | None = None
     token: str
     provider: str
     expires_at: int
