@@ -15,10 +15,12 @@ from prisma.types import OrgCreditTransactionWhereInput
 from pydantic import BaseModel
 
 from backend.data.credit import (
+    DisabledUserCredit,
     InvoiceListItem,
     UsageTransactionMetadata,
     UserCreditBase,
     get_user_credit_model,
+    settings,
 )
 from backend.data.credit_history import get_credit_history
 from backend.data.db import prisma
@@ -61,6 +63,8 @@ async def get_org_credits(org_id: str) -> int:
     Personal orgs report the owner's wallet balance — see
     :func:`spend_org_credits` for why the ledgers must be one.
     """
+    if not settings.config.enable_credit:
+        return await DisabledUserCredit().get_credits()
     owner_id = await _personal_org_owner(org_id)
     if owner_id is not None:
         credit_model = await get_user_credit_model(owner_id)
@@ -100,6 +104,8 @@ async def spend_org_credits(
     Raises:
         InsufficientBalanceError: If the org doesn't have enough credits.
     """
+    if not settings.config.enable_credit:
+        return await DisabledUserCredit().spend_credits()
     # Personal-org delegation runs BEFORE the amount checks — the user
     # ledger handles refunds/zero natively, and guarding first would drop
     # reconciliation refunds for every personal-org (i.e. ordinary) user.

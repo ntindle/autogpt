@@ -124,6 +124,8 @@ def charge_usage(
     that may have drifted if the estimates JSON was hot-swapped between
     the two calls.
     """
+    if not settings.config.enable_credit:
+        return 0, 0, 0
     total_cost = 0
     remaining_balance = 0
     block_pre_flight = 0
@@ -251,6 +253,8 @@ async def charge_reconciled_usage(
     ``block_preflight_estimates.json`` between charge and reconciliation
     would shift the baseline and skew the delta.
     """
+    if not settings.config.enable_credit:
+        return 0, 0
     try:
         db_client = get_database_manager_async_client()
         block = get_block(node_exec.block_id)
