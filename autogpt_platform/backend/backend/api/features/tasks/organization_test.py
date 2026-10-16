@@ -39,6 +39,7 @@ async def organizations(owner):
                     "slug": str(uuid4()),
                     "isPersonal": name == "Personal",
                     "bootstrapUserId": owner if name == "Personal" else None,
+                    "Members": {"create": {"userId": owner, "isOwner": True}},
                 }
             )
         )
