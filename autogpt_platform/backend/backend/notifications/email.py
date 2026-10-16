@@ -3,8 +3,8 @@
 Everything goes out on a transactional stream, separate from marketing mail
 (which the platform does not send at all — the onboarding tour and the monthly
 changelog are MailerLite's). Every message carries a plain-text MIME part built
-from the same data model, and one-click List-Unsubscribe headers on every
-family except Ops, which is internal mail and deliberately not opt-in.
+from the same data model. Product notifications carry one-click
+List-Unsubscribe headers; billing, auth and internal Ops mail do not.
 """
 
 import logging
@@ -62,11 +62,12 @@ class EmailSender:
         data: BaseNotificationData,
         unsubscribe_link: str,
         volume_links: dict[str, str] | None = None,
+        first_name: str | None = None,
     ) -> None:
         """Render and send one notification. Raises on delivery failure so the
         queue consumer's retry-with-backoff can recover."""
         urls = build_urls(unsubscribe_link, volume_links)
-        email = render(notification_type, data, user_email, urls)
+        email = render(notification_type, data, user_email, urls, first_name=first_name)
         await self._deliver(notification_type, user_email, email, urls)
 
     async def _deliver(
@@ -84,16 +85,20 @@ class EmailSender:
             if supports_list_unsubscribe(notification_type)
             else None
         )
+        stream = get_delivery_stream(notification_type)
         await self._send(
             user_email=user_email,
-            sender=_sender_for(get_delivery_stream(notification_type)),
+            sender=_sender_for(stream),
+            reply_to=_reply_to_for(stream),
             subject=email.subject,
             html_body=email.html,
             text_body=email.text,
             headers=headers,
         )
 
-    def send_email_or_raise(self, user_email: str, subject: str, body: str) -> None:
+    def send_email_or_raise(
+        self, user_email: str, subject: str, body: str, text_body: str | None = None
+    ) -> None:
         """Send a one-off transactional email (e.g. Better Auth password-reset
         and verification links) with no notification templating or preference
         gating. Raises if the Postmark client is not configured so callers can
@@ -105,6 +110,7 @@ class EmailSender:
             To=user_email,
             Subject=subject,
             HtmlBody=body,
+            TextBody=text_body,
             MessageStream=settings.config.postmark_transactional_stream,
         )
 
@@ -116,6 +122,7 @@ class EmailSender:
         html_body: str,
         text_body: str,
         headers: dict[str, str] | None,
+        reply_to: str | None = None,
     ) -> None:
         if not self.server_token:
             raise RuntimeError("Postmark is not configured; cannot send email")
@@ -128,6 +135,8 @@ class EmailSender:
             "TextBody": text_body,
             "MessageStream": settings.config.postmark_transactional_stream,
         }
+        if reply_to:
+            payload["ReplyTo"] = reply_to
         if headers:
             payload["Headers"] = [
                 {"Name": name, "Value": value} for name, value in headers.items()
@@ -162,4 +171,12 @@ def _sender_for(stream: DeliveryStream) -> str:
         DeliveryStream.BILLING: settings.config.billing_sender_email,
         DeliveryStream.PRODUCT: settings.config.product_sender_email,
         DeliveryStream.OPS: settings.config.ops_sender_email,
+    }[stream]
+
+
+def _reply_to_for(stream: DeliveryStream) -> str | None:
+    return {
+        DeliveryStream.BILLING: settings.config.billing_reply_to_email,
+        DeliveryStream.PRODUCT: settings.config.product_reply_to_email,
+        DeliveryStream.OPS: None,
     }[stream]

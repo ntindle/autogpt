@@ -1,5 +1,7 @@
 import {
   useGetV2GetPendingReviews,
+  useGetV2GetPendingReviewsForChatSession,
+  getGetV2GetPendingReviewsForChatSessionQueryKey,
   useGetV2GetPendingReviewsForExecution,
   getGetV2GetPendingReviewsQueryKey,
   getGetV2GetPendingReviewsForExecutionQueryKey,
@@ -51,6 +53,34 @@ export function usePendingReviewsForExecution(
       enabled: options?.enabled ?? !!graphExecId,
       queryKey: getTeamScopedQueryKey(
         getGetV2GetPendingReviewsForExecutionQueryKey(graphExecId),
+        organizationId,
+        teamId,
+      ),
+      refetchInterval: options?.refetchInterval,
+      refetchIntervalInBackground: !!options?.refetchInterval,
+    },
+    request: getTenantRequestInit(organizationId, teamId),
+  });
+
+  return {
+    pendingReviews: okData(query.data) || [],
+    isLoading: query.isLoading,
+    error: query.error,
+    refetch: query.refetch,
+  };
+}
+
+export function usePendingReviewsForChatSession(
+  chatSessionId: string,
+  organizationId: string | null,
+  teamId: string | null,
+  options?: UsePendingReviewsForExecutionOptions,
+) {
+  const query = useGetV2GetPendingReviewsForChatSession(chatSessionId, {
+    query: {
+      enabled: options?.enabled ?? !!chatSessionId,
+      queryKey: getTeamScopedQueryKey(
+        getGetV2GetPendingReviewsForChatSessionQueryKey(chatSessionId),
         organizationId,
         teamId,
       ),

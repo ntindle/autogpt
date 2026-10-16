@@ -7,6 +7,7 @@ the home card disagree about the same run, so both now come through here.
 """
 
 from datetime import datetime, timezone
+
 from backend.api.features.experts.models import Expert
 from backend.data.execution import ExecutionStatus, GraphExecutionMeta
 from backend.util.tenancy_urls import library_agent_path
@@ -14,7 +15,7 @@ from backend.util.tenancy_urls import library_agent_path
 from .models import BriefingRunItem
 
 # Shared fallback for a run whose agent couldn't be resolved in the library.
-DEFAULT_AGENT_NAME = "Agent task"
+DEFAULT_AGENT_NAME = "Workflow task"
 _FAILED_DETAIL = "Open the run to inspect the failure and choose the next step."
 _COMPLETED_DETAIL = "Completed successfully."
 # Longest a summary's first sentence may run before it is clipped into a title.
@@ -67,6 +68,8 @@ def compose_run_outcome(
             execution.organization_id,
             execution.team_id,
         ),
+        schedule_id=execution.schedule_id,
+        webhook_id=execution.webhook_id,
     )
 
 

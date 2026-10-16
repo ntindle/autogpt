@@ -281,7 +281,7 @@ def _to_agent_stats(row: dict) -> AgentPeriodStats:
 
 
 def _fallback_name(graph_id: str) -> str:
-    return f"Agent {graph_id[:8]}"
+    return f"Workflow {graph_id[:8]}"
 
 
 async def get_briefing_resource_scopes(

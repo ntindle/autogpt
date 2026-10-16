@@ -910,7 +910,7 @@ async def _resolve_linked_executions(
     session_id: str,
 ) -> list[SharedChatLinkedExecution]:
     rows = await ChatLinkedShare.prisma().find_many(
-        where={"sessionId": session_id},
+        where={"sessionId": session_id, "Execution": {"is": {"isDeleted": False}}},
         include={"Execution": {"include": {"AgentGraph": True}}},
     )
     out: list[SharedChatLinkedExecution] = []

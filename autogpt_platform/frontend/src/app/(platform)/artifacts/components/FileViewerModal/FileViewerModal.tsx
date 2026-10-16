@@ -1,5 +1,7 @@
 "use client";
 
+import { getWorkspaceDownloadHref } from "@/services/org-team/workspace";
+
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
 import { ArtifactContent } from "@/app/(platform)/copilot/components/ArtifactPanel/components/ArtifactContent";
 import { classifyArtifact } from "@/app/(platform)/copilot/components/ArtifactPanel/helpers";
@@ -8,9 +10,11 @@ import { Button } from "@/components/atoms/Button/Button";
 import { Dialog } from "@/components/molecules/Dialog/Dialog";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useState } from "react";
-import { downloadFileBlob, getFileDownloadUrl } from "../ArtifactsList/helpers";
+import { downloadFileBlob, getPreviewKind } from "../ArtifactsList/helpers";
 import { CodeIcon, Download04Icon, EyeIcon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { DownloadOnly } from "./components/DownloadOnly";
+import { OfficePreview } from "./components/OfficePreview";
 
 interface Props {
   file: WorkspaceFileItem | null;
@@ -36,7 +40,17 @@ export function FileViewerModal({ file, onClose }: Props) {
     file.name,
     file.size_bytes,
   );
+  const previewKind = getPreviewKind(
+    file.mime_type,
+    file.size_bytes,
+    file.name,
+  );
   const artifact = toArtifactRef(file);
+  const downloadUrl = getWorkspaceDownloadHref(
+    file.id,
+    file.organization_id ?? null,
+    file.team_id ?? null,
+  );
 
   return (
     <Dialog
@@ -61,14 +75,16 @@ export function FileViewerModal({ file, onClose }: Props) {
     >
       <Dialog.Content>
         <div className="flex h-full min-h-0 flex-col" data-testid="file-viewer">
-          {classification.openable ? (
+          {previewKind === "office" ? (
+            <OfficePreview file={file} downloadUrl={downloadUrl} />
+          ) : classification.openable ? (
             <ArtifactContent
               artifact={artifact}
               isSourceView={isSourceView}
               classification={classification}
             />
           ) : (
-            <DownloadOnly file={file} />
+            <DownloadOnly name={file.name} downloadUrl={downloadUrl} />
           )}
         </div>
       </Dialog.Content>
@@ -153,48 +169,16 @@ function Header({
   );
 }
 
-function DownloadOnly({ file }: { file: WorkspaceFileItem }) {
-  const [isDownloading, setIsDownloading] = useState(false);
-
-  async function handleDownload() {
-    if (isDownloading) return;
-    setIsDownloading(true);
-    try {
-      await downloadFileBlob(
-        file.id,
-        file.name,
-        file.organization_id ?? null,
-        file.team_id ?? null,
-      );
-    } finally {
-      setIsDownloading(false);
-    }
-  }
-
-  return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-      <p className="text-sm text-zinc-500">
-        This file type can&apos;t be previewed.
-      </p>
-      <button
-        type="button"
-        onClick={handleDownload}
-        disabled={isDownloading}
-        className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50"
-      >
-        <Icon icon={Download04Icon} size={16} />
-        {isDownloading ? "Downloading…" : "Download"}
-      </button>
-    </div>
-  );
-}
-
 function toArtifactRef(file: WorkspaceFileItem): ArtifactRef {
   return {
     id: file.id,
     title: file.name,
     mimeType: file.mime_type ?? null,
-    sourceUrl: getFileDownloadUrl(file.id),
+    sourceUrl: getWorkspaceDownloadHref(
+      file.id,
+      file.organization_id ?? null,
+      file.team_id ?? null,
+    ),
     origin: file.origin === "uploaded" ? "user-upload" : "agent",
     sizeBytes: file.size_bytes,
     organizationId: file.organization_id ?? null,

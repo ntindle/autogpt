@@ -4,7 +4,7 @@ Three groups of routes:
 
 - **Owner-only** — list linked-execution candidates, enable share with
   opt-ins, disable share.  Mirrors the ``/graphs/.../share`` shape on
-  :mod:`backend.api.features.v1` for execution sharing.
+  :mod:`backend.api.features.graph_executions.routes` for execution sharing.
 - **Public-by-token** — the public viewer reads through these
   unauthenticated routes; the share token is the bearer credential.
   Same enumeration defenses as execution sharing (strict UUID path
@@ -30,7 +30,6 @@ from backend.data.db_accessors import (
 )
 from backend.data.sharing.tokens import SHARE_TOKEN_PATTERN
 from backend.data.tenancy import live_resource_permission_barrier
-from backend.util.feature_flag import Flag, is_feature_enabled
 from backend.util.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -121,7 +120,7 @@ class EnableShareRequest(BaseModel):
     auto_share_executions: bool = False
 
 
-class ShareResponse(BaseModel):
+class ChatShareResponse(BaseModel):
     share_url: str
     share_token: str
 
@@ -163,7 +162,6 @@ async def get_chat_share_state(
 @owner_router.post(
     "/sessions/{session_id}/share",
     responses={
-        403: {"description": "Chat sharing is not enabled for this user"},
         404: {"description": "Chat session not found for user"},
     },
 )
@@ -172,14 +170,8 @@ async def enable_chat_sharing(
     user_id: Annotated[str, Security(auth.get_user_id)],
     ctx: Annotated[auth.RequestContext, Security(_create_resource_context)],
     body: EnableShareRequest = Body(default_factory=EnableShareRequest),
-) -> ShareResponse:
-    """Enable sharing for a chat session.
-
-    Flag-gated: refuses with 403 when ``chat-sharing`` is off so a stale
-    frontend cannot enable shares post-rollback.
-    """
-    if not await is_feature_enabled(Flag.CHAT_SHARING, user_id):
-        raise HTTPException(status_code=403, detail="Chat sharing is not enabled")
+) -> ChatShareResponse:
+    """Enable sharing for a chat session."""
 
     base_url = settings.config.frontend_base_url
     if not base_url:
@@ -210,7 +202,7 @@ async def enable_chat_sharing(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
-    return ShareResponse(
+    return ChatShareResponse(
         share_url=f"{base_url}/share/chat/{share_token}",
         share_token=share_token,
     )
@@ -251,8 +243,6 @@ async def disable_chat_sharing(
 
 # --------------------------------------------------------------------------
 # Public routes — mounted at ``/api/public/shared/chats``.
-# Stays on even when ``chat-sharing`` flag is off so revoked-then-fixed
-# rollbacks don't break already-shared URLs mid-flight.
 # --------------------------------------------------------------------------
 
 public_router = APIRouter(tags=["chat", "share", "public"])
@@ -318,4 +308,4 @@ async def download_shared_chat_file(
     async with share_db.shared_chat_file_access(share_token, file_id) as file:
         if file is None:
             raise HTTPException(status_code=404, detail="Not found")
-        return await create_file_download_response(file, inline=True)
+        return await create_file_download_response(file)

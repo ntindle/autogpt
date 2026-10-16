@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 from autogpt_libs.auth import RequestContext
 
-from backend.api.features import v1
+from backend.api.features.graphs import routes as v1
 
 
 def _context() -> RequestContext:

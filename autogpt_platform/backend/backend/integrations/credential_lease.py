@@ -29,6 +29,8 @@ class CredentialLease:
         self._heartbeat_failed = asyncio.Event()
 
     def start_heartbeat(self) -> None:
+        if self.credentials.type != "oauth2":
+            return
         if self._heartbeat_task is None:
             self._heartbeat_task = asyncio.create_task(self._heartbeat())
 

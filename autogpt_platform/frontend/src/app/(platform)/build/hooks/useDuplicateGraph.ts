@@ -61,7 +61,7 @@ export function useDuplicateGraph(teamId: string | null = null) {
       const result = await forkAgent({ libraryAgentId: libraryAgent.id });
       const forked = result.data as LibraryAgent;
       if (!forked?.graph_id) {
-        throw new Error("Fork did not return a graph to open.");
+        throw new Error("The copy did not return a workflow to open.");
       }
       router.push(
         getBuilderHref({
@@ -73,7 +73,7 @@ export function useDuplicateGraph(teamId: string | null = null) {
       );
     } catch (error) {
       toast({
-        title: "Failed to duplicate agent",
+        title: "Failed to duplicate workflow",
         description:
           error instanceof Error
             ? error.message

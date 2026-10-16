@@ -4,13 +4,14 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from prisma.errors import UniqueViolationError
 from prisma.models import ChatMessage as PrismaChatMessage
 from prisma.models import ChatSession as PrismaChatSession
 from prisma.types import (
     ChatMessageCreateInput,
+    ChatMessageUpdateInput,
     ChatMessageWhereInput,
     ChatSessionCreateInput,
     ChatSessionUpdateInput,
@@ -30,6 +31,7 @@ from backend.util.exceptions import (
 from backend.util.json import SafeJson, dumps, sanitize_string
 
 from .model import (
+    CHAT_STATUS_RUNNING,
     ChatMessage,
     ChatSessionInfo,
     ChatSessionMetadata,
@@ -37,6 +39,7 @@ from .model import (
     cache_chat_session,
 )
 from .model import get_chat_session as get_chat_session_cached
+from .transports import resolve_default_chat_route
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,20 @@ MAX_LOADED_CHAT_MESSAGES = 1000
 # successful_agent_runs, usage, metadata) plus ``messages``.  Going through the
 # paginated path means tool-pair boundary expansion and the visibility
 # guarantee already apply, and the cap-hit signal lives in ``has_more``.
+
+
+async def get_chat_session_expert_ids(
+    user_id: str, session_ids: list[str]
+) -> dict[str, str | None]:
+    """Map each of *user_id*'s sessions in *session_ids* to the expert it is
+    scoped to (``None`` for a personal Otto session). Sessions that do
+    not belong to the user are left out."""
+    if not session_ids:
+        return {}
+    rows = await PrismaChatSession.prisma().find_many(
+        where={"id": {"in": session_ids}, "userId": user_id}
+    )
+    return {row.id: row.expertId for row in rows}
 
 
 async def get_chat_session_metadata(session_id: str) -> ChatSessionInfo | None:
@@ -124,6 +141,7 @@ async def get_chat_messages_paginated(
     team_id: str | None = None,
     *,
     after_sequence: int | None = None,
+    message_sequences: list[int] | None = None,
 ) -> PaginatedMessages | None:
     """Get a window of messages for a session in ascending sequence order.
 
@@ -146,6 +164,9 @@ async def get_chat_messages_paginated(
     ``has_more`` is ``True`` iff the underlying query found more rows than
     ``limit`` (i.e. the cap engaged); irrelevant for range fetches but
     harmlessly populated.
+
+    ``message_sequences`` selects exact message numbers within any bounds;
+    tool-pair and visibility expansion are disabled for this selection.
     """
     session_where: ChatSessionWhereInput = {"id": session_id}
     if user_id is not None:
@@ -158,6 +179,8 @@ async def get_chat_messages_paginated(
         msg_filter["lt"] = before_sequence
     if after_sequence is not None:
         msg_filter["gte"] = after_sequence
+    if message_sequences is not None:
+        msg_filter["in"] = message_sequences
 
     msg_include: FindManyChatMessageArgsFromChatSession = {
         "order_by": {"sequence": "desc"},
@@ -183,7 +206,7 @@ async def get_chat_messages_paginated(
     # Range fetches (after_sequence set) ask for an exact window — never expand
     # outside it. Cursor / tail loads get the boundary + visibility fixes so
     # the UI render and LLM-context build are well-formed.
-    is_range_fetch = after_sequence is not None
+    is_range_fetch = after_sequence is not None or message_sequences is not None
     if not is_range_fetch:
         if results and results[0].role == "tool":
             results, has_more = await _expand_tool_boundary(
@@ -342,7 +365,7 @@ async def _create_chat_session_locked(
                 # Fail closed: the expert vanished (archived/deleted/shared)
                 # between the caller's tenancy pre-check and this locked
                 # re-check. Creating an unattributed session would silently
-                # land the chat in AutoPilot memory scope — the opposite of
+                # land the chat in Otto memory scope — the opposite of
                 # what the caller asked for.
                 raise ExpertNotFoundError(requested_expert_id)
             prisma_session = await PrismaChatSession.prisma(tx).create(
@@ -509,6 +532,57 @@ async def update_chat_session_pinned(
     return result > 0
 
 
+async def update_chat_session_llm_route(
+    session_id: str,
+    user_id: str,
+    llm_auth_provider: str,
+    llm_credential_id: str | None,
+) -> bool:
+    """Point an existing session at a different connection, from now on.
+
+    Atomically merges only the two route keys into stored metadata: everything
+    else in there -- including a pending question written concurrently --
+    belongs to other features and must survive a connection change.
+
+    Always filters by (session_id, user_id) so callers cannot re-route another
+    user's chat even knowing the id. Past turns keep the stamps they were
+    written with; this only decides where the next one runs.
+
+    Returns True if a row was updated, False otherwise (not found, wrong user).
+    """
+    result = await db.execute_raw_with_schema(
+        'UPDATE {schema_prefix}"ChatSession" SET "metadata" = '
+        "COALESCE(\"metadata\", '{{}}'::jsonb) || "
+        "jsonb_build_object("
+        "'llm_auth_provider', $3::text, "
+        "'llm_credential_id', $4::text"
+        '), "updatedAt" = NOW() '
+        'WHERE "id" = $1 AND "userId" = $2',
+        session_id,
+        user_id,
+        llm_auth_provider,
+        llm_credential_id,
+    )
+    return result > 0
+
+
+async def update_chat_session_autopilot_mode(
+    session_id: str, user_id: str, mode: str
+) -> bool:
+    """Merge only the mode key into stored metadata, scoped to the owner."""
+    result = await db.execute_raw_with_schema(
+        'UPDATE {schema_prefix}"ChatSession" SET "metadata" = '
+        "COALESCE(\"metadata\", '{{}}'::jsonb) || "
+        "jsonb_build_object('autopilot_mode', $3::text), "
+        '"updatedAt" = NOW() '
+        'WHERE "id" = $1 AND "userId" = $2',
+        session_id,
+        user_id,
+        mode,
+    )
+    return result > 0
+
+
 async def add_chat_message(
     session_id: str,
     role: str,
@@ -663,6 +737,19 @@ async def add_chat_messages_batch(
                     if msg.get("routing_source") is not None:
                         data["routingSource"] = msg["routing_source"]
 
+                    if msg.get("llm_auth_provider") is not None:
+                        data["llmAuthProvider"] = msg["llm_auth_provider"]
+                    if msg.get("llm_credential_id") is not None:
+                        data["llmCredentialId"] = msg["llm_credential_id"]
+                    if msg.get("langfuse_trace_id") is not None:
+                        data["langfuseTraceId"] = msg["langfuse_trace_id"]
+
+                    # Per-row bag. The single-message path already persisted
+                    # this; the batch path silently dropped it, so anything
+                    # written here by a turn never survived the insert.
+                    if msg.get("metadata") is not None:
+                        data["metadata"] = SafeJson(msg["metadata"])
+
                     messages_data.append(data)
 
                 # Run create_many and session update in parallel within transaction
@@ -746,6 +833,7 @@ async def get_user_chat_sessions(
     title_contains: str | None = None,
     expert_id: str | None = None,
     autopilot_only: bool = False,
+    experts_only: bool = False,
     pinned_first: bool = True,
 ) -> list[ChatSessionInfo]:
     """Get chat sessions for a user, ordered by most recent.
@@ -761,17 +849,20 @@ async def get_user_chat_sessions(
     without waiting on async embedding.
 
     ``expert_id`` restricts the listing to sessions scoped to that expert.
-    ``autopilot_only`` restricts it to sessions whose ``expertId`` is NULL.
-    The explicit flag is necessary because ``expert_id=None`` retains the
-    existing meaning of "all expert scopes" for user-facing session lists.
+    ``autopilot_only`` restricts it to sessions whose ``expertId`` is NULL,
+    ``experts_only`` to those whose ``expertId`` is set. The explicit flags
+    are necessary because ``expert_id=None`` retains the existing meaning of
+    "all expert scopes" for user-facing session lists.
 
     ``pinned_first=False`` provides strict recency ordering for internal
     adoption flows; the user-facing sidebar keeps pinned sessions first.
     """
     if expert_id == "":
         raise ValueError("expert_id must be non-empty")
-    if expert_id is not None and autopilot_only:
-        raise ValueError("expert_id and autopilot_only are mutually exclusive")
+    if sum((expert_id is not None, autopilot_only, experts_only)) > 1:
+        raise ValueError(
+            "expert_id, autopilot_only and experts_only are mutually exclusive"
+        )
 
     params: list[Any] = [user_id]
     conditions = ['"userId" = $1', _EXCLUDE_DREAM_SESSIONS_SQL]
@@ -801,9 +892,15 @@ async def get_user_chat_sessions(
         conditions.append(f'"expertId" = ${len(params)}')
     elif autopilot_only:
         conditions.append('"expertId" IS NULL')
+    elif experts_only:
+        conditions.append('"expertId" IS NOT NULL')
     params.extend((limit, offset))
+    # "id" breaks ties: without a total order, LIMIT/OFFSET paging can skip or
+    # repeat a row when two sessions share an updatedAt.
     ordering = (
-        '"isPinned" DESC, "updatedAt" DESC' if pinned_first else '"updatedAt" DESC'
+        '"isPinned" DESC, "updatedAt" DESC, "id" DESC'
+        if pinned_first
+        else '"updatedAt" DESC, "id" DESC'
     )
     query = (
         'SELECT * FROM {schema_prefix}"ChatSession" WHERE '
@@ -1001,8 +1098,7 @@ async def get_sessions_with_pending_question(
     params.append(limit)
     sessions = await db.query_raw_with_schema(
         f"SELECT {_PENDING_QUESTION_SESSION_COLUMNS} "
-        'FROM {schema_prefix}"ChatSession" WHERE '
-        + " AND ".join(conditions)
+        'FROM {schema_prefix}"ChatSession" WHERE ' + " AND ".join(conditions)
         # Lexicographic text sort — only correct because every writer emits
         # a UTC ``datetime.isoformat()`` timestamp (fixed-width, zero-padded
         # fields, so ISO-8601 string order matches chronological order).
@@ -1012,6 +1108,22 @@ async def get_sessions_with_pending_question(
         model=PrismaChatSession,
     )
     return [ChatSessionInfo.from_db(s) for s in sessions]
+
+
+async def get_session_titles(
+    user_id: str, session_ids: list[str]
+) -> dict[str, str | None]:
+    """Titles for the given sessions of *user_id*, keyed by session id.
+
+    Sessions that no longer exist (or belong to someone else) are simply
+    absent — callers render a fallback label instead.
+    """
+    if not session_ids:
+        return {}
+    rows = await PrismaChatSession.prisma().find_many(
+        where={"id": {"in": session_ids}, "userId": user_id}
+    )
+    return {row.id: row.title for row in rows}
 
 
 def _escape_like(value: str) -> str:
@@ -1198,17 +1310,35 @@ async def update_chat_message_stamps(
     sequence: int,
     model: str | None,
     routing_source: str | None,
+    llm_auth_provider: str | None = None,
+    llm_credential_id: str | None = None,
+    langfuse_trace_id: str | None = None,
 ) -> bool:
-    """Back-fill model/routingSource on an already-persisted message row.
+    """Back-fill the execution stamps on an already-persisted message row.
 
     Mid-turn flushes persist assistant rows (assigning sequences) BEFORE
     the end-of-turn stamping runs; this repairs those rows so the
     analytics columns survive in the DB. Same mechanism and authorization
     reasoning as ``update_chat_message_tool_calls``.
+
+    The route and the trace are written only when known. Passing None for
+    the route would blank a row that a previous stamp already got right,
+    which is precisely the rewriting of history per-turn segments exist to
+    prevent.
     """
+    data: ChatMessageUpdateInput = {
+        "model": model,
+        "routingSource": routing_source,
+    }
+    if llm_auth_provider is not None:
+        data["llmAuthProvider"] = llm_auth_provider
+    if llm_credential_id is not None:
+        data["llmCredentialId"] = llm_credential_id
+    if langfuse_trace_id is not None:
+        data["langfuseTraceId"] = langfuse_trace_id
     result = await PrismaChatMessage.prisma().update(
         where={"sessionId_sequence": {"sessionId": session_id, "sequence": sequence}},
-        data={"model": model, "routingSource": routing_source},
+        data=data,
     )
     if not result:
         logger.warning(
@@ -1312,6 +1442,38 @@ async def list_chat_sessions_by_status(
     return [ChatSessionInfo.from_db(r) for r in rows]
 
 
+async def list_recent_chat_sessions(
+    *,
+    user_id: str,
+    expert_id: str | None = None,
+    status: str | None = None,
+    limit: int = 50,
+    skip: int = 0,
+) -> list[ChatSessionInfo]:
+    """The user's most recently active sessions, newest first.
+
+    Backs ``find_session``. Scoped to ``user_id`` in the query itself, so
+    another user's session is invisible rather than merely unlisted. The
+    expert and status filters are applied in the query too, so ``limit``
+    bounds the matches rather than the rows scanned — filtering them in
+    Python would silently drop matches older than the window. ``skip`` pages
+    the caller past rows it has already looked at, for the one filter that
+    cannot move into the query (``task`` reads the metadata JSON).
+    """
+    where: ChatSessionWhereInput = {"userId": user_id}
+    if expert_id:
+        where["expertId"] = expert_id
+    if status:
+        where["chatStatus"] = status
+    rows = await PrismaChatSession.prisma().find_many(
+        where=where,
+        order={"updatedAt": "desc"},
+        take=limit,
+        skip=skip,
+    )
+    return [ChatSessionInfo.from_db(r) for r in rows]
+
+
 async def get_latest_user_message_in_session(
     session_id: str,
 ) -> ChatMessage | None:
@@ -1348,6 +1510,44 @@ async def claim_chat_session(session_id: str, user_id: str) -> ChatSessionInfo:
     return ChatSessionInfo.from_db(row)
 
 
+async def admit_chat_session_turn(
+    *, session_id: str, user_id: str, expect_status: str, capacity: int
+) -> Literal["admitted", "full", "busy"]:
+    """Flip the session ``expect_status`` → running while the user has fewer
+    than ``capacity`` running: ``"full"`` at the cap, ``"busy"`` when the
+    session is not in ``expect_status``.
+
+    The count precedes the flip inside one per-user lock, and relies on READ
+    COMMITTED (Postgres's default) to see every flip committed before the lock.
+    """
+    async with db.transaction() as tx:
+        # execute_raw, not query_raw: pg_advisory_xact_lock returns void.
+        await tx.execute_raw(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            f"copilot-turns:{user_id}",
+        )
+        sessions = PrismaChatSession.prisma(tx)
+        current = await sessions.find_unique(where={"id": session_id})
+        if (
+            current is None
+            or current.userId != user_id
+            or current.chatStatus != expect_status
+        ):
+            return "busy"
+        running = await sessions.count(
+            where={"userId": user_id, "chatStatus": CHAT_STATUS_RUNNING}
+        )
+        if running >= capacity:
+            return "full"
+        # Conditional: a transition outside this lock (a cancel) may have
+        # moved the row since it was read.
+        updated = await sessions.update_many(
+            where={"id": session_id, "userId": user_id, "chatStatus": expect_status},
+            data={"chatStatus": CHAT_STATUS_RUNNING},
+        )
+    return "admitted" if updated else "busy"
+
+
 async def update_chat_session_status(
     *,
     session_id: str,
@@ -1372,6 +1572,28 @@ async def update_chat_session_status(
         where=where, data={"chatStatus": status}
     )
     return updated > 0
+
+
+async def _default_route_metadata(
+    user_id: str, *, origin: str | None = None
+) -> ChatSessionMetadata:
+    """Session metadata carrying the user's default connection.
+
+    These sessions exist to hold an outbound message, but the user replies in
+    them — so they start on the same connection a chat the user opened
+    themselves would, instead of silently falling back to the platform route.
+
+    ``origin`` is passed through for the sessions a user is meant to type into,
+    which have to declare themselves interactive.
+    """
+    llm_auth_provider, llm_credential_id = await resolve_default_chat_route(user_id)
+    fields: dict[str, object] = {
+        "llm_auth_provider": llm_auth_provider,
+        "llm_credential_id": llm_credential_id,
+    }
+    if origin is not None:
+        fields["origin"] = origin
+    return ChatSessionMetadata(**fields)
 
 
 async def append_expert_run_message(
@@ -1417,6 +1639,7 @@ async def append_expert_run_message(
             expert_id=expert_id,
             organization_id=organization_id,
             team_id=team_id,
+            metadata=await _default_route_metadata(user_id),
         )
         session_id = created.session_id
 
@@ -1458,7 +1681,7 @@ async def append_plain_session_message(
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """Post an assistant message into the user's latest non-expert (plain
-    Autopilot) session, creating one when none exists — this is the user's
+    Otto) session, creating one when none exists — this is the user's
     "primary thread", e.g. where a morning briefing lands.
 
     Deduplicates on *message_id* (deterministic per event at the caller), so
@@ -1493,7 +1716,7 @@ async def append_plain_session_message(
         created = await create_chat_session(
             session_id=str(uuid.uuid4()),
             user_id=user_id,
-            metadata=ChatSessionMetadata(origin="interactive"),
+            metadata=await _default_route_metadata(user_id, origin="interactive"),
         )
         session_id = created.session_id
 

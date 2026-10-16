@@ -104,6 +104,12 @@ function ExpertThreadHarness({ activeExpertId }: { activeExpertId: string }) {
         }
       />
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         expertIdentity={expertIdentity}
         isResolvingExpertIdentity={!hasExpertsSettled}

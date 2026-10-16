@@ -8,6 +8,8 @@ from .db_manager import (
 def test_async_client_exposes_chat_methods() -> None:
     assert hasattr(DatabaseManagerAsyncClient, "delete_chat_session")
     assert hasattr(DatabaseManagerAsyncClient, "set_turn_duration")
+    assert hasattr(DatabaseManager, "update_chat_session_llm_route")
+    assert hasattr(DatabaseManagerAsyncClient, "update_chat_session_llm_route")
 
 
 def test_bot_analytics_methods_registered() -> None:
@@ -42,3 +44,8 @@ def test_shared_memory_access_is_registered_on_rpc_clients() -> None:
         assert method in DatabaseManager.__dict__
         assert method in DatabaseManagerClient.__dict__
         assert method in DatabaseManagerAsyncClient.__dict__
+
+
+def test_the_audience_consumer_can_read_the_opt_out() -> None:
+    assert hasattr(DatabaseManager, "is_marketing_opted_out")
+    assert hasattr(DatabaseManagerAsyncClient, "is_marketing_opted_out")

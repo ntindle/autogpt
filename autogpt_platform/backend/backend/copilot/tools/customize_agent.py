@@ -14,6 +14,7 @@ from .agent_json_input import (
     resolve_agent_json_or_error,
 )
 from .base import BaseTool
+from .expert_scope import install_saved_agent
 from .models import ErrorResponse, ToolResponseBase
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,8 @@ class CustomizeAgentTool(BaseTool):
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "Library agent IDs as building blocks.",
+                    "title": "Building blocks",
+                    "entity": "library_agent",
                 },
                 "save": {
                     "type": "boolean",
@@ -60,6 +63,7 @@ class CustomizeAgentTool(BaseTool):
                 "folder_id": {
                     "type": "string",
                     "description": "Folder ID to save into (default: root).",
+                    "entity": "library_folder",
                 },
             },
             "required": [],
@@ -85,8 +89,8 @@ class CustomizeAgentTool(BaseTool):
             session=session,
             session_id=session_id,
             missing_message=(
-                "Please provide agent_json with the complete customized agent "
-                "graph, or agent_json_ref pointing at the workspace agent file."
+                "Please provide agent_json with the complete customized "
+                "workflow, or agent_json_ref pointing at the workspace workflow file."
             ),
         )
         if resolve_error is not None:
@@ -118,15 +122,18 @@ class CustomizeAgentTool(BaseTool):
             session.team_id,
         )
 
-        return await fix_validate_and_save(
+        saved = await fix_validate_and_save(
             agent_json,
             user_id=user_id,
             session_id=session_id,
             save=save,
             is_update=False,
-            default_name="Customized Agent",
+            default_name="Customized Workflow",
             organization_id=session.organization_id,
             team_id=session.team_id,
             library_agents=library_agents,
             folder_id=folder_id,
         )
+        if user_id:
+            return await install_saved_agent(user_id, session, saved)
+        return saved

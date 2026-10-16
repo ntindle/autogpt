@@ -9,9 +9,9 @@ from fastapi import FastAPI, HTTPException, Request, Security
 from httpx import ASGITransport, AsyncClient
 from prisma.enums import APIKeyPermission, APIKeyStatus
 
+from backend.api import live_auth as v1
 from backend.api import org_rollout, rest_api
 from backend.api.external import middleware
-from backend.api.features import v1
 from backend.data.auth.api_key import APIKeyInfo
 
 
@@ -230,7 +230,7 @@ async def test_body_team_override_cannot_select_shared_team(rollout_boundary, mo
         v1, "get_user_team_ids", AsyncMock(return_value=["another-team"])
     )
     with pytest.raises(HTTPException) as error:
-        await v1._resolve_write_team_id("owner", "personal", "another-team")
+        await v1.resolve_write_team_id("owner", "personal", "another-team")
     assert error.value.status_code == 403
     membership.assert_awaited_once_with("owner", "personal")
 

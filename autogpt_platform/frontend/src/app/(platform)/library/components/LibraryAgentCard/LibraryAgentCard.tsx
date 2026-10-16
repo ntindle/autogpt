@@ -10,6 +10,7 @@ import { LibraryAgent } from "@/app/api/__generated__/models/libraryAgent";
 import { cn } from "@/lib/utils";
 import { AgentCardMenu } from "./components/AgentCardMenu";
 import { FavoriteButton } from "./components/FavoriteButton";
+import { useImageFallback } from "@/hooks/useImageFallback";
 import { useLibraryAgentCard } from "./useLibraryAgentCard";
 import { useFavoriteAnimation } from "../../context/FavoriteAnimationContext";
 import { StatusBadge } from "../StatusBadge/StatusBadge";
@@ -45,6 +46,7 @@ export function LibraryAgentCard({
     agent.organization_id ?? null,
     agent.team_id ?? null,
   );
+  const { showImage, handleImageError } = useImageFallback(image_url);
   const router = useRouter();
   const { triggerFavoriteAnimation } = useFavoriteAnimation();
 
@@ -109,7 +111,7 @@ export function LibraryAgentCard({
               {name}
             </Text>
 
-            {!image_url ? (
+            {!showImage || !image_url ? (
               <div
                 className={`h-[3.64rem] w-[6.70rem] flex-shrink-0 rounded-small ${
                   [
@@ -133,6 +135,7 @@ export function LibraryAgentCard({
                 height={58}
                 unoptimized={shouldBypassImageOptimization(image_url)}
                 className="flex-shrink-0 rounded-small object-cover"
+                onError={handleImageError}
               />
             )}
           </NextLink>
@@ -157,7 +160,7 @@ export function LibraryAgentCard({
             <button
               type="button"
               onClick={() => {
-                const prompt = `Tell me about my agent "${name}" (library agent ID: ${id}). Use find_library_agent with this exact agent_id to look it up, then summarize its current status, recent runs, and how I can get the most out of it.`;
+                const prompt = `Tell me about my workflow "${name}" (library workflow ID: ${id}). Use find_library_agent with this exact agent_id to look it up, then summarize its current status, recent runs, and how I can get the most out of it.`;
                 router.push(
                   getCopilotStartHref(
                     agent.organization_id ?? null,
@@ -181,7 +184,7 @@ export function LibraryAgentCard({
     return (
       <Tooltip>
         <TooltipTrigger asChild>{card}</TooltipTrigger>
-        <TooltipContent className="max-w-xs text-red-600">
+        <TooltipContent className="max-w-xs text-red-300">
           {statusInfo.lastError}
         </TooltipContent>
       </Tooltip>

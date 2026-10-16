@@ -32,9 +32,9 @@ export function useNeedsAttentionList() {
     const verb = approved ? "approve" : "decline";
     setPending(review.node_exec_id, true);
     try {
-      const res = await processReviews([
-        {
-          item: {
+      const res = await processReviews(
+        [
+          {
             node_exec_id: review.node_exec_id,
             approved,
             // No message: this surface has no field to write one in, and a
@@ -42,11 +42,9 @@ export function useNeedsAttentionList() {
             // audit trail as if the user had typed it.
             auto_approve_future: false,
           },
-          graphExecId: review.graph_exec_id,
-          organizationId: review.organization_id ?? null,
-          teamId: review.team_id ?? null,
-        },
-      ]);
+        ],
+        [review],
+      );
 
       // The mutation resolves rather than throws on a non-200, and a 200 can
       // still carry failed_count > 0 (review already processed, node

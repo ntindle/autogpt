@@ -22,7 +22,7 @@ export function CronSchedulerDialog({
   setOpen,
 
   defaultCronExpression = "",
-  title = "Schedule Graph",
+  title = "Schedule Workflow",
   inputs,
   credentials,
 }: CronSchedulerDialogProps) {
@@ -33,6 +33,7 @@ export function CronSchedulerDialog({
     handleCreateSchedule,
     scheduleName,
     setScheduleName,
+    scheduleNameError,
     isCreatingSchedule,
     teamId,
     setTeamId,
@@ -60,6 +61,7 @@ export function CronSchedulerDialog({
             className="max-w-80"
             value={scheduleName}
             onChange={(e) => setScheduleName(e.target.value)}
+            error={scheduleNameError}
           />
 
           <TeamPicker

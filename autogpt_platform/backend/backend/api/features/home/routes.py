@@ -24,6 +24,7 @@ async def get_home_dashboard(
 ) -> HomeDashboardResponse:
     return await build_home_dashboard(
         user_id=user_id,
+        ctx=ctx,
         organization_id=ctx.org_id,
         team_id=ctx.team_id,
     )

@@ -5,7 +5,11 @@ from typing import Any
 
 from backend.copilot.graphiti.client import derive_org_group_id, derive_team_group_id
 from backend.copilot.graphiti.config import is_enabled_for_user
-from backend.copilot.graphiti.ingest import MAX_EPISODE_BODY_BYTES, enqueue_episode
+from backend.copilot.graphiti.ingest import (
+    MAX_EPISODE_BODY_BYTES,
+    enqueue_episode,
+    resolve_user_name,
+)
 from backend.copilot.graphiti.memory_model import (
     MemoryEnvelope,
     MemoryKind,
@@ -331,6 +335,7 @@ class MemoryStoreTool(BaseTool):
             resource_team_id = membership.team_id
 
         envelope = MemoryEnvelope(
+            user=await resolve_user_name(user_id),
             content=content,
             source_kind=resolved_source,
             scope=scope,

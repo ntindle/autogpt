@@ -5,19 +5,25 @@ import pytest
 from autogpt_libs.auth.models import RequestContext
 from fastapi import HTTPException
 
-from backend.api.features import v1
+from backend.api.features.api_keys import routes as api_keys
+from backend.api.features.graphs import routes as graphs
+from backend.api.features.schedules import routes as schedules
 
 
 @pytest.mark.asyncio
 async def test_org_home_execute_rejects_team_only_graph_before_create(mocker) -> None:
     credit_model = MagicMock(get_credits=AsyncMock(return_value=1))
-    mocker.patch.object(v1, "get_credit_model", AsyncMock(return_value=credit_model))
+    mocker.patch.object(
+        graphs, "get_credit_model", AsyncMock(return_value=credit_model)
+    )
     exact_lookup = AsyncMock(return_value=None)
     resolve_grant = AsyncMock()
     add_execution = AsyncMock()
-    mocker.patch.object(v1.library_db, "get_library_agent_by_graph_id", exact_lookup)
-    mocker.patch.object(v1, "resolve_graph_grant", resolve_grant)
-    mocker.patch.object(v1.execution_utils, "add_graph_execution", add_execution)
+    mocker.patch.object(
+        graphs.library_db, "get_library_agent_by_graph_id", exact_lookup
+    )
+    mocker.patch.object(graphs, "resolve_graph_grant", resolve_grant)
+    mocker.patch.object(graphs.execution_utils, "add_graph_execution", add_execution)
     ctx = RequestContext(
         user_id="user-1",
         org_id="org-1",
@@ -31,7 +37,7 @@ async def test_org_home_execute_rejects_team_only_graph_before_create(mocker) ->
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await v1.execute_graph(
+        await graphs.execute_graph(
             graph_id="graph-1",
             user_id="user-1",
             ctx=ctx,
@@ -57,13 +63,17 @@ async def test_org_home_execute_rejects_team_only_graph_before_create(mocker) ->
 @pytest.mark.asyncio
 async def test_execute_rejects_foreign_preset_before_graph_lookup(mocker) -> None:
     credit_model = MagicMock(get_credits=AsyncMock(return_value=1))
-    mocker.patch.object(v1, "get_credit_model", AsyncMock(return_value=credit_model))
+    mocker.patch.object(
+        graphs, "get_credit_model", AsyncMock(return_value=credit_model)
+    )
     get_preset = AsyncMock(return_value=None)
     exact_lookup = AsyncMock()
     add_execution = AsyncMock()
-    mocker.patch.object(v1.library_db, "get_preset", get_preset)
-    mocker.patch.object(v1.library_db, "get_library_agent_by_graph_id", exact_lookup)
-    mocker.patch.object(v1.execution_utils, "add_graph_execution", add_execution)
+    mocker.patch.object(graphs.library_db, "get_preset", get_preset)
+    mocker.patch.object(
+        graphs.library_db, "get_library_agent_by_graph_id", exact_lookup
+    )
+    mocker.patch.object(graphs.execution_utils, "add_graph_execution", add_execution)
     ctx = RequestContext(
         user_id="user-1",
         org_id="org-1",
@@ -77,7 +87,7 @@ async def test_execute_rejects_foreign_preset_before_graph_lookup(mocker) -> Non
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await v1.execute_graph(
+        await graphs.execute_graph(
             graph_id="graph-1",
             user_id="user-1",
             ctx=ctx,
@@ -111,36 +121,38 @@ async def test_team_schedule_accepts_exact_consumer_authorization(
         organization_id="publisher-org",
         team_id="publisher-team",
     )
-    mocker.patch.object(v1.graph_db, "get_graph", AsyncMock(return_value=graph))
+    mocker.patch.object(schedules.graph_db, "get_graph", AsyncMock(return_value=graph))
     mocker.patch.object(
-        v1.experts_db, "resolve_expert_for_graph", AsyncMock(return_value=None)
+        schedules.experts_db, "resolve_expert_for_graph", AsyncMock(return_value=None)
     )
     exact_lookup = AsyncMock(
-        return_value=MagicMock(id="consumer-install")
-        if authorization == "wrapper"
-        else None
+        return_value=(
+            MagicMock(id="consumer-install") if authorization == "wrapper" else None
+        )
     )
     grant = AsyncMock(
-        return_value=MagicMock(principalId="team-a")
-        if authorization == "grant"
-        else None
+        return_value=(
+            MagicMock(principalId="team-a") if authorization == "grant" else None
+        )
     )
-    mocker.patch.object(v1.library_db, "get_library_agent_by_graph_id", exact_lookup)
-    mocker.patch.object(v1, "resolve_graph_grant", grant)
+    mocker.patch.object(
+        schedules.library_db, "get_library_agent_by_graph_id", exact_lookup
+    )
+    mocker.patch.object(schedules, "resolve_graph_grant", grant)
     scheduled = MagicMock(next_run_time=None)
     add_schedule = AsyncMock(return_value=scheduled)
     mocker.patch.object(
-        v1,
+        schedules,
         "get_scheduler_client",
         return_value=MagicMock(add_execution_schedule=add_schedule),
     )
-    mocker.patch.object(v1, "complete_onboarding_step", AsyncMock())
+    mocker.patch.object(schedules, "complete_onboarding_step", AsyncMock())
 
     @asynccontextmanager
     async def allow_scope(*_args, **_kwargs):
         yield True
 
-    mocker.patch.object(v1, "live_resource_permission_barrier", allow_scope)
+    mocker.patch.object(schedules, "live_resource_permission_barrier", allow_scope)
     ctx = RequestContext(
         user_id="user-1",
         org_id="consumer-org",
@@ -153,11 +165,11 @@ async def test_team_schedule_accepts_exact_consumer_authorization(
         seat_status="ACTIVE",
     )
 
-    result = await v1.create_graph_execution_schedule(
+    result = await schedules.create_graph_execution_schedule(
         user_id="user-1",
         ctx=ctx,
         graph_id="graph-1",
-        schedule_params=v1.ScheduleCreationRequest(
+        schedule_params=schedules.ScheduleCreationRequest(
             graph_version=3,
             name="Consumer schedule",
             cron="0 * * * *",
@@ -177,7 +189,7 @@ async def test_team_schedule_accepts_exact_consumer_authorization(
     )
     assert add_schedule.await_args.kwargs["organization_id"] == "consumer-org"
     assert add_schedule.await_args.kwargs["team_id"] == "team-a"
-    v1.experts_db.resolve_expert_for_graph.assert_awaited_once_with(
+    schedules.experts_db.resolve_expert_for_graph.assert_awaited_once_with(
         "user-1",
         "graph-1",
         organization_id="consumer-org",
@@ -192,9 +204,11 @@ async def test_team_schedule_accepts_exact_consumer_authorization(
 
 @pytest.mark.asyncio
 async def test_api_key_body_team_checks_target_manage_permission(mocker) -> None:
-    mocker.patch.object(v1, "_resolve_write_team_id", AsyncMock(return_value="team-a"))
+    mocker.patch.object(
+        api_keys, "resolve_write_team_id", AsyncMock(return_value="team-a")
+    )
     create_key = AsyncMock()
-    mocker.patch.object(v1.api_key_db, "create_api_key", create_key)
+    mocker.patch.object(api_keys.api_key_db, "create_api_key", create_key)
     checked_scope: list[tuple] = []
 
     @asynccontextmanager
@@ -202,7 +216,7 @@ async def test_api_key_body_team_checks_target_manage_permission(mocker) -> None
         checked_scope.append(args)
         yield False
 
-    mocker.patch.object(v1, "live_resource_permission_barrier", deny_target)
+    mocker.patch.object(api_keys, "live_resource_permission_barrier", deny_target)
     ctx = RequestContext(
         user_id="user-1",
         org_id="org-1",
@@ -216,8 +230,8 @@ async def test_api_key_body_team_checks_target_manage_permission(mocker) -> None
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        await v1.create_api_key(
-            request=v1.CreateAPIKeyRequest(
+        await api_keys.create_api_key(
+            request=api_keys.CreateAPIKeyRequest(
                 name="team key",
                 permissions=[],
                 team_id="team-a",
@@ -232,8 +246,8 @@ async def test_api_key_body_team_checks_target_manage_permission(mocker) -> None
             "user-1",
             "org-1",
             "team-a",
-            v1.OrgAction.MANAGE_CREDENTIALS,
-            v1.TeamAction.MANAGE_CREDENTIALS,
+            api_keys.OrgAction.MANAGE_CREDENTIALS,
+            api_keys.TeamAction.MANAGE_CREDENTIALS,
         )
     ]
     create_key.assert_not_awaited()

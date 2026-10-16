@@ -34,6 +34,7 @@ import socket
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import AsyncIterator
 
 import pytest
@@ -55,6 +56,19 @@ from .falkordb_driver import AutoGPTFalkorDriver
 def _enable_shared_memory_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shared-memory behavior tests opt into the organization rollout."""
     monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "true")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    graphiti_dir = Path(__file__).parent
+    for item in items:
+        if not item.path.is_relative_to(graphiti_dir):
+            continue
+        if not pytest_asyncio.is_async_test(item):
+            continue
+        asyncio_marker = item.get_closest_marker("asyncio")
+        if asyncio_marker and "loop_scope" in asyncio_marker.kwargs:
+            continue
+        item.add_marker(pytest.mark.asyncio(loop_scope="function"), append=False)
 
 
 class ScriptedLLMClient(LLMClient):

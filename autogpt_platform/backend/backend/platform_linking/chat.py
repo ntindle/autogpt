@@ -25,6 +25,8 @@ from backend.copilot.rate_limit import (
     get_global_rate_limits,
     is_user_paywalled,
 )
+from backend.copilot.transports import resolve_default_chat_route
+from backend.copilot.tree import root_envelope
 from backend.data.db_accessors import orgs_db, platform_linking_db, workspace_db
 from backend.data.tenancy import has_live_resource_access, live_resource_access_barrier
 from backend.util.exceptions import DuplicateChatMessageError, NotFoundError
@@ -118,7 +120,7 @@ def _unavailable_denial() -> TurnDenial:
     mirrors the web route's 503-on-lookup-failure behaviour."""
     return TurnDenial(
         reason="unavailable",
-        message="AutoPilot is temporarily unavailable — please try again in a moment.",
+        message="Chat is temporarily unavailable — please try again in a moment.",
     )
 
 
@@ -141,8 +143,8 @@ async def _check_paywall(user_id: str) -> TurnDenial | None:
     return TurnDenial(
         reason="paywalled",
         message=(
-            "AutoPilot needs an active subscription. "
-            "Upgrade your plan to start chatting with it."
+            "Chatting with experts requires an active subscription. "
+            "Upgrade your plan to start chatting."
         ),
         button_label="Subscribe" if billing else None,
         button_url=billing,
@@ -162,6 +164,7 @@ async def _check_usage_limits(user_id: str) -> TurnDenial | None:
             user_id=user_id,
             daily_cost_limit=daily,
             weekly_cost_limit=weekly,
+            expected_tier=_tier,
         )
     except RateLimitExceeded as exc:
         # str(exc) already reads e.g. "You've reached your daily usage limit.
@@ -198,7 +201,7 @@ async def evaluate_turn_gate(user_id: str) -> TurnDenial | None:
     return await _check_paywall(user_id) or await _check_usage_limits(user_id)
 
 
-async def _resolve_owner(
+async def resolve_owner(
     platform: str, platform_server_id: str | None, platform_user_id: str
 ) -> str:
     """Resolve the AutoGPT user that owns a platform conversation.
@@ -225,7 +228,7 @@ async def _resolve_owner(
 
 async def resolve_chat_owner(request: BotChatRequest) -> str:
     """Return the AutoGPT user ID that owns the platform conversation."""
-    return await _resolve_owner(
+    return await resolve_owner(
         request.platform.value,
         request.platform_server_id,
         request.platform_user_id,
@@ -246,7 +249,7 @@ async def _live_platform_link(
         platform_user_id,
     )
     try:
-        current_owner = await _resolve_owner(
+        current_owner = await resolve_owner(
             platform,
             platform_server_id,
             platform_user_id,
@@ -266,11 +269,11 @@ async def upload_workspace_file(
     """Store a user-attached file in the conversation owner's workspace.
 
     Runs the same machinery as the web upload endpoint
-    (``WorkspaceManager.write_file`` → ClamAV scan → storage), so AutoPilot can
+    (``WorkspaceManager.write_file`` → ClamAV scan → storage), so Otto can
     read the file during the turn. Failures map to a stable ``error`` code
     rather than raising, so one bad file doesn't sink the whole message.
     """
-    owner_user_id = await _resolve_owner(
+    owner_user_id = await resolve_owner(
         request.platform.value,
         request.platform_server_id,
         request.platform_user_id,
@@ -376,12 +379,17 @@ async def _resolve_or_create_session(
         ) as allowed:
             if not allowed:
                 raise NotFoundError("The selected workspace is no longer available.")
+            llm_auth_provider, llm_credential_id = await resolve_default_chat_route(
+                owner_user_id
+            )
             session = await create_chat_session(
                 owner_user_id,
                 dry_run=False,
                 organization_id=org_id,
                 team_id=team_id,
                 source_platform=source_platform,
+                llm_auth_provider=llm_auth_provider,
+                llm_credential_id=llm_credential_id,
             )
             if not _session_matches_scope(session, org_id, team_id):
                 raise NotFoundError("The selected workspace is no longer available.")
@@ -400,7 +408,7 @@ async def ensure_chat_session(
 
     Called before uploading attachments so they can be written into the
     session folder — mirroring the web UI, which uploads into an already-open
-    session so files land at /sessions/<id>/ where AutoPilot reads them.
+    session so files land at /sessions/<id>/ where Otto reads them.
 
     Evaluates the turn gate first: a capped/paywalled user gets the denial
     back *before* any file is scanned or stored (the caller renders it and
@@ -408,7 +416,7 @@ async def ensure_chat_session(
     authoritative enforcement point; this early check exists purely to spare
     the wasted upload.
     """
-    owner_user_id = await _resolve_owner(
+    owner_user_id = await resolve_owner(
         platform.value, platform_server_id, platform_user_id
     )
 
@@ -520,6 +528,7 @@ async def start_chat_turn(request: BotChatRequest) -> ChatTurnHandle:
                 file_ids=request.file_ids or None,
                 llm_auth_provider=session.metadata.llm_auth_provider,
                 llm_credential_id=session.metadata.llm_credential_id,
+                envelope=root_envelope(turn_id, tainted=True, session_id=session_id),
             )
         logger.info(
             "Bot chat turn started: %s (server %s, session %s, turn %s, owner ...%s)",

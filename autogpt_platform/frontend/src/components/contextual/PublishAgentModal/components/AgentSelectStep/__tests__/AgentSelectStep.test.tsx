@@ -207,7 +207,7 @@ describe("AgentSelectStep", () => {
 
     expect(
       await screen.findByText(
-        "No publishable agents yet",
+        "No publishable workflows yet",
         {},
         { timeout: 3000 },
       ),
@@ -231,7 +231,7 @@ describe("AgentSelectStep", () => {
     await screen.findByText("Agent 1", {}, { timeout: 3000 });
 
     fireEvent.change(
-      screen.getByRole("searchbox", { name: "Search your agents" }),
+      screen.getByRole("searchbox", { name: "Search your workflows" }),
       { target: { value: "invoice" } },
     );
 
@@ -258,7 +258,7 @@ describe("AgentSelectStep", () => {
     await screen.findByText("Agent 1", {}, { timeout: 3000 });
 
     fireEvent.change(
-      screen.getByRole("searchbox", { name: "Search your agents" }),
+      screen.getByRole("searchbox", { name: "Search your workflows" }),
       { target: { value: "unknown" } },
     );
 
@@ -334,7 +334,7 @@ describe("AgentSelectStep", () => {
 
     expect(
       await screen.findByText(
-        "We could not load your agents",
+        "We could not load your workflows",
         {},
         { timeout: 3000 },
       ),

@@ -25,7 +25,8 @@ import logging
 from typing import Any
 
 from backend.api.features.experts.models import Expert
-from backend.copilot.active_turns import running_turn_limit_message
+from backend.copilot.active_turns import spawn_limit_message
+from backend.copilot.budget_signal import build_spawn_state_note
 from backend.copilot.context import get_current_permissions
 from backend.copilot.model import (
     ChatSession,
@@ -35,8 +36,10 @@ from backend.copilot.model import (
 )
 from backend.copilot.sdk.session_waiter import (
     SessionOutcome,
+    SessionResult,
     run_copilot_turn_via_queue,
 )
+from backend.copilot.tree import SpawnRequest
 from backend.data.db_accessors import experts_db
 from backend.data.tenancy import ResourceAccess
 
@@ -46,6 +49,7 @@ from .expert_delegation import (
     expert_matches_session_workspace,
     resolve_target_expert,
     safe_caller_name,
+    sent_from_metadata,
     unknown_target_message,
 )
 from .models import (
@@ -62,7 +66,7 @@ logger = logging.getLogger(__name__)
 # already picked up, or appended to a turn in flight there. Anything else (the
 # concurrent-turn cap, a failed dispatch) means nothing moved.
 _OWNERSHIP_TAKEN: frozenset[SessionOutcome] = frozenset(
-    {"running", "queued", "completed"}
+    {"running", "queued", "queued_for_slot", "completed"}
 )
 
 
@@ -115,6 +119,7 @@ class HandoffToExpertTool(BaseTool):
                     "description": (
                         "Teammate taking it over, from <team_context>. Not you."
                     ),
+                    "entity": "expert",
                 },
                 "prompt": {
                     "type": "string",
@@ -122,11 +127,13 @@ class HandoffToExpertTool(BaseTool):
                         "The task, written for them. They cannot see this "
                         "conversation or ask you follow-ups."
                     ),
+                    "title": "Task",
                 },
                 "context": {
                     "type": "string",
                     "description": "Optional background; what you already tried.",
                     "default": "",
+                    "title": "Background",
                 },
             },
             "required": ["expert_id", "prompt"],
@@ -187,7 +194,7 @@ class HandoffToExpertTool(BaseTool):
             handed_off_from_expert_id=session.expert_id,
             origin=child_session_origin(session.metadata),
         )
-        outcome = await self._queue_task(
+        outcome, result = await self._queue_task(
             user_id, session, inner.session_id, prompt, context
         )
         if outcome not in _OWNERSHIP_TAKEN:
@@ -203,15 +210,21 @@ class HandoffToExpertTool(BaseTool):
                     inner.session_id,
                     exc_info=True,
                 )
-            return self._error(_refused_transfer_message(target.name, outcome), session)
+            return self._error(
+                _refused_transfer_message(target.name, outcome, result.refusal),
+                session,
+            )
+        transferred = _transferred_response(
+            inner_session_id=inner.session_id,
+            parent_session_id=session.session_id,
+            target_name=target.name,
+            waiting_for_slot=outcome == "queued_for_slot",
+            organization_id=target.organization_id,
+            team_id=target.team_id,
+        )
+        transferred.message += await build_spawn_state_note()
         return apply_delegated_expert(
-            _transferred_response(
-                inner_session_id=inner.session_id,
-                parent_session_id=session.session_id,
-                target_name=target.name,
-                organization_id=target.organization_id,
-                team_id=target.team_id,
-            ),
+            transferred,
             # Identity for the ToolChain card, so it names the new owner.
             DelegatedExpertInfo(
                 id=target.id,
@@ -229,10 +242,10 @@ class HandoffToExpertTool(BaseTool):
         inner_session_id: str,
         prompt: str,
         context: str,
-    ) -> SessionOutcome:
+    ) -> tuple[SessionOutcome, SessionResult]:
         """Push the framed task onto the target's session. Never waits."""
         caller = await self._caller_name(user_id, session.expert_id, session)
-        outcome, _result = await run_copilot_turn_via_queue(
+        return await run_copilot_turn_via_queue(
             session_id=inner_session_id,
             user_id=user_id,
             message=_transfer_message(caller, context, prompt),
@@ -242,8 +255,10 @@ class HandoffToExpertTool(BaseTool):
                 f"handoff:{session.session_id}" if session.session_id else "handoff"
             ),
             tool_name="handoff_to_expert",
+            spawn=SpawnRequest(may_spawn=True),
+            allow_queue=False,
+            message_metadata=sent_from_metadata(session, caller),
         )
-        return outcome
 
     def _error(self, message: str, session: ChatSession) -> ErrorResponse:
         return ErrorResponse(message=message, session_id=session.session_id)
@@ -284,7 +299,7 @@ class HandoffToExpertTool(BaseTool):
         session: ChatSession,
     ) -> str:
         if caller_expert_id is None:
-            return "AutoPilot"
+            return "Otto"
         try:
             caller = await experts_db().get_expert(
                 user_id, caller_expert_id, include_workflows=False
@@ -309,7 +324,7 @@ def _request_refusal(
         return "prompt is required"
     if caller_expert_id is None:
         # The ``experts`` tool group already hides and refuses this tool for a
-        # plain Autopilot session, so this is defence in depth — but the
+        # plain Otto session, so this is defence in depth — but the
         # failure it prevents is silent rather than loud: ``_transfer`` would
         # persist ``handed_off_from_expert_id`` as JSON null while still
         # setting ``delegated_by_session_id``, and the Home pending-question
@@ -335,6 +350,7 @@ def _transferred_response(
     target_name: str,
     organization_id: str | None = None,
     team_id: str | None = None,
+    waiting_for_slot: bool = False,
 ) -> SubSessionStatusResponse:
     """The terminal handoff contract: ownership moved, nothing to poll.
 
@@ -347,8 +363,9 @@ def _transferred_response(
     link = _sub_session_link(inner_session_id, organization_id, team_id)
     return SubSessionStatusResponse(
         message=(
-            f"{target_name} owns this now and will report to the user "
-            f"directly.{f' Follow along at {link}.' if link else ''}"
+            f"{target_name} owns this now and will report to the user directly"
+            f"{', starting when one of their task slots frees' if waiting_for_slot else ''}."
+            f"{f' Follow along at {link}.' if link else ''}"
         ),
         session_id=parent_session_id,
         status="transferred",
@@ -358,13 +375,20 @@ def _transferred_response(
     )
 
 
-def _refused_transfer_message(target_name: str, outcome: SessionOutcome) -> str:
+def _refused_transfer_message(
+    target_name: str, outcome: SessionOutcome, refusal: str = ""
+) -> str:
     """Say plainly that nothing moved, so the model doesn't announce a handoff
     that never happened and then drop the task."""
     if outcome == "rejected_concurrent_turn_cap":
         return (
             f"The handoff to {target_name} did not happen — the task is still "
-            f"yours. {running_turn_limit_message()}"
+            f"yours. {spawn_limit_message()}"
+        )
+    if outcome == "refused" and refusal:
+        return (
+            f"The handoff to {target_name} did not happen — the task is still "
+            f"yours. {refusal}"
         )
     return (
         f"The handoff to {target_name} did not happen — their session could not "

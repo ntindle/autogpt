@@ -74,7 +74,8 @@ export const AgentOutputs = ({ flowID }: { flowID: string | null }) => {
           metadata: {
             name: node.data.hardcodedValues?.name || "Output",
             description:
-              node.data.hardcodedValues?.description || "Output from the agent",
+              node.data.hardcodedValues?.description ||
+              "Output from the workflow",
             organizationId: tenantScope.organizationId,
             teamId: tenantScope.teamId,
           },
@@ -111,7 +112,7 @@ export const AgentOutputs = ({ flowID }: { flowID: string | null }) => {
             </SheetTrigger>
           </TooltipTrigger>
           <TooltipContent>
-            <p>Agent Outputs</p>
+            <p>Workflow Outputs</p>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>

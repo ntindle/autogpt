@@ -30,10 +30,12 @@ def _live_dependency_kind(dependant: Dependant) -> str | None:
         "require_live_library_"
     ):
         return "library mutation"
-    if module == "backend.api.features.v1" and name.startswith("_live_graph_"):
+    if module == "backend.api.features.graphs.routes" and name.startswith(
+        "_live_graph_"
+    ):
         return "graph mutation"
     if (
-        module == "backend.api.features.executions.review.routes"
+        module == "backend.api.features.graph_executions.review.routes"
         and name == "_live_review_action_dependency"
     ):
         return "review mutation"

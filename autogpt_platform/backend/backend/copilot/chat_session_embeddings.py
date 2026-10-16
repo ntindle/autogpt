@@ -4,13 +4,13 @@ import logging
 
 from prisma.enums import ContentType
 
+from backend.data.db_accessors import embeddings_db
+
 logger = logging.getLogger(__name__)
 
 
 async def _delete_content_embedding(session_id: str, user_id: str) -> None:
-    from backend.api.features.search.embeddings import delete_content_embedding
-
-    await delete_content_embedding(
+    await embeddings_db().delete_content_embedding(
         ContentType.CHAT_SESSION, session_id, user_id=user_id
     )
 

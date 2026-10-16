@@ -1,21 +1,20 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  bulkMoveWorkspaceFiles,
-  createWorkspaceFolder,
-  deleteWorkspaceFolder,
-  getListWorkspaceFoldersQueryKey,
-  updateWorkspaceFolder,
-  useListWorkspaceFolders,
-} from "@/app/api/__generated__/endpoints/workspace/workspace";
-import type { WorkspaceFolder } from "@/app/api/__generated__/models/workspaceFolder";
-import { okData } from "@/app/api/helpers";
 import {
   getTeamScopedQueryKey,
   getTenantRequestInit,
 } from "@/components/contextual/TeamPicker/helpers";
-import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useOrgTeamStore } from "@/services/org-team/store";
-import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
+import { useQueryClient } from "@tanstack/react-query";
+import {
+  getListWorkspaceFoldersQueryKey,
+  useBulkMoveWorkspaceFiles,
+  useCreateWorkspaceFolder,
+  useDeleteWorkspaceFolder,
+  useListWorkspaceFolders,
+  useUpdateWorkspaceFolder,
+} from "@/app/api/__generated__/endpoints/workspace/workspace";
+import { okData } from "@/app/api/helpers";
+import { ApiError } from "@/lib/autogpt-server-api/helpers";
+import { useToast } from "@/components/molecules/Toast/use-toast";
 import { ARTIFACTS_LIST_QUERY_KEY } from "./useArtifactsPage";
 
 interface TenantScope {
@@ -23,35 +22,30 @@ interface TenantScope {
   teamId: string | null;
 }
 
-function folderScope(folder: WorkspaceFolder): TenantScope {
-  return {
-    organizationId: folder.organization_id ?? null,
-    teamId: folder.team_id ?? null,
-  };
-}
-
 export function useArtifactsFolders(requestedScope?: TenantScope) {
-  const collaborationEnabled = useGetFlag(Flag.SHOW_ORG_SETTINGS);
+  const activeOrgID = useOrgTeamStore((state) => state.activeOrgID);
+  const activeTeamID = useOrgTeamStore((state) => state.activeTeamID);
+  const isTenantReady = useOrgTeamStore((state) => state.isLoaded);
+  const organizationId = requestedScope
+    ? requestedScope.organizationId
+    : activeOrgID;
+  const teamId = requestedScope ? requestedScope.teamId : activeTeamID;
+  const request = getTenantRequestInit(organizationId, teamId, isTenantReady);
+
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const activeOrgID = useOrgTeamStore((s) => s.activeOrgID);
-  const activeTeamID = useOrgTeamStore((s) => s.activeTeamID);
-  const isTenantReady = useOrgTeamStore((s) => s.isLoaded);
-  const scope = collaborationEnabled ? requestedScope : undefined;
-  const organizationId = scope ? scope.organizationId : activeOrgID;
-  const teamId = scope ? scope.teamId : activeTeamID;
 
   const foldersQuery = useListWorkspaceFolders({
     query: {
+      select: okData,
       enabled: isTenantReady,
       queryKey: getTeamScopedQueryKey(
         getListWorkspaceFoldersQueryKey(),
         organizationId,
         teamId,
       ),
-      select: okData,
     },
-    request: getTenantRequestInit(organizationId, teamId, isTenantReady),
+    request,
   });
 
   function invalidate() {
@@ -61,94 +55,82 @@ export function useArtifactsFolders(requestedScope?: TenantScope) {
     queryClient.invalidateQueries({ queryKey: ARTIFACTS_LIST_QUERY_KEY });
   }
 
-  const createMutation = useMutation({
-    mutationFn: ({ name }: { name: string }) =>
-      createWorkspaceFolder(
-        { name },
-        getTenantRequestInit(organizationId, teamId),
-      ),
-    onSuccess: () => {
-      invalidate();
-      toast({ title: "Folder created" });
-    },
-    onError: () => {
-      toast({
-        title: "Failed to create folder",
-        description: "A folder with this name may already exist.",
-        variant: "destructive",
-      });
+  const createMutation = useCreateWorkspaceFolder({
+    request,
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        toast({ title: "Folder created" });
+      },
+      onError: () => {
+        toast({
+          title: "Failed to create folder",
+          description: "A folder with this name may already exist.",
+          variant: "destructive",
+        });
+      },
     },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({
-      folder,
-      name,
-    }: {
-      folder: WorkspaceFolder;
-      name?: string;
-    }) =>
-      updateWorkspaceFolder(
-        folder.id,
-        { name },
-        getTenantRequestInit(
-          folder.organization_id ?? null,
-          folder.team_id ?? null,
-        ),
-      ),
-    onSuccess: () => {
-      invalidate();
-      toast({ title: "Folder updated" });
-    },
-    onError: () => {
-      toast({
-        title: "Failed to update folder",
-        variant: "destructive",
-      });
+  const updateMutation = useUpdateWorkspaceFolder({
+    request,
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        toast({ title: "Folder updated" });
+      },
+      onError: () => {
+        toast({
+          title: "Failed to update folder",
+          variant: "destructive",
+        });
+      },
     },
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: (folder: WorkspaceFolder) =>
-      deleteWorkspaceFolder(
-        folder.id,
-        getTenantRequestInit(
-          folder.organization_id ?? null,
-          folder.team_id ?? null,
-        ),
-      ),
-    onSuccess: () => {
-      invalidate();
-      toast({ title: "Folder deleted", description: "Files moved to root." });
-    },
-    onError: () => {
-      toast({
-        title: "Failed to delete folder",
-        variant: "destructive",
-      });
+  // Its own instance of the same endpoint: a move reports differently from a
+  // rename, and the 409/400 the destination can raise have no rename analogue.
+  const moveFolderMutation = useUpdateWorkspaceFolder({
+    request,
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        toast({ title: "Folder moved" });
+      },
     },
   });
 
-  const moveMutation = useMutation({
-    mutationFn: ({
-      fileId,
-      folderId,
-      sourceScope,
-    }: {
-      fileId: string;
-      folderId: string | null;
-      sourceScope: TenantScope;
-    }) =>
-      bulkMoveWorkspaceFiles(
-        { file_ids: [fileId], folder_id: folderId },
-        getTenantRequestInit(sourceScope.organizationId, sourceScope.teamId),
-      ),
-    onSuccess: () => {
-      invalidate();
-      toast({ title: "File moved" });
+  const deleteMutation = useDeleteWorkspaceFolder({
+    request,
+    mutation: {
+      onSuccess: () => {
+        invalidate();
+        toast({ title: "Folder deleted", description: "Files moved to root." });
+      },
+      onError: () => {
+        toast({
+          title: "Failed to delete folder",
+          variant: "destructive",
+        });
+      },
     },
-    onError: () => {
-      toast({ title: "Failed to move file", variant: "destructive" });
+  });
+
+  const moveMutation = useBulkMoveWorkspaceFiles({
+    request,
+    mutation: {
+      onSuccess: (_, variables) => {
+        invalidate();
+        const count = variables.data.file_ids.length;
+        toast({ title: count === 1 ? "File moved" : `${count} files moved` });
+      },
+      onError: (_, variables) => {
+        const count = variables.data.file_ids.length;
+        toast({
+          title: count === 1 ? "Failed to move file" : "Failed to move files",
+          variant: "destructive",
+        });
+      },
     },
   });
 
@@ -157,38 +139,52 @@ export function useArtifactsFolders(requestedScope?: TenantScope) {
     isLoading: foldersQuery.isLoading,
     isError: foldersQuery.isError,
     error: foldersQuery.error,
-    createFolder: (args: { name: string }) =>
-      createMutation.mutateAsync({ name: args.name }),
+    createFolder: (args: { name: string; parentId?: string | null }) =>
+      createMutation.mutateAsync({
+        data: { name: args.name, parent_id: args.parentId ?? null },
+      }),
     isCreating: createMutation.isPending,
-    updateFolder: (args: { folder: WorkspaceFolder; name?: string }) =>
-      updateMutation.mutateAsync(args),
+    updateFolder: (args: { folderId: string; name?: string }) =>
+      updateMutation.mutateAsync({
+        folderId: args.folderId,
+        data: { name: args.name },
+      }),
     isUpdating: updateMutation.isPending,
-    deleteFolder: (folder: WorkspaceFolder) =>
-      deleteMutation.mutateAsync(folder),
-    isDeleting: deleteMutation.isPending,
-    moveFileToFolder: (args: {
-      fileId: string;
-      folder: WorkspaceFolder | null;
-      sourceScope: TenantScope;
-    }) => {
-      if (args.folder) {
-        const destinationScope = folderScope(args.folder);
-        if (
-          destinationScope.organizationId !== args.sourceScope.organizationId ||
-          destinationScope.teamId !== args.sourceScope.teamId
-        ) {
+    // `parent_id` is sent explicitly on every move, `null` meaning the root;
+    // the backend reads `model_fields_set`, so omitting it would mean "stay".
+    moveFolder: (args: {
+      folderId: string;
+      parentId: string | null;
+      name: string;
+    }) =>
+      moveFolderMutation
+        .mutateAsync({
+          folderId: args.folderId,
+          data: { parent_id: args.parentId },
+        })
+        .catch((error: unknown) => {
+          // The name the 409 message needs is not in the request body —
+          // sending it would rename the folder — so the toast lives here.
           toast({
-            title: "Choose a folder in the same team",
+            title: describeFolderMoveError(error, args.name),
             variant: "destructive",
           });
-          return Promise.reject(new Error("Cross-tenant move is not allowed"));
-        }
-      }
-      return moveMutation.mutateAsync({
-        fileId: args.fileId,
-        folderId: args.folder?.id ?? null,
-        sourceScope: args.sourceScope,
-      });
-    },
+          throw error;
+        }),
+    isMovingFolder: moveFolderMutation.isPending,
+    deleteFolder: (folderId: string) =>
+      deleteMutation.mutateAsync({ folderId }),
+    isDeleting: deleteMutation.isPending,
+    moveFilesToFolder: (args: { fileIds: string[]; folderId: string | null }) =>
+      moveMutation.mutateAsync({
+        data: { file_ids: args.fileIds, folder_id: args.folderId },
+      }),
   };
+}
+
+export function describeFolderMoveError(error: unknown, name: string): string {
+  const status = error instanceof ApiError ? error.status : null;
+  if (status === 409) return `A folder named “${name}” is already there`;
+  if (status === 400) return "A folder can't be moved into itself";
+  return "Failed to move folder";
 }

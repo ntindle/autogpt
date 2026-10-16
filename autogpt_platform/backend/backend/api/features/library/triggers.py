@@ -165,10 +165,10 @@ async def _setup_triggered_preset_locked(
             raise NotFoundError(f"Graph #{graph_id} is not accessible (anymore)")
 
     # ``expert_id`` is the calling context's authoritative scope: a session
-    # expert for expert-scoped copilot sessions, ``None`` for AutoPilot
+    # expert for expert-scoped copilot sessions, ``None`` for Otto
     # sessions AND for the HTTP route (which resolves graph-match attribution
     # itself before calling in). No graph-match fallback here — re-attributing
-    # an AutoPilot session's preset to an expert would make it invisible to
+    # an Otto session's preset to an expert would make it invisible to
     # that session's list/update/delete/run scope filters while its webhook
     # stays live. create_preset re-validates the expert under the same
     # transaction as the durable write.

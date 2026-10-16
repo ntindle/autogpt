@@ -19,8 +19,8 @@ import { TeamPicker } from "@/components/contextual/TeamPicker/TeamPicker";
 import { CreateSurface } from "@/components/contextual/TeamPicker/helpers";
 
 export const uploadAgentFormSchema = z.object({
-  agentFile: z.string().min(1, "Agent file is required"),
-  agentName: z.string().min(1, "Agent name is required"),
+  agentFile: z.string().min(1, "Workflow file is required"),
+  agentName: z.string().min(1, "Workflow name is required"),
   agentDescription: z.string(),
 });
 
@@ -39,7 +39,7 @@ export default function LibraryUploadAgentDialog() {
 
   return (
     <Dialog
-      title="Upload Agent"
+      title="Upload Workflow"
       styling={{ maxWidth: "30rem" }}
       controlled={{
         isOpen,
@@ -57,7 +57,7 @@ export default function LibraryUploadAgentDialog() {
           size="small"
         >
           <Icon icon={Upload03Icon} width={18} height={18} />
-          <span className="">Upload agent</span>
+          <span className="">Upload workflow</span>
         </Button>
       </Dialog.Trigger>
       <Dialog.Content>
@@ -75,7 +75,7 @@ export default function LibraryUploadAgentDialog() {
                   <Input
                     {...field}
                     id={field.name}
-                    label="Agent name"
+                    label="Workflow name"
                     className="w-full rounded-[10px]"
                   />
                 </FormControl>
@@ -93,7 +93,7 @@ export default function LibraryUploadAgentDialog() {
                   <Input
                     {...field}
                     id={field.name}
-                    label="Agent description"
+                    label="Workflow description"
                     type="textarea"
                     className="w-full rounded-[10px]"
                   />
@@ -114,7 +114,7 @@ export default function LibraryUploadAgentDialog() {
                     value={field.value}
                     onChange={field.onChange}
                     accept=".json,application/json"
-                    placeholder="Agent file"
+                    placeholder="Workflow file"
                     maxFileSize={10 * 1024 * 1024}
                     showStorageNote={false}
                     className="mb-8 mt-4"

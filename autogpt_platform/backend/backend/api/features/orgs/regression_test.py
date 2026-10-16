@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from autogpt_libs.auth.models import RequestContext
 from fastapi import HTTPException
 
 from backend.blocks.agent import AgentExecutorBlock
@@ -100,6 +101,10 @@ def _make_execution_row(
     m.organizationId = None
     m.teamId = None
     m.expertId = None
+    m.triggerSource = None
+    m.triggerRef = None
+    m.scheduleId = None
+    m.webhookId = None
     return m
 
 
@@ -161,6 +166,8 @@ def _make_chat_session_row(
     m.organizationId = None
     m.teamId = None
     m.expertId = None
+    m.scheduleId = None
+    m.webhookId = None
     return m
 
 
@@ -847,7 +854,20 @@ class TestExecutionUserIdIsolationExtended:
                 "backend.data.execution.resolve_alert_conditions_for_source_execution",
                 new=AsyncMock(),
             ),
+            patch(
+                "backend.data.sharing.execution_shares.SharedExecutionFile.prisma",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "backend.data.sharing.execution_shares.ChatLinkedShare.prisma",
+                return_value=AsyncMock(),
+            ),
+            patch(
+                "backend.data.sharing.execution_shares.transaction"
+            ) as mock_transaction,
         ):
+            mock_transaction.return_value.__aenter__ = AsyncMock(return_value=None)
+            mock_transaction.return_value.__aexit__ = AsyncMock(return_value=False)
             from backend.data.execution import delete_graph_execution
 
             await delete_graph_execution(EXEC_ID, USER_ID, soft_delete=True)
@@ -1303,6 +1323,7 @@ class TestRegressionStore:
                     graph_version=GRAPH_VERSION,
                     slug=SLUG,
                     name="Test Agent",
+                    sub_heading="Find test agents fast",
                 )
 
         # The initial graph lookup must include userId
@@ -1332,6 +1353,7 @@ class TestRegressionStore:
                 user_id=USER_ID,
                 store_listing_version_id=STORE_LISTING_VERSION_ID,
                 name="Updated",
+                sub_heading="Find test agents fast",
             )
 
     @pytest.mark.asyncio
@@ -1402,6 +1424,13 @@ class TestRegressionSchedules:
         other_job.name = "other-job"
 
         scheduler.scheduler.get_jobs = MagicMock(return_value=[owned_job, other_job])
+        # get_graph_execution_schedules (include_paused=False) reads the
+        # active-jobs path, which queries the jobstore directly rather than
+        # going through scheduler.get_jobs — see Scheduler._get_active_jobs_cached.
+        scheduler._execution_jobstore = MagicMock()
+        scheduler._execution_jobstore._get_jobs = MagicMock(
+            return_value=[owned_job, other_job]
+        )
 
         results = scheduler.get_graph_execution_schedules(user_id=USER_ID)
 
@@ -1607,6 +1636,12 @@ class TestRegressionUserSettings:
         mock_user.notifyOnStoreVerdict = True
         mock_user.maxEmailsPerDay = 3
         mock_user.subscriptionTier = "NO_TIER"
+        mock_user.defaultChatAuthProvider = None
+        mock_user.defaultChatCredentialId = None
+        mock_user.termsAcceptedAt = None
+        mock_user.termsVersion = None
+        mock_user.marketingOptOutAt = None
+        mock_user.marketingOptOutSource = None
         self.mock_user_actions.update = AsyncMock(return_value=mock_user)
 
         from backend.data.user import update_user_timezone
@@ -1661,7 +1696,6 @@ class TestPR10WebhookTenancy:
             "backend.copilot.tools.run_agent._safe_link_to_chat_share",
             AsyncMock(),
         )
-        mocker.patch("backend.copilot.tools.run_agent.track_agent_run_success")
 
     @pytest.mark.asyncio
     async def test_copilot_agent_run_uses_exact_session_scope(self, mocker):
@@ -1686,10 +1720,11 @@ class TestPR10WebhookTenancy:
         mock_lib_agent.name = "Test Agent"
         mock_lib_agent.organization_id = "org-session"
         mock_lib_agent.team_id = "team-session"
-        library = MagicMock()
-        library.get_library_agent_by_graph_id = AsyncMock(return_value=mock_lib_agent)
-        mocker.patch("backend.copilot.tools.run_agent.library_db", return_value=library)
-        mocker.patch("backend.copilot.tools.run_agent.track_agent_run_success")
+        mocker.patch(
+            "backend.copilot.tools.run_agent.get_or_create_library_agent",
+            new_callable=AsyncMock,
+            return_value=mock_lib_agent,
+        )
 
         await tool._run_agent(
             user_id=USER_ID,
@@ -2191,6 +2226,7 @@ class TestPR15MarketplaceOrg:
                     graph_version=GRAPH_VERSION,
                     slug=SLUG,
                     name="Test Agent",
+                    sub_heading="Find test agents fast",
                     organization_id="org-1",
                 )
 
@@ -3348,9 +3384,9 @@ class TestPR18Cutover:
         # After cutover, the route should ALWAYS set org (not conditionally)
         import inspect
 
-        from backend.api.features import v1 as api_v1
+        from backend.api.features.api_keys import routes as api_key_routes
 
-        route_src = inspect.getsource(api_v1.create_api_key)
+        route_src = inspect.getsource(api_key_routes.create_api_key)
         assert (
             "if ctx.org_id" not in route_src
         ), "Route should always set organizationId, not conditionally"
@@ -3465,11 +3501,19 @@ class TestReviewFindings:
         return m
 
     def _owner_ctx(self, org_id="org-review-1", team_id="team-review-1"):
-        ctx = MagicMock()
-        ctx.user_id = USER_ID
-        ctx.org_id = org_id
-        ctx.team_id = team_id
-        return ctx
+        # A MagicMock grants every permission: check_org_permission reads
+        # ctx.is_org_owner etc., and an auto-created attribute is truthy.
+        return RequestContext(
+            user_id=USER_ID,
+            org_id=org_id,
+            team_id=team_id,
+            is_org_owner=True,
+            is_org_admin=False,
+            is_org_billing_manager=False,
+            is_team_admin=False,
+            is_team_billing_manager=False,
+            seat_status="ACTIVE",
+        )
 
     def _make_invitation(self, **overrides):
         m = MagicMock()

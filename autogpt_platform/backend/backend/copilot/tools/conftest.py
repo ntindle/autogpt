@@ -7,7 +7,7 @@ the full SpinTestServer startup (which requires Postgres + RabbitMQ).
 
 from contextlib import asynccontextmanager
 from typing import Any, Awaitable
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
@@ -64,3 +64,61 @@ def stub_live_resource_access(monkeypatch):
         "backend.copilot.tools.base.live_resource_lease",
         asynccontextmanager(allowed_barrier),
     )
+
+
+@pytest.fixture(autouse=True)
+def stub_learning_registry(monkeypatch):
+    """Route the skill registry's learning hooks to an in-memory store.
+
+    ``store_user_skill`` appends a version and ``list_all_skills`` /
+    ``read_skill`` consult the learning registry through the
+    ``skill_versions_db()`` accessor. Without a connected Prisma client that
+    accessor is the DatabaseManager RPC client, whose connection retries
+    would make every registry test crawl. Tests that need the store can
+    request ``fake_learning_store``.
+    """
+    from backend.copilot.learning._fake_store import FakeLearningStore
+
+    store = FakeLearningStore()
+    seen: dict[str, str] = {}
+
+    async def mark_seen(session_id, revision):
+        seen[session_id] = revision
+
+    monkeypatch.setattr(
+        "backend.copilot.tools.skills.read_seen_index_revision",
+        AsyncMock(side_effect=lambda session_id: seen.get(session_id)),
+    )
+    monkeypatch.setattr(
+        "backend.copilot.tools.skills.mark_index_revision_seen", mark_seen
+    )
+    for target in (
+        "backend.copilot.learning.retrieval.skill_versions_db",
+        "backend.copilot.learning.retrieval.skill_use_db",
+        "backend.copilot.learning.history.skill_versions_db",
+        "backend.copilot.learning.history.skill_publication_db",
+        "backend.copilot.tools.skills.skill_versions_db",
+        "backend.copilot.tools.skills.skill_deletion_db",
+    ):
+        monkeypatch.setattr(target, lambda: store)
+    return store
+
+
+@pytest.fixture
+def fake_learning_store(stub_learning_registry):
+    return stub_learning_registry
+
+
+@pytest.fixture(autouse=True)
+def login_chain_unchanged(request):
+    """Sandbox doubles hold no login files; tests of that check opt out."""
+    if request.node.get_closest_marker("real_login_chain"):
+        yield
+        return
+    unchanged = AsyncMock(return_value={})
+    with (
+        patch("backend.util.sandbox_login.changed_login_files", unchanged),
+        patch("backend.copilot.tools.bash_exec.changed_login_files", unchanged),
+        patch("backend.copilot.tools.e2b_sandbox.take_baseline", AsyncMock()),
+    ):
+        yield

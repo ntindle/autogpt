@@ -1,5 +1,7 @@
+import type { ScheduleCreationRequest } from "@/app/api/__generated__/models/scheduleCreationRequest";
 import { usePostV1CreateExecutionSchedule } from "@/app/api/__generated__/endpoints/schedules/schedules";
 import { useToast } from "@/components/molecules/Toast/use-toast";
+import { trackScheduleCreatedGoal } from "@/services/analytics/activation-goals";
 import { useUserTimezone } from "@/lib/hooks/useUserTimezone";
 import { getTimezoneDisplayName } from "@/lib/timezone-utils";
 import { invalidateAllScheduleQueries } from "@/services/schedules/invalidate-schedules";
@@ -13,7 +15,7 @@ import {
 } from "@/components/contextual/TeamPicker/helpers";
 import { useBuilderTenantScope } from "@/app/(platform)/build/hooks/useBuilderTenantScope";
 
-export const useCronSchedulerDialog = ({
+export function useCronSchedulerDialog({
   open,
   setOpen,
   inputs,
@@ -22,15 +24,16 @@ export const useCronSchedulerDialog = ({
 }: {
   open: boolean;
   setOpen: (open: boolean) => void;
-  inputs: Record<string, any>;
-  credentials: Record<string, any>;
+  inputs: ScheduleCreationRequest["inputs"];
+  credentials: ScheduleCreationRequest["credentials"];
   defaultCronExpression?: string;
-}) => {
+}) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [cronExpression, setCronExpression] = useState<string>("");
   const [scheduleName, setScheduleName] = useState<string>("");
   const tenantScope = useBuilderTenantScope();
+  const [scheduleNameError, setScheduleNameError] = useState<string>("");
 
   const [{ flowID, flowVersion }] = useQueryStates({
     flowID: parseAsString,
@@ -60,6 +63,7 @@ export const useCronSchedulerDialog = ({
               title: "Schedule created",
               description: "Schedule created successfully",
             });
+            if (flowID) trackScheduleCreatedGoal({ id: flowID }, "builder");
             invalidateAllScheduleQueries(queryClient, flowID ?? undefined);
           }
         },
@@ -80,8 +84,32 @@ export const useCronSchedulerDialog = ({
     }
   }, [open, defaultCronExpression]);
 
-  const handleCreateSchedule = async () => {
+  useEffect(() => {
+    if (open) {
+      setScheduleName("");
+      setScheduleNameError("");
+    }
+  }, [open]);
+
+  function handleScheduleNameChange(name: string) {
+    setScheduleName(name);
+    if (name.trim() !== "") {
+      setScheduleNameError("");
+    }
+  }
+
+  async function handleCreateSchedule() {
     if (!(flowID ? tenantScope.isReady : isReady)) return;
+    if (!scheduleName || scheduleName.trim() === "") {
+      setScheduleNameError("Schedule name is required");
+      toast({
+        variant: "destructive",
+        title: "Invalid schedule",
+        description: "Please enter a schedule name",
+      });
+      return;
+    }
+
     if (!cronExpression || cronExpression.trim() === "") {
       toast({
         variant: "destructive",
@@ -94,15 +122,14 @@ export const useCronSchedulerDialog = ({
     await createSchedule({
       graphId: flowID || "",
       data: {
-        name: scheduleName,
+        name: scheduleName.trim(),
         graph_version: flowID ? flowVersion : undefined,
         cron: cronExpression,
         inputs: inputs,
         credentials: credentials,
       },
     });
-    setOpen(false);
-  };
+  }
 
   return {
     cronExpression,
@@ -110,12 +137,13 @@ export const useCronSchedulerDialog = ({
     userTimezone,
     timezoneDisplay,
     handleCreateSchedule,
-    setScheduleName,
+    setScheduleName: handleScheduleNameChange,
     scheduleName,
+    scheduleNameError,
     isCreatingSchedule,
     teamId,
     setTeamId,
     hasTeams: !flowID && hasTeams,
     isReady: flowID ? tenantScope.isReady : isReady,
   };
-};
+}

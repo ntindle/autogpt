@@ -50,7 +50,7 @@ export function ShareRunButton({
 
   return (
     <Dialog
-      title="Share Agent Run"
+      title="Share Workflow Run"
       styling={{ maxWidth: "36rem", minWidth: "auto" }}
     >
       <Dialog.Trigger>
@@ -68,8 +68,8 @@ export function ShareRunButton({
         <div className="flex flex-col gap-4">
           <Text variant="large">
             {isShared
-              ? "Your agent run is currently shared. Anyone with the link can view the output."
-              : "Generate a public link to share this agent run output with others."}
+              ? "Your workflow run is currently shared. Anyone with the link can view the output."
+              : "Generate a public link to share this workflow run output with others."}
           </Text>
 
           {!isShared ? (
@@ -78,10 +78,10 @@ export function ShareRunButton({
                 <Alert>
                   <Icon icon={Alert01Icon} className="h-4 w-4" />
                   <Text variant="body">
-                    When you enable sharing, the output of this agent run will
-                    be publicly accessible to anyone with the link. The page
-                    will include a noindex directive to discourage search engine
-                    crawling, but this cannot be guaranteed.
+                    When you enable sharing, the output of this workflow run
+                    will be publicly accessible to anyone with the link. The
+                    page will include a noindex directive to discourage search
+                    engine crawling, but this cannot be guaranteed.
                   </Text>
                 </Alert>
               </div>

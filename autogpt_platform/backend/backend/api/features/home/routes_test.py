@@ -8,6 +8,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from .models import (
+    AUTOPILOT_BRIEFING_AUTHOR,
     HomeAction,
     HomeAttentionItem,
     HomeBriefing,
@@ -51,12 +52,13 @@ def _dashboard() -> HomeDashboardResponse:
                 kind="approval",
                 priority="high",
                 title="Send the prepared message",
-                description="Your agent paused before taking an external action.",
+                description="Workflow “Post launch note” is waiting for your approval.",
                 why_it_matters="The task cannot continue until you decide.",
                 primary_action=HomeAction(label="Review", href="/library"),
             )
         ],
         briefing=HomeBriefing(
+            author=AUTOPILOT_BRIEFING_AUTHOR,
             generated_at=NOW,
             window_started_at=NOW,
             completed_count=0,
@@ -97,9 +99,12 @@ def test_get_home_dashboard_returns_single_payload(
     assert body["timezone"] == "UTC"
     assert body["attention"][0]["kind"] == "approval"
     assert set(body) >= {"attention", "briefing", "active_tasks", "team", "week"}
-    build.assert_awaited_once_with(
-        user_id=test_user_id, organization_id="test-org", team_id="test-team"
-    )
+    build.assert_awaited_once()
+    kwargs = build.await_args.kwargs
+    assert kwargs["user_id"] == test_user_id
+    assert kwargs["ctx"].org_id == "test-org"
+    assert kwargs["organization_id"] == "test-org"
+    assert kwargs["team_id"] == "test-team"
 
 
 def test_personal_context_passes_no_organization(
@@ -125,6 +130,9 @@ def test_personal_context_passes_no_organization(
     )
 
     assert client.get("/home").status_code == 200
-    build.assert_awaited_once_with(
-        user_id=test_user_id, organization_id=None, team_id=None
-    )
+    build.assert_awaited_once()
+    kwargs = build.await_args.kwargs
+    assert kwargs["user_id"] == test_user_id
+    assert kwargs["ctx"].org_id is None
+    assert kwargs["organization_id"] is None
+    assert kwargs["team_id"] is None

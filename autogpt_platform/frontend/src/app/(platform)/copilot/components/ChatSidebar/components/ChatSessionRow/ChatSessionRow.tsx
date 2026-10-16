@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { MouseEvent, RefObject } from "react";
 import { ChatSessionBlock } from "../../../ChatSessionBlock/ChatSessionBlock";
 import {
+  BookOpen01Icon,
   Delete02Icon,
   Download04Icon,
   Loading03Icon,
@@ -22,6 +23,7 @@ import {
   Share03Icon,
 } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { isKey } from "@/lib/keyboard";
 
 interface Props {
   session: SessionSummaryResponse;
@@ -34,7 +36,7 @@ interface Props {
   isExporting: boolean;
   isDeleting: boolean;
   isPinningEnabled: boolean;
-  isSharingEnabled: boolean;
+  isLearningEnabled: boolean;
   showProcessing: boolean;
   showCompleted: boolean;
   onSelect: () => void;
@@ -45,6 +47,7 @@ interface Props {
   onRename: (e: MouseEvent) => void;
   onExport: (e: MouseEvent) => void;
   onShare: (e: MouseEvent) => void;
+  onExcludeFromLearning: (e: MouseEvent) => void;
   onDelete: (e: MouseEvent) => void;
 }
 
@@ -58,7 +61,7 @@ export function ChatSessionRow({
   isExporting,
   isDeleting,
   isPinningEnabled,
-  isSharingEnabled,
+  isLearningEnabled,
   showProcessing,
   showCompleted,
   onSelect,
@@ -69,6 +72,7 @@ export function ChatSessionRow({
   onRename,
   onExport,
   onShare,
+  onExcludeFromLearning,
   onDelete,
 }: Props) {
   return (
@@ -92,9 +96,9 @@ export function ChatSessionRow({
             value={editingTitle}
             onChange={(e) => onEditingTitleChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (isKey(e, "Enter")) {
                 e.currentTarget.blur();
-              } else if (e.key === "Escape") {
+              } else if (isKey(e, "Escape")) {
                 onRenameCancel();
               }
             }}
@@ -199,10 +203,14 @@ export function ChatSessionRow({
               )}
               {isExporting ? "Exporting…" : "Export chat"}
             </DropdownMenuItem>
-            {isSharingEnabled && (
-              <DropdownMenuItem onClick={onShare}>
-                <Icon icon={Share03Icon} className="mr-2 h-4 w-4" />
-                Share chat
+            <DropdownMenuItem onClick={onShare}>
+              <Icon icon={Share03Icon} className="mr-2 h-4 w-4" />
+              Share chat
+            </DropdownMenuItem>
+            {isLearningEnabled && (
+              <DropdownMenuItem onClick={onExcludeFromLearning}>
+                <Icon icon={BookOpen01Icon} className="mr-2 h-4 w-4" />
+                Exclude from learning
               </DropdownMenuItem>
             )}
             <DropdownMenuItem

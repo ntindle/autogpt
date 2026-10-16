@@ -114,8 +114,15 @@ def parse_time_expression(
         return None, None
 
 
+def _run_visible(execution: GraphExecutionMeta, expert_id: str | None) -> bool:
+    """Personal AutoPilot sees every run; an expert only runs it started."""
+    return expert_id is None or execution.expert_id == expert_id
+
+
 class AgentOutputTool(BaseTool):
     """Tool for retrieving execution outputs from user's library agents."""
+
+    digest_large_output = True
 
     @property
     def name(self) -> str:
@@ -213,14 +220,14 @@ class AgentOutputTool(BaseTool):
                 return None, f"Library agent '{library_agent_id}' not found"
             except Exception as e:
                 logger.warning(f"Failed to get library agent by ID: {e}")
-                return None, f"Library agent '{library_agent_id}' not found"
+                return None, f"Library workflow '{library_agent_id}' not found"
 
         # Priority 2: Store slug (username/agent-name)
         if store_slug and "/" in store_slug:
             username, agent_slug = store_slug.split("/", 1)
             graph, _ = await fetch_graph_from_store_slug(username, agent_slug)
             if not graph:
-                return None, f"Agent '{store_slug}' not found in marketplace"
+                return None, f"Workflow '{store_slug}' not found in marketplace"
 
             # Find in user's library by graph_id
             agent = await lib_db.get_library_agent_by_graph_id(
@@ -236,7 +243,7 @@ class AgentOutputTool(BaseTool):
             ):
                 return (
                     None,
-                    f"Agent '{store_slug}' is not in your library. "
+                    f"Workflow '{store_slug}' is not in your library. "
                     "Add it first to see outputs.",
                 )
             return agent, None
@@ -260,18 +267,18 @@ class AgentOutputTool(BaseTool):
                 if not agents:
                     return (
                         None,
-                        f"No agents matching '{agent_name}' found in your library",
+                        f"No workflows matching '{agent_name}' found in your library",
                     )
 
                 # Return best match (first result from search)
                 return agents[0], None
             except Exception as e:
                 logger.error(f"Error searching library agents: {e}")
-                return None, f"Error searching for agent: {e}"
+                return None, f"Error searching for workflow: {e}"
 
         return (
             None,
-            "Please specify an agent name, library_agent_id, or store_slug",
+            "Please specify a workflow name, library_agent_id, or store_slug",
         )
 
     async def _get_execution(
@@ -285,6 +292,7 @@ class AgentOutputTool(BaseTool):
         include_node_executions: bool = False,
         organization_id: str | None = None,
         team_id: str | None = None,
+        expert_id: str | None = None,
     ) -> tuple[
         GraphExecution | GraphExecutionWithNodes | None,
         list[GraphExecutionMeta],
@@ -297,6 +305,7 @@ class AgentOutputTool(BaseTool):
         Args:
             include_running: If True, also look for running/queued executions (for waiting)
             include_node_executions: If True, include node-by-node execution details
+            expert_id: Only runs this expert started; None sees every run.
         """
         exec_db = execution_db()
 
@@ -309,10 +318,15 @@ class AgentOutputTool(BaseTool):
                 organization_id=organization_id,
                 team_id_restriction=team_id,
             )
-            if not execution or (
-                execution.organization_id,
-                execution.team_id,
-            ) != (organization_id, team_id):
+            if (
+                not execution
+                or not _run_visible(execution, expert_id)
+                or (
+                    execution.organization_id,
+                    execution.team_id,
+                )
+                != (organization_id, team_id)
+            ):
                 return None, [], f"Execution '{execution_id}' not found"
             return execution, [], None
 
@@ -340,6 +354,7 @@ class AgentOutputTool(BaseTool):
             limit=10,
             organization_id=organization_id,
             team_id=team_id,
+            expert_id=expert_id,
         )
         executions = [
             execution
@@ -388,14 +403,14 @@ class AgentOutputTool(BaseTool):
 
         if not execution:
             return AgentOutputResponse(
-                message=f"No completed executions found for agent '{agent.name}'",
+                message=f"No completed executions found for workflow '{agent.name}'",
                 session_id=session_id,
                 agent_name=agent.name,
                 agent_id=agent.graph_id,
                 library_agent_id=agent.id,
                 library_agent_link=library_agent_link,
                 total_executions=0,
-            )
+            ).from_outside()
 
         node_executions_data = None
         node_failures: list[NodeFailureSummary] = []
@@ -438,8 +453,14 @@ class AgentOutputTool(BaseTool):
 
         # Build appropriate message based on execution status
         if execution.status == ExecutionStatus.COMPLETED:
-            message = f"Found execution outputs for agent '{agent.name}'"
-            health_warning = build_run_health_warning(execution.outputs, node_failures)
+            message = f"Found execution outputs for workflow '{agent.name}'"
+            health_warning = build_run_health_warning(
+                execution.outputs,
+                node_failures,
+                failed_node_count=(
+                    execution.stats.node_error_count if execution.stats else 0
+                ),
+            )
             if health_warning:
                 if not isinstance(execution, GraphExecutionWithNodes):
                     health_warning += (
@@ -448,12 +469,12 @@ class AgentOutputTool(BaseTool):
                     )
                 message += f". {health_warning}"
         elif execution.status == ExecutionStatus.FAILED:
-            message = f"Execution for agent '{agent.name}' failed"
+            message = f"Execution for workflow '{agent.name}' failed"
         elif execution.status == ExecutionStatus.TERMINATED:
-            message = f"Execution for agent '{agent.name}' was terminated"
+            message = f"Execution for workflow '{agent.name}' was terminated"
         elif execution.status == ExecutionStatus.REVIEW:
             message = (
-                f"Execution for agent '{agent.name}' is awaiting human review. "
+                f"Execution for workflow '{agent.name}' is awaiting human review. "
                 "The user needs to approve it before it can continue."
             )
         elif execution.status in (
@@ -462,11 +483,11 @@ class AgentOutputTool(BaseTool):
             ExecutionStatus.INCOMPLETE,
         ):
             message = (
-                f"Execution for agent '{agent.name}' is still {execution.status.value}. "
+                f"Execution for workflow '{agent.name}' is still {execution.status.value}. "
                 "Results may be incomplete. Use wait_if_running to wait for completion."
             )
         else:
-            message = f"Found execution for agent '{agent.name}' (status: {execution.status.value})"
+            message = f"Found execution for workflow '{agent.name}' (status: {execution.status.value})"
 
         if len(available_executions) > 1:
             message += (
@@ -483,7 +504,7 @@ class AgentOutputTool(BaseTool):
             execution=execution_info,
             available_executions=available_list,
             total_executions=len(available_executions) if available_executions else 1,
-        )
+        ).from_outside(execution_info)
 
     async def _execute(
         self,
@@ -508,14 +529,14 @@ class AgentOutputTool(BaseTool):
                 message="Invalid input parameters",
                 error=str(e),
                 session_id=session_id,
-            )
+            ).from_outside()
 
         # Ensure user_id is present (should be guaranteed by requires_auth)
         if not user_id:
             return ErrorResponse(
                 message="User authentication required",
                 session_id=session_id,
-            )
+            ).from_outside()
 
         # Check if at least one identifier is provided
         if not any(
@@ -532,7 +553,7 @@ class AgentOutputTool(BaseTool):
                     "library_agent_id, store_slug, or execution_id"
                 ),
                 session_id=session_id,
-            )
+            ).from_outside()
 
         # If only execution_id provided, we need to find the agent differently
         if (
@@ -550,14 +571,19 @@ class AgentOutputTool(BaseTool):
                 team_id_restriction=session.team_id,
                 exact_scope=True,
             )
-            if not execution or (
-                execution.organization_id,
-                execution.team_id,
-            ) != (session.organization_id, session.team_id):
+            if (
+                not execution
+                or not _run_visible(execution, session.expert_id)
+                or (
+                    execution.organization_id,
+                    execution.team_id,
+                )
+                != (session.organization_id, session.team_id)
+            ):
                 return ErrorResponse(
                     message=f"Execution '{input_data.execution_id}' not found",
                     session_id=session_id,
-                )
+                ).from_outside()
 
             # Find library agent by graph_id
             agent = await library_db().get_library_agent_by_graph_id(
@@ -574,12 +600,14 @@ class AgentOutputTool(BaseTool):
             ):
                 return NoResultsResponse(
                     message=(
-                        f"Execution found but agent not in your library. "
+                        f"Execution found but workflow not in your library. "
                         f"Graph ID: {execution.graph_id}"
                     ),
                     session_id=session_id,
-                    suggestions=["Add the agent to your library to see more details"],
-                )
+                    suggestions=[
+                        "Add the workflow to your library to see more details"
+                    ],
+                ).from_outside()
 
             return self._build_response(agent, execution, [], session_id)
 
@@ -595,11 +623,11 @@ class AgentOutputTool(BaseTool):
 
         if error or not agent:
             return NoResultsResponse(
-                message=error or "Agent not found",
+                message=error or "Workflow not found",
                 session_id=session_id,
                 suggestions=[
-                    "Check the agent name or ID",
-                    "Make sure the agent is in your library",
+                    "Check the workflow name or ID",
+                    "Make sure the workflow is in your library",
                 ],
             )
 
@@ -611,6 +639,7 @@ class AgentOutputTool(BaseTool):
 
         # Fetch execution(s) - include running if we're going to wait
         execution, available_executions, exec_error = await self._get_execution(
+            expert_id=session.expert_id,
             user_id=user_id,
             graph_id=agent.graph_id,
             execution_id=input_data.execution_id or None,

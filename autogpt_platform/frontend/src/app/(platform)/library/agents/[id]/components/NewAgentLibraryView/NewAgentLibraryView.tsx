@@ -26,7 +26,10 @@ import { SelectedTriggerView } from "./components/selected-views/SelectedTrigger
 import { SelectedViewLayout } from "./components/selected-views/SelectedViewLayout";
 import { SidebarRunsList } from "./components/sidebar/SidebarRunsList/SidebarRunsList";
 import { usePlatformChrome } from "@/app/(platform)/PlatformChrome/usePlatformChrome";
-import { AGENT_LIBRARY_SECTION_PADDING_X } from "./helpers";
+import {
+  AGENT_LIBRARY_SECTION_PADDING_X,
+  isNewAgentTaskDisabled,
+} from "./helpers";
 import { useMarketplaceUpdate } from "./hooks/useMarketplaceUpdate";
 import { useNewAgentLibraryView } from "./useNewAgentLibraryView";
 import { PlusSignIcon } from "@hugeicons/core-free-icons";
@@ -45,6 +48,7 @@ export function NewAgentLibraryView() {
     selectedTriggerKind,
     retryTriggerLists,
     sidebarLoading,
+    sidebarHasError,
     activeTab,
     setActiveTab,
     handleSelectRun,
@@ -160,7 +164,7 @@ export function NewAgentLibraryView() {
             <ErrorCard
               responseError={{
                 message:
-                  "Could not load this agent's triggers. Check your connection and try again.",
+                  "Could not load this workflow's triggers. Check your connection and try again.",
               }}
               context="triggers"
               onRetry={retryTriggerLists}
@@ -185,7 +189,7 @@ export function NewAgentLibraryView() {
       <ErrorCard
         isSuccess={false}
         responseError={error || undefined}
-        context="agent"
+        context="workflow"
         onRetry={() => window.location.reload()}
       />
     );
@@ -266,9 +270,14 @@ export function NewAgentLibraryView() {
                   variant="outline"
                   size="small"
                   className="w-full"
-                  disabled={isTemplateLoading && activeTab === "templates"}
+                  disabled={isNewAgentTaskDisabled({
+                    sidebarLoading,
+                    sidebarHasError,
+                    isTemplateLoading,
+                    activeTab,
+                  })}
                 >
-                  <Icon icon={PlusSignIcon} size={16} /> New agent task
+                  <Icon icon={PlusSignIcon} size={16} /> New workflow task
                 </Button>
               }
               agent={agent}
@@ -322,6 +331,16 @@ export function NewAgentLibraryView() {
               banner={renderMarketplaceUpdateBanner()}
             />
           )
+        ) : sidebarHasError ? (
+          <SelectedViewLayout
+            agent={agent}
+            banner={renderMarketplaceUpdateBanner()}
+          >
+            <ErrorCard
+              context="workflow tasks"
+              hint="Use Try Again in the sidebar to reload your tasks."
+            />
+          </SelectedViewLayout>
         ) : sidebarLoading ? (
           <LoadingSelectedContent agent={agent} />
         ) : activeTab === "scheduled" ? (

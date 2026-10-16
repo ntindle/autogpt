@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Security, st
 from backend.api.features.experts import experts_db
 from backend.api.live_auth import live_dependency, requires_live_resource_permission
 from backend.copilot.rate_limit import enforce_payment_paywall
-from backend.data.execution import GraphExecutionMeta
+from backend.data.execution import ExecutionTrigger, GraphExecutionMeta
 from backend.data.model import CredentialsMetaInput
 from backend.executor.utils import add_graph_execution
 from backend.util.exceptions import (
@@ -229,7 +229,7 @@ async def setup_trigger(
             agent_credentials=params.agent_credentials,
             # Graph-match attribution is resolved by the caller (mirroring
             # create_preset above): setup_triggered_preset itself never
-            # infers an expert, so copilot AutoPilot sessions get presets
+            # infers an expert, so copilot Otto sessions get presets
             # they can actually manage.
             expert_id=await experts_db.resolve_expert_for_graph(
                 user_id,
@@ -412,6 +412,8 @@ async def execute_preset(
             graph_credentials_inputs=merged_credential_inputs,
             organization_id=preset.organization_id,
             team_id=preset.team_id,
+            trigger=ExecutionTrigger.MANUAL,
+            trigger_ref="preset",
         )
     except ExpertRunPausedError as e:
         # A paused/over-budget expert is a user-visible state, not a server

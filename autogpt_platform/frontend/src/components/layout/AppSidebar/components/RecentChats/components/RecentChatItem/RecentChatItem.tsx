@@ -29,6 +29,7 @@ import {
 import { Icon } from "@/components/atoms/Icon/Icon";
 import { getCopilotHref } from "@/services/org-team/builder";
 import type { RecentChatSession } from "../../useRecentChats";
+import { isKey } from "@/lib/keyboard";
 
 type Session = RecentChatSession;
 
@@ -42,7 +43,6 @@ interface Props {
   onCancelRename: () => void;
   isExporting: boolean;
   isDeleting: boolean;
-  chatSharingEnabled: boolean;
   chatPinningEnabled: boolean;
   onPin: (id: string, isPinned: boolean) => void;
   onRename: (id: string, title: string | null | undefined) => void;
@@ -76,7 +76,6 @@ export function RecentChatItem({
   onCancelRename,
   isExporting,
   isDeleting,
-  chatSharingEnabled,
   chatPinningEnabled,
   onPin,
   onRename,
@@ -101,12 +100,12 @@ export function RecentChatItem({
           value={editingTitle}
           onChange={(e) => onEditingTitleChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") {
+            if (isKey(e, "Enter")) {
               e.preventDefault();
               skipBlurSubmitRef.current = true;
               onSubmitRename(session.id);
               e.currentTarget.blur();
-            } else if (e.key === "Escape") {
+            } else if (isKey(e, "Escape")) {
               e.preventDefault();
               skipBlurSubmitRef.current = true;
               onCancelRename();
@@ -120,7 +119,7 @@ export function RecentChatItem({
             }
             onSubmitRename(session.id);
           }}
-          className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+          className="w-full rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm text-zinc-800 outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 max-md:py-2 max-md:text-base"
         />
       </SidebarMenuItem>
     );
@@ -132,7 +131,7 @@ export function RecentChatItem({
         asChild
         isActive={isActive}
         tooltip={title}
-        className="font-normal data-[active=true]:!bg-zinc-100 data-[active=true]:font-normal hover:!bg-zinc-100"
+        className="font-normal data-[active=true]:!bg-zinc-100 data-[active=true]:font-normal hover:!bg-zinc-100 max-md:h-11 max-md:!pr-11 max-md:text-[15px]"
       >
         <Link
           href={getCopilotHref(
@@ -159,7 +158,7 @@ export function RecentChatItem({
           <SidebarMenuAction
             showOnHover
             aria-label="Chat actions"
-            className="border border-zinc-200 bg-white"
+            className="max-md:!top-1.5 max-md:w-8 max-md:[&>svg]:size-5"
           >
             <Icon
               icon={MoreHorizontalIcon}
@@ -201,12 +200,10 @@ export function RecentChatItem({
             )}
             {isExporting ? "Exporting…" : "Export chat"}
           </DropdownMenuItem>
-          {chatSharingEnabled && (
-            <DropdownMenuItem onClick={() => onShare(session)}>
-              <Icon icon={Share03Icon} className="mr-2 h-4 w-4" />
-              Share chat
-            </DropdownMenuItem>
-          )}
+          <DropdownMenuItem onClick={() => onShare(session)}>
+            <Icon icon={Share03Icon} className="mr-2 h-4 w-4" />
+            Share chat
+          </DropdownMenuItem>
           <DropdownMenuItem
             onClick={() => onDelete(session)}
             disabled={isDeleting}

@@ -5,6 +5,7 @@ import contextvars
 import json
 import logging
 import uuid
+from datetime import UTC
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -22,6 +23,12 @@ from backend.copilot.active_turns import (
     MAX_TURN_LIFETIME_SECONDS,
     running_turn_limit_message,
 )
+from backend.copilot.constants import (
+    AUTOPILOT_BLOCK_ID,
+    AUTOPILOT_BLOCK_TOOL_NAME,
+    PER_TURN_SPEND_FLOOR_USD,
+)
+from backend.copilot.credit_billing import credits_can_pay_block_turns
 from backend.copilot.permissions import (
     DISABLED_LEGACY_TOOL_NAMES,
     CopilotPermissions,
@@ -33,20 +40,21 @@ from backend.data.db_accessors import credit_db, live_resource_lease
 from backend.data.model import CredentialsField, CredentialsMetaInput, SchemaField
 from backend.integrations.providers import ProviderName
 from backend.util.exceptions import BlockExecutionError
+from backend.util.settings import Settings
 
 if TYPE_CHECKING:
+    from backend.copilot.turn_pause import TurnPause
     from backend.data.execution import ExecutionContext
 
 logger = logging.getLogger(__name__)
 
-# Block ID shared between autopilot.py and copilot prompting.py.
-AUTOPILOT_BLOCK_ID = "c069dc6b-c3ed-4c12-b6e5-d47361e64ce6"
-
 # Identifiers used when registering an AutoPilotBlock turn with the
 # stream registry — distinguishes block-originated turns from sub-session
-# or HTTP SSE turns in logs / observability.
+# or HTTP SSE turns in logs / observability. The tool name also rides the
+# queue entry, so the executor can bill the turn to credits once the plan's
+# AutoPilot allowance is used up.
 _AUTOPILOT_TOOL_CALL_ID = "autopilot_block"
-_AUTOPILOT_TOOL_NAME = "autopilot_block"
+_AUTOPILOT_TOOL_NAME = AUTOPILOT_BLOCK_TOOL_NAME
 
 # Ceiling on how long AutoPilotBlock.execute_copilot will wait for the
 # enqueued turn's terminal event. Sourced from the shared turn-lifetime
@@ -68,6 +76,21 @@ class SubAgentRecursionError(BlockExecutionError):
     def __init__(self, message: str) -> None:
         super().__init__(
             message=message,
+            block_name="AutoPilotBlock",
+            block_id=AUTOPILOT_BLOCK_ID,
+        )
+
+
+class AutoPilotOutOfBudgetError(BlockExecutionError):
+    """The block's turn was refused when picked up: no AutoPilot budget left.
+
+    A deliberate stop like the recursion limit, so it skips the recovery
+    re-enqueue, which would only be refused again.
+    """
+
+    def __init__(self, pause: "TurnPause") -> None:
+        super().__init__(
+            message=_out_of_budget_message(pause),
             block_name="AutoPilotBlock",
             block_id=AUTOPILOT_BLOCK_ID,
         )
@@ -170,11 +193,11 @@ class AutoPilotBlock(Block):
             default=None,
             credential_reference_only=True,
             discriminator="transport",
-            # `platform` is deliberately absent: it needs no credential at all,
-            # and an unmapped discriminator value makes the credential input
-            # hide itself rather than asking for something that does not exist.
             discriminator_mapping={
                 AutoPilotTransport.CODEX_APP_SERVER.value: ProviderName.CODEX,
+            },
+            credential_free_discriminator_values={
+                AutoPilotTransport.PLATFORM.value,
             },
             json_schema_extra={
                 "secret": True,
@@ -226,7 +249,7 @@ class AutoPilotBlock(Block):
 
         blocks: list[str] = SchemaField(
             description=(
-                "Block identifiers to filter when the copilot uses run_block. "
+                "Block identifiers to filter when the copilot runs blocks via run_capability. "
                 "Each entry can be: a block name (e.g. 'HTTP Request'), "
                 "a full block UUID, or the first 8 hex characters of the UUID "
                 "(e.g. 'c069dc6b'). Works with blocks_exclude. "
@@ -249,7 +272,7 @@ class AutoPilotBlock(Block):
 
         dry_run: bool = SchemaField(
             description=(
-                "When enabled, run_block and run_agent tool calls in this "
+                "When enabled, run_capability and run_agent tool calls in this "
                 "autopilot session are forced to use dry-run simulation mode. "
                 "No real API calls, side effects, or credits are consumed "
                 "by those tools. Useful for testing agent wiring and "
@@ -459,6 +482,10 @@ class AutoPilotBlock(Block):
                 permissions=effective_permissions,
                 tool_call_id=_AUTOPILOT_TOOL_CALL_ID,
                 tool_name=_AUTOPILOT_TOOL_NAME,
+                # Never ride an in-flight turn: the prompt would execute under
+                # THAT turn's envelope and permissions, dropping this block's
+                # own filter. Same hole the three spawn tools close.
+                allow_queue=False,
             )
             if outcome == "rejected_concurrent_turn_cap":
                 # No session record / transcript was created — the slot
@@ -476,6 +503,14 @@ class AutoPilotBlock(Block):
                     f"{_AUTOPILOT_BLOCK_MAX_WAIT_SECONDS}s — session "
                     f"{session_id}"
                 )
+            if outcome == "refused" and result.pause is not None:
+                # The executor refused the turn for want of budget.
+                raise AutoPilotOutOfBudgetError(result.pause)
+            if outcome == "refused":
+                # Terminal, like the branches above: nothing ran, so the
+                # SessionResult carries only the refusal and its empty
+                # response_text would otherwise render as a successful turn.
+                raise RuntimeError(result.refusal or "AutoPilot turn was refused")
 
             # Build a lightweight conversation summary from the aggregated data.
             # When ``result.queued`` is True the prompt rode on an already-
@@ -719,7 +754,7 @@ class AutoPilotBlock(Block):
             yield "session_id", sid
             yield "error", "AutoPilot execution was cancelled."
             raise
-        except SubAgentRecursionError as exc:
+        except (SubAgentRecursionError, AutoPilotOutOfBudgetError) as exc:
             # Deliberate block — re-enqueueing would immediately hit the limit
             # again, so skip recovery and just surface the error.
             yield "session_id", sid
@@ -763,6 +798,33 @@ class AutoPilotBlock(Block):
 # ---------------------------------------------------------------------------
 # Helpers – placed after the block class for top-down readability.
 # ---------------------------------------------------------------------------
+
+
+def _out_of_budget_message(pause: "TurnPause") -> str:
+    """What a graph run shows for a turn refused for want of budget.
+
+    Where credits can pay for block turns (``credits_can_pay_block_turns``),
+    the executor runs one on the credit balance once the plan's allowance is
+    used up, so a refusal means the balance can't pay for it either: the
+    message says both and how to add credits. Elsewhere it says only that the
+    allowance is used up. Either way it ends with when the allowance resets,
+    if it does.
+    """
+    allowance = "the trial's" if pause.reason == "trial" else "your plan's"
+    credits_url = f"{Settings().config.frontend_base_url.rstrip('/')}/profile/credits"
+    message = (
+        f"Out of AutoPilot budget: {allowance} AutoPilot allowance is used up, "
+        "and your credit balance doesn't cover a run (it needs at least "
+        f"${PER_TURN_SPEND_FLOOR_USD:.2f}). Add credits at {credits_url} to "
+        "run it on credits."
+        if credits_can_pay_block_turns()
+        else f"Out of AutoPilot budget: {allowance} AutoPilot allowance is used up."
+    )
+    if pause.resets_at is None:
+        return message
+    resets_at = pause.resets_at.astimezone(UTC)
+    return f"{message} The allowance resets {resets_at:%Y-%m-%d %H:%M} UTC."
+
 
 # Task-scoped recursion depth counter & chain-wide limit.
 # contextvars are scoped to the current asyncio task, so concurrent
@@ -835,7 +897,7 @@ async def _build_and_validate_permissions(
         if invalid_blocks:
             return (
                 f"Unknown block identifier(s) in 'blocks': {invalid_blocks}. "
-                "Use find_block to discover valid block names and IDs. "
+                "Use find_capability to discover valid block names and IDs. "
                 "You may also use the first 8 characters of a block UUID."
             )
 
@@ -916,6 +978,7 @@ async def _enqueue_for_recovery(
             enqueue_copilot_turn,
         )
         from backend.copilot.model import get_chat_session
+        from backend.copilot.tree import root_envelope
 
         session = await get_chat_session(session_id, user_id)
         if session is None or (
@@ -929,6 +992,7 @@ async def _enqueue_for_recovery(
             )
             return
 
+        recovery_turn_id = str(uuid.uuid4())
         async with live_resource_lease(
             user_id, organization_id, team_id, "execute"
         ) as allowed:
@@ -944,7 +1008,9 @@ async def _enqueue_for_recovery(
                     session_id=session_id,
                     user_id=user_id,
                     message=message,
-                    turn_id=str(uuid.uuid4()),
+                    turn_id=recovery_turn_id,
+                    envelope=root_envelope(recovery_turn_id, session_id=session_id),
+                    tool_name=_AUTOPILOT_TOOL_NAME,
                     organization_id=organization_id,
                     team_id=team_id,
                     llm_auth_provider=session.metadata.llm_auth_provider,

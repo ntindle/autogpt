@@ -59,13 +59,13 @@ export const useAgentInfo = ({
 
       toast({
         title: "Download Complete",
-        description: "Your agent has been successfully downloaded.",
+        description: "Your workflow has been successfully downloaded.",
       });
     } catch (error) {
       Sentry.captureException(error);
       toast({
         title: "Error",
-        description: "Failed to download agent. Please try again.",
+        description: "Failed to download workflow. Please try again.",
         variant: "destructive",
       });
     }

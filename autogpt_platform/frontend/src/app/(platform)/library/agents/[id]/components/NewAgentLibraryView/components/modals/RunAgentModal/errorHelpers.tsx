@@ -58,7 +58,7 @@ export function formatValidationError(
           <div className="mt-2 space-y-1 text-xs">{errorItems}</div>
           {agentInfo && (
             <div className="mt-3 text-xs">
-              Check the agent graph and try to run from there for further
+              Open the workflow in the builder and try running it there for more
               details.{" "}
               <Link
                 href={getBuilderHref({
@@ -99,7 +99,7 @@ export function showExecutionErrorToast(
   const errorMessage = formatValidationError(error, agentInfo);
 
   toast({
-    title: "Failed to execute agent",
+    title: "Failed to execute workflow",
     description: errorMessage,
     variant: "destructive",
     duration: 10000, // 10 seconds - long enough to read and close

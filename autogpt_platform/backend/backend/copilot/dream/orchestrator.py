@@ -26,6 +26,7 @@ from typing import TypeVar
 
 from backend.copilot.config import ChatConfig
 from backend.copilot.graphiti.client import derive_memory_scope_key
+from backend.copilot.trial_cost_context import attributed_usage
 from backend.util.feature_flag import Flag, is_feature_enabled
 
 from .apply import apply_operations, drain_status_from_stats
@@ -46,7 +47,6 @@ from .llm import (
 from .locks import (
     BATCH_LOCK_TTL_SECONDS,
     DEFAULT_LOCK_TTL_SECONDS,
-    LOCAL_LOCK_TTL_SECONDS,
     DreamLockHandle,
     DreamLockHeld,
     dream_lock,
@@ -93,12 +93,12 @@ RECOMBINE_MAX_TOKENS = 16384
 SANITIZE_MAX_TOKENS = 16384
 
 # Per-phase LLM wall-clock ceilings, passed through structured_completion
-# → call_provider. The shared DEFAULT_REQUEST_TIMEOUT_SECONDS (120s) is
-# sized for short chat completions; recombine/sanitize carry 16384-token
-# output budgets precisely because real responses exceed 8192 tokens, and
-# at real decode speeds (Opus-class ~40-60 tok/s via OpenRouter) an 8-16K
-# response takes 150-400s — the 120s wall killed exactly the responses
-# the token-cap raise above was meant to save.
+# → call_provider. These exist because a single shared default can't fit
+# every phase: recombine/sanitize carry 16384-token output budgets precisely
+# because real responses exceed 8192 tokens, and at real decode speeds
+# (Opus-class ~40-60 tok/s via OpenRouter) an 8-16K response takes 150-400s,
+# so a ceiling under that truncates exactly the responses the token-cap
+# budgets above exist to produce.
 #
 # A conservative ~20 tok/s decode floor would ask for max_output_tokens/20
 # ≈ 205s / 819s / 819s per phase, but that sums to 1843s of LLM budget
@@ -155,10 +155,6 @@ MAX_ENTITY_INVALIDATIONS_PER_PASS = 2
 # this marker yet — batch users simply never benefit from the skip.
 LAST_COMPLETED_KEY_PREFIX = "dream:last_completed:"
 LAST_COMPLETED_TTL_SECONDS = 35 * 24 * 60 * 60
-
-
-def _resolve_lock_ttl(transport_is_local: bool) -> int:
-    return LOCAL_LOCK_TTL_SECONDS if transport_is_local else DEFAULT_LOCK_TTL_SECONDS
 
 
 # High-precision filter for "transient intent" facts — content that
@@ -737,11 +733,11 @@ def _has_new_episodes_since(episodes: list[EpisodeRow], marker: datetime) -> boo
     return False
 
 
+@attributed_usage
 async def _execute_dream_pass_async(
     user_id: str,
     *,
     expert_id: str | None = None,
-    transport_is_local: bool = False,
     config: ChatConfig | None = None,
     status_id: str | None = None,
 ) -> DreamPassResult:
@@ -772,7 +768,7 @@ async def _execute_dream_pass_async(
         transport_name=config.transport.name,
     )
 
-    ttl = _resolve_lock_ttl(transport_is_local)
+    ttl = DEFAULT_LOCK_TTL_SECONDS
     try:
         lock_context = dream_lock(user_id, ttl_seconds=ttl, expert_id=expert_id)
         async with lock_context as dream_lock_handle:

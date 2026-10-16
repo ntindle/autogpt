@@ -54,7 +54,7 @@ function UndoActions({
         className="bg-neutral-200 text-zinc-900 hover:bg-neutral-300 hover:text-zinc-800"
         href={libraryHref}
       >
-        Open agent
+        Open workflow
       </Button>
       <Button
         variant="ghost"
@@ -134,7 +134,7 @@ export function AddToLibraryButton({
     mutationFn: async ({ teamId }: { teamId: string | null }) => {
       const details = await getV2GetSpecificAgent(creatorSlug, agentSlug);
       if (details.status !== 200) {
-        throw new Error("Failed to fetch agent details");
+        throw new Error("Failed to fetch workflow details");
       }
       const res = await postV2AddMarketplaceAgent(
         { store_listing_version_id: details.data.store_listing_version_id },
@@ -196,7 +196,7 @@ export function AddToLibraryButton({
       });
 
       const addedToast = toast({
-        title: `Agent ${agentName} added to your library.`,
+        title: `Workflow ${agentName} added to your library.`,
         description: (
           <UndoActions
             libraryAgentID={data.id}
@@ -234,7 +234,7 @@ export function AddToLibraryButton({
       Sentry.captureException(error);
       toast({
         title: "Error",
-        description: "Failed to add agent to library. Please try again.",
+        description: "Failed to add workflow to library. Please try again.",
         variant: "destructive",
       });
     }

@@ -11,9 +11,8 @@ import {
  * home, thread, library) share one definition of these routes instead of
  * each embedding path literals.
  *
- * Both ids come from the backend's review enrichment: `session_id` is set
- * for every CoPilot `run_block` review, `library_agent_id` for reviews
- * raised by a real graph execution.
+ * `session_id` is set on every chat review; `library_agent_id` comes from
+ * the backend's enrichment of reviews raised by a real graph execution.
  *
  * The library route selects a run via `activeTab`/`activeItem` — those are
  * the params `NewAgentLibraryView` actually parses, so anything else lands
@@ -31,7 +30,7 @@ export function getReviewLink(review: PendingHumanReviewModel): string {
       review.team_id ?? null,
     );
   }
-  if (review.library_agent_id) {
+  if (review.library_agent_id && review.graph_exec_id) {
     return getLibraryAgentHref(
       review.library_agent_id,
       review.organization_id ?? null,

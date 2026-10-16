@@ -149,6 +149,11 @@ class LibraryAgentRef(pydantic.BaseModel):
     name: str
     organization_id: str | None = None
     team_id: str | None = None
+    # The agent's own picture, so a surface listing runs can show the agent
+    # instead of a generic glyph.
+    image_url: str | None = None
+    # A removed agent still names its past runs; it just cannot be linked.
+    is_deleted: bool = False
 
 
 class RecentExecution(pydantic.BaseModel):
@@ -249,14 +254,7 @@ class LibraryAgent(pydantic.BaseModel):
     )
     settings: GraphSettings = pydantic.Field(default_factory=GraphSettings)
     marketplace_listing: Optional["MarketplaceListing"] = None
-    store_listing_version_id: Optional[str] = pydantic.Field(
-        default=None,
-        description=(
-            "ID of the approved marketplace listing version whose graph snapshot "
-            "exactly matches this agent's graph_id and graph_version. Install "
-            "flows can use it directly to install this exact version."
-        ),
-    )
+    store_listing_version_id: str | None = None
 
     @staticmethod
     def from_db(
@@ -278,6 +276,11 @@ class LibraryAgent(pydantic.BaseModel):
             raise ValueError("Associated Agent record is required.")
 
         graph = GraphModel.from_db(agent.AgentGraph, sub_graphs=sub_graphs)
+        if agent.AgentGraph.userId != agent.userId:
+            # Someone else's agent in this user's library (e.g. from the
+            # marketplace): its input defaults mustn't carry the owner's
+            # picked files or the credentials embedded in them.
+            graph.clear_auto_credentials()
 
         created_at = agent.createdAt
 
@@ -317,7 +320,9 @@ class LibraryAgent(pydantic.BaseModel):
                 for e in executions
                 if e.executionStatus == prisma.enums.AgentExecutionStatus.COMPLETED
             )
-            success_rate = (success_count / execution_count) * 100
+            # Over the included runs, not the total: an override counts runs
+            # the include never loaded, so their outcomes are unknown here.
+            success_rate = (success_count / len(executions)) * 100
 
             correctness_scores = []
             for e in executions:

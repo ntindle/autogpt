@@ -4,6 +4,7 @@ import {
   getGetSearchGlobalSearchQueryKey,
   useGetSearchGlobalSearch,
 } from "@/app/api/__generated__/endpoints/search/search";
+import { useIsBillingEnabled } from "@/hooks/useIsBillingEnabled";
 import type { GlobalSearchResponse } from "@/app/api/__generated__/models/globalSearchResponse";
 import {
   getTeamScopedQueryKey,
@@ -21,6 +22,7 @@ export function useGlobalSearch(isOpen: boolean) {
   const pathname = usePathname();
   const activeOrgID = useOrgTeamStore((s) => s.activeOrgID);
   const activeTeamID = useOrgTeamStore((s) => s.activeTeamID);
+  const isBillingEnabled = useIsBillingEnabled();
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
 
@@ -82,7 +84,7 @@ export function useGlobalSearch(isOpen: boolean) {
   // the search results; otherwise it trails them so search stays the
   // primary intent. Priority order on exact match: navigation, actions.
   const commandBuckets = [
-    buildNavigationBucket(query, pathname),
+    buildNavigationBucket(query, pathname, isBillingEnabled),
     buildActionsBucket(query),
   ];
   const topBuckets = commandBuckets.flatMap((entry) =>

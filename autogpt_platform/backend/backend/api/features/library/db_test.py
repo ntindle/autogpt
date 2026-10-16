@@ -96,6 +96,8 @@ async def test_library_agent_refs_keep_same_graph_in_each_scope(mocker):
                     agentGraphId="graph-1",
                     agentGraphVersion=1,
                     name="Team A",
+                    imageUrl=None,
+                    isDeleted=False,
                     organizationId="org-1",
                     teamId="team-a",
                 ),
@@ -104,6 +106,8 @@ async def test_library_agent_refs_keep_same_graph_in_each_scope(mocker):
                     agentGraphId="graph-1",
                     agentGraphVersion=1,
                     name="Team B",
+                    imageUrl=None,
+                    isDeleted=False,
                     organizationId="org-1",
                     teamId="team-b",
                 ),
@@ -463,7 +467,7 @@ async def test_list_library_agents_store_version_lookup_fails_soft(mocker):
     assert result.agents[0].store_listing_version_id is None
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio(loop_scope="session")
 async def test_add_agent_to_library(mocker):
     mocker.patch(
         "backend.api.features.library._add_to_library.resolve_default_tenancy",
@@ -589,7 +593,6 @@ async def test_add_agent_to_library(mocker):
     assert create_call_args.kwargs["include"] == library_agent_include(
         "test-user", include_nodes=False, include_executions=False
     )
-    assert mock_from_db.call_args.kwargs["store_listing_version_id"] == "version123"
 
 
 @pytest.mark.asyncio
@@ -655,8 +658,79 @@ async def test_add_agent_to_library_reuses_existing_without_loading_graph(mocker
     from_db.assert_called_once_with(
         restored,
         schedule_info={},
-        store_listing_version_id="version123",
     )
+
+
+@pytest.fixture
+def add_to_library_steps(mocker) -> dict[str, MagicMock]:
+    """Stub the resolve/restore/create helpers the add path is built from."""
+    store_version = MagicMock(id="version123")
+    graph = MagicMock(id="agent1", version=1)
+    return {
+        "resolve": mocker.patch.object(
+            db,
+            "resolve_store_version_for_library",
+            AsyncMock(return_value=store_version),
+        ),
+        "restore": mocker.patch.object(
+            db, "restore_existing_library_agent", AsyncMock(return_value=None)
+        ),
+        "graph": mocker.patch.object(
+            db, "resolve_graph_model_for_library", AsyncMock(return_value=graph)
+        ),
+        "add": mocker.patch.object(
+            db,
+            "add_graph_to_library",
+            AsyncMock(return_value=MagicMock(id="library-agent")),
+        ),
+        "track": mocker.patch.object(db, "track_listing_added_to_library"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_first_marketplace_add_sends_listing_added_to_library(
+    add_to_library_steps,
+):
+    await db.add_store_agent_to_library("version123", "test-user")
+
+    add_to_library_steps["track"].assert_called_once_with(
+        user_id="test-user",
+        store_listing_version_id="version123",
+        graph_id="agent1",
+        library_agent_id="library-agent",
+    )
+
+
+@pytest.mark.asyncio
+async def test_re_adding_a_marketplace_agent_sends_nothing(add_to_library_steps):
+    add_to_library_steps["restore"].return_value = MagicMock(id="library-agent")
+
+    await db.add_store_agent_to_library("version123", "test-user")
+
+    add_to_library_steps["track"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_system_install_of_a_listing_sends_nothing(add_to_library_steps):
+    # An expert's preloads and workflows are installed for the user, not
+    # picked by them; `workflow_installed_on_expert` covers those.
+    library_agent = await db.add_store_agent_to_library(
+        "version123", "test-user", track_listing_added=False
+    )
+
+    assert library_agent.id == "library-agent"
+    add_to_library_steps["add"].assert_awaited_once()
+    add_to_library_steps["track"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_transactional_marketplace_add_sends_nothing(add_to_library_steps):
+    # The caller's transaction may still roll back; its own event covers it.
+    await db.add_store_agent_to_library_in_transaction(
+        "version123", "test-user", tx=MagicMock()
+    )
+
+    add_to_library_steps["track"].assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -1126,6 +1200,10 @@ async def test_update_graph_in_library_allows_archived_library_agent(mocker):
         "backend.api.features.library.db.update_library_agent_version_and_settings",
         new=mocker.AsyncMock(return_value=updated_library_agent),
     )
+    mock_clear_unowned = mocker.patch(
+        "backend.api.features.library.db.clear_unowned_auto_credentials",
+        new=mocker.AsyncMock(),
+    )
 
     result_graph, result_library_agent = await db.update_graph_in_library(
         graph,
@@ -1138,6 +1216,9 @@ async def test_update_graph_in_library_allows_archived_library_agent(mocker):
     graph_model.reassign_ids.assert_called_once_with(
         user_id="test-user", reassign_graph_id=False
     )
+    # An inactive version skips activation but still drops files picked with
+    # someone else's credentials.
+    mock_clear_unowned.assert_awaited_once_with(graph_model, "test-user")
     mock_get_library_agent.assert_awaited_once_with(
         "test-user",
         "graph-id",
@@ -1318,12 +1399,6 @@ async def test_list_favorite_library_agents(mocker):
     )
     mock_library_agent.return_value.count = mocker.AsyncMock(return_value=1)
 
-    matching_version = MagicMock(
-        id="slv-favorite", agentGraphId="agent-fav", agentGraphVersion=1
-    )
-    mock_slv = mocker.patch("prisma.models.StoreListingVersion.prisma")
-    mock_slv.return_value.find_many = mocker.AsyncMock(return_value=[matching_version])
-
     mocker.patch(
         "backend.api.features.library.db._fetch_execution_counts",
         new=mocker.AsyncMock(return_value={"agent-fav": 7}),
@@ -1335,7 +1410,6 @@ async def test_list_favorite_library_agents(mocker):
     assert result.agents[0].id == "fav1"
     assert result.agents[0].name == "Favorite Agent"
     assert result.agents[0].graph_id == "agent-fav"
-    assert result.agents[0].store_listing_version_id == "slv-favorite"
     assert result.pagination.total_items == 1
     assert result.pagination.total_pages == 1
     assert result.pagination.current_page == 1

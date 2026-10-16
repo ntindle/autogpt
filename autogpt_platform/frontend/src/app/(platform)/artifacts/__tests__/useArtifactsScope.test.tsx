@@ -1,7 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { WorkspaceFolder } from "@/app/api/__generated__/models/workspaceFolder";
 import { useOrgTeamStore } from "@/services/org-team/store";
 
 const { flag, listFiles, listFolders } = vi.hoisted(() => ({
@@ -18,10 +17,10 @@ vi.mock("@/app/api/__generated__/endpoints/workspace/workspace", () => ({
   listWorkspaceFiles: listFiles,
   useListWorkspaceFolders: listFolders,
   getListWorkspaceFoldersQueryKey: () => ["/workspace/folders"],
-  bulkMoveWorkspaceFiles: vi.fn(),
-  createWorkspaceFolder: vi.fn(),
-  deleteWorkspaceFolder: vi.fn(),
-  updateWorkspaceFolder: vi.fn(),
+  useBulkMoveWorkspaceFiles: () => ({}),
+  useCreateWorkspaceFolder: () => ({}),
+  useDeleteWorkspaceFolder: () => ({}),
+  useUpdateWorkspaceFolder: () => ({}),
 }));
 vi.mock("@/components/molecules/Toast/use-toast", () => ({
   useToast: () => ({ toast: vi.fn() }),
@@ -36,15 +35,6 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
   );
-}
-
-function folder(orgId: string, teamId: string): WorkspaceFolder {
-  return {
-    id: `${teamId}-folder`,
-    name: "Folder",
-    organization_id: orgId,
-    team_id: teamId,
-  } as WorkspaceFolder;
 }
 
 beforeEach(() => {
@@ -68,67 +58,53 @@ afterEach(() => {
   useOrgTeamStore.getState().clearContext();
 });
 
-it("clears a selected shared folder and resumes personal listing when collaboration turns off", async () => {
-  const { result, rerender } = renderHook(() => useArtifactsPage(), {
+const pageOptions = {
+  folders: [],
+  isFoldersLoading: false,
+  isFoldersError: false,
+};
+
+it("switches request headers and cached files with the active tenant", async () => {
+  listFiles.mockResolvedValue({
+    status: 200,
+    data: { files: [{ id: "first-file", name: "first.txt" }], has_more: false },
+  });
+  const { result } = renderHook(() => useArtifactsPage(pageOptions), {
     wrapper,
   });
-  await waitFor(() => expect(listFiles).toHaveBeenCalled());
-  act(() => result.current.selectFolder(folder("shared", "shared-team")));
+  await waitFor(() => expect(result.current.files).toHaveLength(1));
+  listFiles.mockImplementation(() => new Promise(() => {}));
+  act(() =>
+    useOrgTeamStore.setState({
+      activeOrgID: "shared",
+      activeTeamID: "shared-team",
+    }),
+  );
   await waitFor(() =>
-    expect(listFiles).toHaveBeenCalledWith(
-      expect.objectContaining({ folder_id: "shared-team-folder" }),
+    expect(listFiles).toHaveBeenLastCalledWith(
+      expect.anything(),
       expect.objectContaining({
-        headers: expect.objectContaining({
-          "X-Org-Id": "shared",
-          "X-Team-Id": "shared-team",
-        }),
+        headers: { "X-Org-Id": "shared", "X-Team-Id": "shared-team" },
       }),
     ),
   );
-  listFiles.mockClear();
-
-  flag.enabled = false;
-  rerender();
-
-  expect(result.current.selectedFolderId).toBeNull();
-  await waitFor(() => expect(listFiles).toHaveBeenCalled());
-  for (const [params, options] of listFiles.mock.calls) {
-    expect(params.folder_id).toBeUndefined();
-    expect(options.headers).toMatchObject({
-      "X-Org-Id": "personal",
-      "X-Team-Id": "default-team",
-    });
-  }
+  expect(result.current.files).toEqual([]);
 });
 
-it("rejects foreign folder selection while disabled but preserves personal folders", async () => {
-  flag.enabled = false;
-  const { result } = renderHook(() => useArtifactsPage(), { wrapper });
-  act(() => result.current.selectFolder(folder("shared", "shared-team")));
-  expect(result.current.selectedFolderId).toBeNull();
-  act(() => result.current.selectFolder(folder("personal", "default-team")));
-  expect(result.current.selectedFolderId).toBe("default-team-folder");
+it("waits for tenant hydration before requesting files", () => {
+  useOrgTeamStore.setState({ isLoaded: false });
+  renderHook(() => useArtifactsPage(pageOptions), { wrapper });
+  expect(listFiles).not.toHaveBeenCalled();
 });
 
-it("uses custom folder-list scope only while collaboration is enabled", () => {
-  const { rerender } = renderHook(
+it("uses an explicit resource scope for the folder list", () => {
+  renderHook(
     () =>
-      useArtifactsFolders({
-        organizationId: "shared",
-        teamId: "shared-team",
-      }),
+      useArtifactsFolders({ organizationId: "shared", teamId: "shared-team" }),
     { wrapper },
   );
   expect(listFolders.mock.lastCall?.[0].request.headers).toMatchObject({
     "X-Org-Id": "shared",
     "X-Team-Id": "shared-team",
-  });
-
-  flag.enabled = false;
-  rerender();
-
-  expect(listFolders.mock.lastCall?.[0].request.headers).toMatchObject({
-    "X-Org-Id": "personal",
-    "X-Team-Id": "default-team",
   });
 });

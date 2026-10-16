@@ -10,10 +10,12 @@ import {
   getTeamScopedQueryKey,
   getTenantRequestInit,
 } from "@/components/contextual/TeamPicker/helpers";
+import { isHiddenWorkspaceFile } from "@/lib/workspace-files";
+import { useMemo } from "react";
 import { useCopilotStreamStore } from "../../../../copilotStreamStore";
 import { useCopilotUIStore } from "../../../../store";
 import { getMessageArtifacts } from "../../../ChatMessagesContainer/helpers";
-import { isUploadedFile } from "./helpers";
+import { isInternalToolOutput, isUploadedFile } from "./helpers";
 
 export interface SessionFile {
   item: WorkspaceFileItem;
@@ -25,49 +27,70 @@ export function useSessionFiles(sessionId: string | null) {
   const messages = useCopilotStreamStore((s) =>
     sessionId ? s.messageSnapshots[sessionId] : undefined,
   );
-
-  const query = useListWorkspaceFiles(
-    { session_id: sessionId ?? undefined },
-    {
-      query: {
-        enabled: !!sessionId && tenantScope !== null,
-        queryKey: getTeamScopedQueryKey(
-          getListWorkspaceFilesQueryKey({
-            session_id: sessionId ?? undefined,
-          }),
-          tenantScope?.organizationId,
-          tenantScope?.teamId,
-        ),
-        select: (res) => res.data as ListFilesResponse,
-      },
-      request: getTenantRequestInit(
-        tenantScope?.organizationId,
-        tenantScope?.teamId,
-        tenantScope !== null,
-      ),
-    },
-  );
-
-  const fileIdToMessageId = new Map<string, string>();
-  for (const message of messages ?? []) {
-    for (const artifact of getMessageArtifacts(message)) {
-      if (!fileIdToMessageId.has(artifact.id)) {
-        fileIdToMessageId.set(artifact.id, message.id);
+  const { documentCount, fileIdToMessageId } = useMemo(() => {
+    const documentIds = new Set<string>();
+    const fileIdToMessageId = new Map<string, string>();
+    for (const message of messages ?? []) {
+      for (const artifact of getMessageArtifacts(message)) {
+        if (!fileIdToMessageId.has(artifact.id)) {
+          fileIdToMessageId.set(artifact.id, message.id);
+        }
+        if (
+          message.role === "assistant" &&
+          !isHiddenWorkspaceFile({ name: artifact.title })
+        ) {
+          documentIds.add(artifact.id);
+        }
       }
     }
-  }
+    return { documentCount: documentIds.size, fileIdToMessageId };
+  }, [messages]);
+  const params = { session_id: sessionId ?? undefined };
 
-  const files: SessionFile[] = (query.data?.files ?? []).map((item) => ({
-    item,
-    messageID: fileIdToMessageId.get(item.id) ?? null,
-  }));
+  const query = useListWorkspaceFiles(params, {
+    query: {
+      enabled: !!sessionId && tenantScope !== null,
+      queryKey: getTeamScopedQueryKey(
+        [...getListWorkspaceFilesQueryKey(params), documentCount],
+        tenantScope?.organizationId,
+        tenantScope?.teamId,
+      ),
+      select: (res) => res.data as ListFilesResponse,
+    },
+    request: getTenantRequestInit(
+      tenantScope?.organizationId,
+      tenantScope?.teamId,
+      tenantScope !== null,
+    ),
+  });
 
-  const uploaded = files.filter((f) => isUploadedFile(f.item));
-  const generated = files.filter((f) => !isUploadedFile(f.item));
+  // The chip and the artifacts button both read this on every render, and
+  // `messageSnapshots` is rewritten with a fresh array per streamed token —
+  // so without memoising, scanning every message part (and compiling a
+  // RegExp per matched workspace URI) would run at token cadence.
+  const { uploaded, generated, deliverables, files } = useMemo(() => {
+    const files: SessionFile[] = (query.data?.files ?? [])
+      .filter((item) => !isHiddenWorkspaceFile(item))
+      .map((item) => ({
+        item,
+        messageID: fileIdToMessageId.get(item.id) ?? null,
+      }));
+
+    return {
+      files,
+      uploaded: files.filter((f) => isUploadedFile(f.item)),
+      generated: files.filter((f) => !isUploadedFile(f.item)),
+      deliverables: files.filter(
+        (f) => !isUploadedFile(f.item) && !isInternalToolOutput(f.item),
+      ),
+    };
+  }, [fileIdToMessageId, query.data]);
 
   return {
+    documentCount,
     uploaded,
     generated,
+    deliverables,
     isLoading: query.isLoading && !!sessionId && tenantScope !== null,
     isError: query.isError,
     error: query.error,

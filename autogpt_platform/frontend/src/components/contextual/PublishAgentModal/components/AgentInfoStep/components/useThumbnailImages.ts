@@ -144,7 +144,7 @@ export function useThumbnailImages({
     setIsGenerating(true);
     try {
       if (!agentId) {
-        throw new Error("Agent ID is required");
+        throw new Error("Workflow ID is required");
       }
       const { image_url } = await resolveResponse(
         postV2GenerateSubmissionImage(

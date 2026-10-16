@@ -11,6 +11,7 @@ import type { LibraryAgent } from "@/app/api/__generated__/models/libraryAgent";
 import type { UserExecutionCostSummary } from "@/app/api/__generated__/models/userExecutionCostSummary";
 import { okData } from "@/app/api/helpers";
 import { useExecutionEvents } from "@/hooks/useExecutionEvents";
+import { useIsBillingEnabled } from "@/hooks/useIsBillingEnabled";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useMemo } from "react";
 import type { FleetSummary } from "../types";
@@ -56,6 +57,7 @@ export function useLibraryFleetSummary(
   const activeOrgID = useOrgTeamStore((s) => s.activeOrgID);
   const activeTeamID = useOrgTeamStore((s) => s.activeTeamID);
   const isTenantReady = useOrgTeamStore((s) => s.isLoaded);
+  const isBillingEnabled = useIsBillingEnabled();
 
   const { data: executions, isSuccess } = useGetV1ListAllExecutions({
     query: {
@@ -71,10 +73,11 @@ export function useLibraryFleetSummary(
   });
 
   // Authoritative monthly total comes from the server-side aggregator so it
-  // stays correct above the 250-row /executions cap.
+  // stays correct above the 250-row /executions cap. Without billing nothing
+  // shows spend, so there is nothing to fetch.
   const { data: costSummary } = useGetV1UserCostSummary(undefined, {
     query: {
-      enabled: isTenantReady,
+      enabled: isTenantReady && isBillingEnabled,
       queryKey: getTeamScopedQueryKey(
         getGetV1UserCostSummaryQueryKey(),
         activeOrgID,

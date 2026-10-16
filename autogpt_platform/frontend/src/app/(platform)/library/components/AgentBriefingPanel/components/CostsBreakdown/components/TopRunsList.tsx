@@ -34,7 +34,7 @@ export function TopRunsList({ runs, agentLookup }: Props) {
           const agent = agentLookup.get(
             getTenantEntityKey(run.graph_id, run.organization_id, run.team_id),
           );
-          const label = agent?.name ?? `Agent ${run.graph_id.slice(0, 8)}`;
+          const label = agent?.name ?? `Workflow ${run.graph_id.slice(0, 8)}`;
           const href = agent
             ? `${getLibraryAgentHref(
                 agent.libraryAgentId,

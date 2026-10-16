@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.data.model import APIKeyCredentials
 from backend.integrations.credential_lease import (
     CredentialLease,
     run_with_credential_lease_guard,
@@ -65,12 +64,9 @@ async def test_release_stops_heartbeat_before_unlocking():
 
 
 @pytest.mark.asyncio
-async def test_api_key_lease_heartbeat_extends_lock_until_release():
-    credentials = APIKeyCredentials(
-        id="api-key-id",
-        provider="github",
-        title="API key",
-        api_key="secret",
+async def test_oauth_handler_lease_heartbeats_during_long_runtime_use():
+    credentials = _provider_runtime_credentials().model_copy(
+        update={"refresh_strategy": "oauth_handler"}
     )
     lock = AsyncMock()
     lock.locked.return_value = True

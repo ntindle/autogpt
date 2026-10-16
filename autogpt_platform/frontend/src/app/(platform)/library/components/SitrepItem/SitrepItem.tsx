@@ -10,6 +10,7 @@ import { ContextualActionButton } from "../ContextualActionButton/ContextualActi
 import styles from "./SitrepItem.module.css";
 import { buildAutoPilotPrompt } from "./helpers";
 import {
+  Alert02Icon,
   AlertCircleIcon,
   Calendar03Icon,
   Chatting01Icon,
@@ -25,6 +26,7 @@ import {
   getCopilotStartHref,
   getLibraryAgentHref,
 } from "@/services/org-team/builder";
+import { useImageFallback } from "@/hooks/useImageFallback";
 
 interface Props {
   item: SitrepItemData;
@@ -54,6 +56,11 @@ const PRIORITY_CONFIG: Record<
     color: "text-yellow-600",
     bg: "bg-yellow-50",
   },
+  warning: {
+    icon: Alert02Icon,
+    color: "text-amber-600",
+    bg: "bg-amber-50",
+  },
   success: {
     icon: CheckmarkCircle02Icon,
     color: "text-green-600",
@@ -78,6 +85,7 @@ const PRIORITY_CONFIG: Record<
 
 export function SitrepItem({ item }: Props) {
   const config = PRIORITY_CONFIG[item.priority];
+  const { showImage, handleImageError } = useImageFallback(item.agentImageUrl);
   const router = useRouter();
 
   function handleAskAutoPilot() {
@@ -92,11 +100,12 @@ export function SitrepItem({ item }: Props) {
       )}
     >
       <div className="flex min-w-0 flex-1 items-center gap-3">
-        {item.agentImageUrl ? (
+        {showImage && item.agentImageUrl ? (
           <img
             src={item.agentImageUrl}
             alt={item.agentName}
             className="h-6 w-6 flex-shrink-0 rounded-full object-cover"
+            onError={handleImageError}
           />
         ) : (
           <div
@@ -133,7 +142,7 @@ export function SitrepItem({ item }: Props) {
       </div>
 
       <div className="flex flex-shrink-0 flex-wrap items-center justify-center gap-1.5 sm:flex-nowrap sm:justify-end">
-        {item.priority === "success" ? (
+        {item.priority === "success" || item.priority === "warning" ? (
           <NextLink
             href={getLibraryAgentHref(
               item.agentID,
@@ -161,7 +170,7 @@ export function SitrepItem({ item }: Props) {
           className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-[13px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-800"
         >
           <Icon icon={Chatting01Icon} size={14} className="shrink-0" />
-          Ask AutoPilot
+          Ask Otto
         </button>
       </div>
     </div>

@@ -14,6 +14,12 @@ group "default" {
   targets = ["single-container"]
 }
 
+target "backend-server-base" {
+  context    = "."
+  dockerfile = "autogpt_platform/backend/Dockerfile"
+  target     = "server-base"
+}
+
 target "backend-server" {
   context    = "."
   dockerfile = "autogpt_platform/backend/Dockerfile"
@@ -36,7 +42,8 @@ target "single-container" {
     NEXT_PUBLIC_FORCE_FLAG_CHAT_SHARING = "true"
   }
   contexts = {
-    autogpt-backend = "target:backend-server"
+    autogpt-backend-base = "target:backend-server-base"
+    autogpt-backend      = "target:backend-server"
   }
   tags = ["autogpt-platform:single-container-dev"]
 }

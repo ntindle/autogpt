@@ -1,9 +1,11 @@
 import {
+  getGetV2GetPendingReviewsForChatSessionQueryKey,
   getGetV2GetPendingReviewsForExecutionQueryKey,
   getGetV2GetPendingReviewsQueryKey,
   postV2ProcessReviewAction,
   type postV2ProcessReviewActionResponse,
 } from "@/app/api/__generated__/endpoints/executions/executions";
+import type { PendingHumanReviewModel } from "@/app/api/__generated__/models/pendingHumanReviewModel";
 import type { ReviewItem } from "@/app/api/__generated__/models/reviewItem";
 import {
   getTeamScopedQueryKey,
@@ -14,7 +16,8 @@ import { useState } from "react";
 
 export interface ScopedReviewAction {
   item: ReviewItem;
-  graphExecId: string;
+  graphExecId: string | null;
+  sessionId: string | null;
   organizationId: string | null;
   teamId: string | null;
 }
@@ -23,6 +26,15 @@ function scopeKey(action: ScopedReviewAction) {
   return JSON.stringify([action.organizationId, action.teamId]);
 }
 
+type ReviewScope = Pick<
+  PendingHumanReviewModel,
+  | "node_exec_id"
+  | "graph_exec_id"
+  | "session_id"
+  | "organization_id"
+  | "team_id"
+>;
+
 export function useProcessReviews({
   onSettled,
 }: { onSettled?: () => void } = {}) {
@@ -30,8 +42,22 @@ export function useProcessReviews({
   const [isProcessing, setIsProcessing] = useState(false);
 
   async function processReviews(
-    actions: ScopedReviewAction[],
+    items: ReviewItem[],
+    scopes: ReviewScope[],
   ): Promise<postV2ProcessReviewActionResponse> {
+    const actions = items.map((item): ScopedReviewAction => {
+      const scope = scopes.find(
+        (scope) => scope.node_exec_id === item.node_exec_id,
+      );
+      if (!scope) throw new Error("Review scope is missing");
+      return {
+        item,
+        graphExecId: scope.graph_exec_id ?? null,
+        sessionId: scope.session_id ?? null,
+        organizationId: scope.organization_id ?? null,
+        teamId: scope.team_id ?? null,
+      };
+    });
     if (actions.length === 0) {
       throw new Error("No reviews to process");
     }
@@ -91,25 +117,8 @@ export function useProcessReviews({
         queryClient.invalidateQueries({
           queryKey: getGetV2GetPendingReviewsQueryKey(),
         }),
-        ...[
-          ...new Map(
-            actions.map((action) => [
-              JSON.stringify([
-                action.graphExecId,
-                action.organizationId,
-                action.teamId,
-              ]),
-              action,
-            ]),
-          ).values(),
-        ].map((action) =>
-          queryClient.invalidateQueries({
-            queryKey: getTeamScopedQueryKey(
-              getGetV2GetPendingReviewsForExecutionQueryKey(action.graphExecId),
-              action.organizationId,
-              action.teamId,
-            ),
-          }),
+        ...scopeQueryKeys(scopes).map((queryKey) =>
+          queryClient.invalidateQueries({ queryKey }),
         ),
       ]);
       setIsProcessing(false);
@@ -118,4 +127,29 @@ export function useProcessReviews({
   }
 
   return { processReviews, isProcessing };
+}
+
+function scopeQueryKeys(scopes: ReviewScope[]) {
+  const keys = new Map<string, readonly unknown[]>();
+  for (const {
+    graph_exec_id,
+    session_id,
+    organization_id,
+    team_id,
+  } of scopes) {
+    const key = session_id
+      ? getGetV2GetPendingReviewsForChatSessionQueryKey(session_id)
+      : graph_exec_id
+        ? getGetV2GetPendingReviewsForExecutionQueryKey(graph_exec_id)
+        : null;
+    if (key) {
+      const scopedKey = getTeamScopedQueryKey(
+        key,
+        organization_id ?? null,
+        team_id ?? null,
+      );
+      keys.set(JSON.stringify(scopedKey), scopedKey);
+    }
+  }
+  return [...keys.values()];
 }

@@ -41,7 +41,6 @@ async def test_graph_settings_use_exact_execution_scope(
             "organizationId": organization_id,
             "teamId": team_id,
             "isDeleted": False,
-            "isArchived": False,
         }
     )
     assert settings.human_in_the_loop_safe_mode is False

@@ -8,9 +8,9 @@ from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
 
-from backend.api.features.executions.review.model import PendingHumanReviewModel
 from backend.api.features.experts.models import Expert
-from backend.copilot.constants import COPILOT_SESSION_PREFIX
+from backend.api.features.graph_executions.review.model import PendingHumanReviewModel
+from backend.copilot.usage_activation import UsageActivationUnavailable
 from backend.data.db_accessors import (
     execution_db,
     experts_db,
@@ -20,9 +20,11 @@ from backend.data.db_accessors import (
 )
 from backend.data.execution import ExecutionStatus, GraphExecutionMeta
 from backend.util.clients import get_database_manager_async_client
-from backend.util.feature_flag import Flag, is_feature_enabled
-from backend.util.timezone_utils import get_user_timezone_or_utc
+from backend.util.feature_flag import Flag, evaluate_feature_flag, is_feature_enabled
+from backend.util.funnel_analytics import emit_funnel_event
+from backend.util.posthog_events import PostHogEvent
 from backend.util.tenancy_urls import copilot_path
+from backend.util.timezone_utils import get_user_timezone_or_utc
 
 from .models import BriefingContent, BriefingDecisionItem, BriefingRunItem
 from .narrative import compose_narrative
@@ -100,19 +102,16 @@ def compose_briefing(
     # every later LLM turn of that session. The renderer points the overflow
     # at the needs-attention list.
     for review in reviews[:_MAX_DECISION_ITEMS]:
-        if review.graph_exec_id.startswith(COPILOT_SESSION_PREFIX):
-            session_id = review.graph_exec_id.removeprefix(COPILOT_SESSION_PREFIX)
+        if review.session_id:
             link = copilot_path(
-                session_id,
-                review.organization_id,
-                review.team_id,
+                review.session_id, review.organization_id, review.team_id
             )
         else:
-            info = agent_info_by_graph_id.get(review.graph_id)
+            info = agent_info_by_graph_id.get(review.graph_id or "")
             link = (
                 run_link(
                     info.library_agent_id if info else None,
-                    review.graph_exec_id,
+                    review.graph_exec_id or "",
                     review.organization_id,
                     review.team_id,
                 )
@@ -122,7 +121,7 @@ def compose_briefing(
         # review model (including copilot-session reviews and executions older
         # than the 24h window); the local lookup only backfills gaps.
         fallback = experts_by_id.get(
-            review.expert_id or expert_id_by_exec.get(review.graph_exec_id) or ""
+            review.expert_id or expert_id_by_exec.get(review.graph_exec_id or "") or ""
         )
         decision_items.append(
             BriefingDecisionItem(
@@ -235,7 +234,9 @@ async def _compose_fresh_briefing(
     # Resolve only the graphs actually referenced, rather than paging the
     # library: paging it would drop the very agent being briefed for a user
     # with >100 agents, leaving an unlinkable "Agent" row.
-    graph_ids = list({e.graph_id for e in executions} | {r.graph_id for r in reviews})
+    graph_ids = list(
+        {e.graph_id for e in executions} | {r.graph_id for r in reviews if r.graph_id}
+    )
     refs = await library_db().get_library_agent_refs_by_graph_ids(
         user_id, graph_ids, personal_only=True
     )
@@ -264,13 +265,26 @@ async def _compose_fresh_briefing(
     # the thread — home's `without_summaries` only covers the card.
     if not await is_feature_enabled(Flag.AI_ACTIVITY_STATUS, user_id):
         return content
-    return content.model_copy(
-        update={"narrative": await compose_narrative(user_id, content, experts)}
-    )
+    try:
+        narrative = await compose_narrative(user_id, content)
+    except UsageActivationUnavailable:
+        logger.warning(
+            "Briefing narrative usage attribution unavailable for %s", user_id[:8]
+        )
+        narrative = None
+    return content.model_copy(update={"narrative": narrative})
 
 
 async def generate_and_deliver_briefing(user_id: str) -> BriefingResult:
-    if not await is_feature_enabled(Flag.HIRE_EXPERTS, user_id, default=False):
+    enabled, authoritative = await evaluate_feature_flag(
+        Flag.HIRE_EXPERTS, user_id, default=False
+    )
+    if not enabled:
+        # Only a flag that actually evaluated may unregister the cron (see
+        # ``execute_morning_briefing``). A failed read yields False too, and
+        # would delete every user's schedule on one bad boot or DB blip.
+        if not authoritative:
+            return {"status": "skipped", "reason": "flag_unavailable"}
         return {"status": "skipped", "reason": "flag_disabled"}
 
     user = await user_db().get_user_by_id(user_id)
@@ -297,6 +311,16 @@ async def generate_and_deliver_briefing(user_id: str) -> BriefingResult:
                 # otherwise be re-gathered and re-composed on every future
                 # run. Stamp it so this user's cron stops reprocessing it.
                 await client.mark_briefing_delivered(user_id, record.id)
+            emit_funnel_event(
+                user_id,
+                PostHogEvent.BRIEFING_GENERATED,
+                {"run_count": 0, "decision_count": 0, "has_content": False},
+                (
+                    f"briefing_generated:{record.id}"
+                    if record is not None
+                    else f"briefing_generated:empty:{briefing_date.isoformat()}"
+                ),
+            )
             return {"status": "skipped", "reason": "nothing_to_say"}
         if record is None:
             record = await client.create_briefing(
@@ -309,6 +333,16 @@ async def generate_and_deliver_briefing(user_id: str) -> BriefingResult:
             await client.update_briefing_content(
                 user_id, record.id, content.model_dump(mode="json")
             )
+        emit_funnel_event(
+            user_id,
+            PostHogEvent.BRIEFING_GENERATED,
+            {
+                "run_count": content.completed_total + content.failed_total,
+                "decision_count": content.decision_total,
+                "has_content": True,
+            },
+            f"briefing_generated:{record.id}",
+        )
 
     message_id = str(
         uuid.uuid5(
@@ -323,6 +357,12 @@ async def generate_and_deliver_briefing(user_id: str) -> BriefingResult:
         metadata={"kind": "morning_briefing", "briefing_id": record.id},
     )
     await client.mark_briefing_delivered(user_id, record.id)
+    emit_funnel_event(
+        user_id,
+        PostHogEvent.BRIEFING_DELIVERED,
+        {"briefing_id": record.id},
+        f"briefing_delivered:{record.id}",
+    )
     return {
         "status": "delivered",
         "briefing_id": record.id,

@@ -118,6 +118,12 @@ describe("ChatContainer — archived expert", () => {
   it("replaces the composer with a read-only notice for a fired expert", () => {
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={vi.fn()}
         expertIdentity={{ ...mariaIdentity, isArchived: true }}
@@ -133,6 +139,12 @@ describe("ChatContainer — archived expert", () => {
   it("keeps the composer for an active expert", () => {
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={vi.fn()}
         expertIdentity={mariaIdentity}
@@ -147,6 +159,12 @@ describe("ChatContainer — archived expert", () => {
     const onSend = vi.fn();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         expertIdentity={{ ...mariaIdentity, isArchived: true }}
@@ -162,6 +180,12 @@ describe("ChatContainer — archived expert", () => {
     const onSend = vi.fn();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         isResolvingExpertIdentity
@@ -177,6 +201,12 @@ describe("ChatContainer — archived expert", () => {
     const onSend = vi.fn();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         expertIdentity={{ ...mariaIdentity, isArchived: true }}
@@ -192,6 +222,12 @@ describe("ChatContainer — archived expert", () => {
     const onSend = vi.fn();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         isResolvingExpertIdentity
@@ -207,6 +243,12 @@ describe("ChatContainer — archived expert", () => {
     const onSend = vi.fn();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         expertIdentity={mariaIdentity}
@@ -228,6 +270,12 @@ describe("ChatContainer — archived expert", () => {
     const onSend = vi.fn();
     render(
       <ChatContainer
+        {...{
+          createTeamId: null,
+          onCreateTeamChange: () => {},
+          isTeamContextReady: true,
+          canSelectCreateTeam: false,
+        }}
         {...baseProps}
         onSend={onSend}
         expertIdentity={mariaIdentity}

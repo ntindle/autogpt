@@ -14,8 +14,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from backend.copilot import usage_activation_fixtures
 from backend.executor.scheduler import SCHEDULER_DREAM_OPERATION_TIMEOUT_SECONDS
-from backend.util.llm.providers import DEFAULT_REQUEST_TIMEOUT_SECONDS
 
 from . import orchestrator as orchestrator_mod
 from .apply import INGESTION_DRAIN_TIMEOUT_SECONDS, LOCK_DRAIN_RENEWAL_SECONDS
@@ -452,17 +452,19 @@ async def test_each_phase_threads_its_own_llm_timeout_into_structured_completion
     ]
 
 
-def test_long_output_phase_timeouts_exceed_the_shared_request_default():
-    """Regression pin: every phase used to run on the shared 120s
-    ``DEFAULT_REQUEST_TIMEOUT_SECONDS``, which cannot decode the 16384
-    output tokens recombine/sanitize are budgeted for. If these ever
-    drop back to (or below) the default, the token-cap raise becomes
-    dead letter again."""
-    assert orchestrator_mod.RECOMBINE_TIMEOUT_SECONDS > DEFAULT_REQUEST_TIMEOUT_SECONDS
-    assert orchestrator_mod.SANITIZE_TIMEOUT_SECONDS > DEFAULT_REQUEST_TIMEOUT_SECONDS
-    assert (
-        orchestrator_mod.CONSOLIDATE_TIMEOUT_SECONDS >= DEFAULT_REQUEST_TIMEOUT_SECONDS
-    )
+# A 120s ceiling truncates a 16384-token decode. Pinned as a literal, not
+# imported from `DEFAULT_REQUEST_TIMEOUT_SECONDS`: that setting sizes generic
+# block calls and is free to move independently of this budget.
+_TRUNCATING_TIMEOUT_SECONDS = 120
+
+
+def test_long_output_phase_timeouts_clear_the_120s_truncation_threshold():
+    """Regression pin: at 120s the phases cannot decode the 16384 output
+    tokens recombine/sanitize are budgeted for. If these ever drop to (or
+    below) that, the token-cap raise becomes dead letter again."""
+    assert orchestrator_mod.RECOMBINE_TIMEOUT_SECONDS > _TRUNCATING_TIMEOUT_SECONDS
+    assert orchestrator_mod.SANITIZE_TIMEOUT_SECONDS > _TRUNCATING_TIMEOUT_SECONDS
+    assert orchestrator_mod.CONSOLIDATE_TIMEOUT_SECONDS >= _TRUNCATING_TIMEOUT_SECONDS
 
 
 def test_phase_timeouts_plus_headroom_fit_scheduler_and_lock_envelope():
@@ -1816,3 +1818,6 @@ async def test_batch_handoff_revokes_batch_when_lock_extend_fails(mocker):
     delete_bundle.assert_awaited_once_with("p-lock-lost")
     handle.disown.assert_not_called()
     assert result.error and "lock lost" in result.error
+
+
+usage_snapshot = usage_activation_fixtures.usage_snapshot

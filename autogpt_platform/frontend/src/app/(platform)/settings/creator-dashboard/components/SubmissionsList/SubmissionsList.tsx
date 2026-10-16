@@ -98,7 +98,7 @@ export function SubmissionsList({
         <SearchInput
           value={searchInput}
           onChange={onSearchChange}
-          placeholder="Search by agent or listing name"
+          placeholder="Search by workflow or listing name"
           aria-label="Search submissions"
           maxLength={100}
           loading={isFetching}
@@ -111,7 +111,7 @@ export function SubmissionsList({
           <table className="w-full border-collapse text-left">
             <thead>
               <tr className="border-b border-zinc-100 bg-zinc-50/60">
-                <ColumnHeader label="Agent" />
+                <ColumnHeader label="Workflow" />
                 <ColumnHeader
                   label="Status"
                   width="140px"

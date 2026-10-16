@@ -5,10 +5,12 @@ import {
   ORG_HEADER_NAME,
   TEAM_HEADER_NAME,
 } from "@/services/org-team/header-names";
-import type { UIMessage } from "ai";
+import type { ChatStatus, UIMessage } from "ai";
 
 import { deleteV2DisconnectSessionStream } from "@/app/api/__generated__/endpoints/chat/chat";
 import { TOOL_PART_PREFIX } from "./components/JobStatsBar/constants";
+import { parseSpecialMarkers } from "./helpers/messageMarkers";
+import { TURN_PAUSED_PART_TYPE } from "./turnPause";
 
 export const ORIGINAL_TITLE = "AutoGPT";
 
@@ -44,7 +46,7 @@ export async function getCopilotAuthHeaders(
   const { token, error } = await getWebSocketToken();
   if (error || !token) {
     console.warn("[Copilot] Failed to get auth token:", error);
-    throw new Error("Authentication failed — please sign in again.");
+    throw new CopilotAuthError();
   }
   return {
     Authorization: `Bearer ${token}`,
@@ -60,13 +62,21 @@ export async function getCopilotAuthHeaders(
   };
 }
 
+/** The server answered and has no session token: signed out, not offline. */
+export class CopilotAuthError extends Error {
+  constructor() {
+    super("Authentication failed — please sign in again.");
+    this.name = "CopilotAuthError";
+  }
+}
+
 /**
  * Build the document title showing how many sessions are ready.
  * Returns the base title when count is 0.
  */
 export function formatNotificationTitle(count: number): string {
   return count > 0
-    ? `(${count}) AutoPilot is ready - ${ORIGINAL_TITLE}`
+    ? `(${count}) New activity - ${ORIGINAL_TITLE}`
     : ORIGINAL_TITLE;
 }
 
@@ -126,8 +136,9 @@ export function hasActiveBackendStream(result: { data?: unknown }): boolean {
 /**
  * Whether the trailing assistant message has at least one part the UI
  * would visibly render: text with non-empty content, reasoning with
- * non-empty content, or any tool part (tool cards render regardless of
- * state). Used to gate the resume-snapshot discard — the replay may stream
+ * non-empty content, any tool part (tool cards render regardless of
+ * state), or a Paused card — a turn refused before it ran streams nothing
+ * else. Used to gate the resume-snapshot discard — the replay may stream
  * empty reasoning-start / step-start chunks for minutes before any
  * rendered content (e.g. Perplexity deep research), and we do not want to
  * drop the pre-replay snapshot until the user actually sees something.
@@ -139,6 +150,7 @@ export function hasVisibleAssistantContent(messages: UIMessage[]): boolean {
     if (part.type === "text" && part.text.trim().length > 0) return true;
     if (part.type === "reasoning" && part.text.trim().length > 0) return true;
     if (part.type.startsWith(TOOL_PART_PREFIX)) return true;
+    if (part.type === TURN_PAUSED_PART_TYPE) return true;
     return false;
   });
 }
@@ -249,6 +261,7 @@ interface SuppressDuplicateArgs {
   isReconnectScheduled: boolean;
   lastSubmittedText: string | null;
   messages: UIMessage[];
+  status?: ChatStatus;
 }
 
 /**
@@ -273,8 +286,20 @@ export function getSendSuppressionReason({
   isReconnectScheduled,
   lastSubmittedText,
   messages,
+  status,
 }: SuppressDuplicateArgs): SuppressReason {
   if (isReconnectScheduled) return "reconnecting";
+
+  const lastMessage = messages.at(-1);
+  const hasRetryableError =
+    status === "ready" &&
+    lastMessage?.role === "assistant" &&
+    lastMessage.parts.some(
+      (part) =>
+        part.type === "text" &&
+        parseSpecialMarkers(part.text).markerType === "retryable_error",
+    );
+  if (status === "error" || hasRetryableError) return null;
 
   if (text && lastSubmittedText === text) {
     const lastUserMsg = messages.filter((m) => m.role === "user").pop();
@@ -397,11 +422,17 @@ export function deduplicateMessages(messages: UIMessage[]): UIMessage[] {
   });
 }
 
-export function resolveModeChangedMode(dataPart: {
+/**
+ * True when the server reports it moved a turn to a different execution
+ * engine. Nothing displays the engine and nothing can request one — the only
+ * consumer widens its post-finish refetch window, because a switch takes
+ * longer to settle. The named engine is deliberately not returned.
+ */
+export function isEngineSwitchPart(dataPart: {
   type: string;
   data?: unknown;
-}): "extended_thinking" | "fast" | null {
-  if (dataPart.type !== "data-mode-changed") return null;
+}): boolean {
+  if (dataPart.type !== "data-mode-changed") return false;
   const mode = (dataPart.data as { mode?: string } | undefined)?.mode;
-  return mode === "extended_thinking" || mode === "fast" ? mode : null;
+  return mode === "extended_thinking" || mode === "fast";
 }

@@ -1,49 +1,78 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { listWorkspaceFiles } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import type { WorkspaceFileItem } from "@/app/api/__generated__/models/workspaceFileItem";
 import type { WorkspaceFolder } from "@/app/api/__generated__/models/workspaceFolder";
+import { isHiddenWorkspaceFile } from "@/lib/workspace-files";
 import { type InfiniteData, useInfiniteQuery } from "@tanstack/react-query";
+import { ancestorsOf } from "./components/WorkspaceFolders/folderTree";
 import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
 import { useOrgTeamStore } from "@/services/org-team/store";
-import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 
 export type OriginFilter = "all" | "uploaded" | "generated";
+export type ArtifactsView = "list" | "grid";
 
 const SEARCH_DEBOUNCE_MS = 250;
 const ARTIFACTS_PAGE_SIZE = 50;
+const FOLDER_PARAM = "folder";
 
 export const ARTIFACTS_LIST_QUERY_KEY = ["artifacts", "list"] as const;
 
 type ListPage = Awaited<ReturnType<typeof listWorkspaceFiles>>;
 
-export function useArtifactsPage() {
-  const collaborationEnabled = useGetFlag(Flag.SHOW_ORG_SETTINGS);
+interface Options {
+  folders: WorkspaceFolder[];
+  isFoldersLoading: boolean;
+  isFoldersError: boolean;
+}
+
+export function useArtifactsPage({
+  folders,
+  isFoldersLoading,
+  isFoldersError,
+}: Options) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [searchTerm, setSearchTerm] = useState("");
   const [originFilter, setOriginFilter] = useState<OriginFilter>("all");
-  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
-  const [selectedFolderScope, setSelectedFolderScope] = useState<{
-    organizationId: string | null;
-    teamId: string | null;
-  } | null>(null);
-  const activeOrgID = useOrgTeamStore((s) => s.activeOrgID);
-  const activeTeamID = useOrgTeamStore((s) => s.activeTeamID);
-  const isTenantReady = useOrgTeamStore((s) => s.isLoaded);
-  const scopedFolder =
-    collaborationEnabled ||
-    (selectedFolderScope?.organizationId === activeOrgID &&
-      selectedFolderScope?.teamId === activeTeamID)
-      ? selectedFolderScope
-      : null;
-  const currentFolderId = scopedFolder ? selectedFolderId : null;
-  const organizationId = scopedFolder
-    ? scopedFolder.organizationId
-    : activeOrgID;
-  const teamId = scopedFolder ? scopedFolder.teamId : activeTeamID;
+  const [expertFilter, setExpertFilter] = useState<string | null>(null);
+  const [view, setView] = useState<ArtifactsView>("list");
 
+  // The open folder lives in the URL so a reload, a shared link and the back
+  // button land in it. Only a settled folders query can prove an id is gone,
+  // so until then it is taken at face value and the files load straight away
+  // rather than queueing behind the folder list.
+  const folderParam = searchParams.get(FOLDER_PARAM);
+  const isStaleFolder =
+    folderParam !== null &&
+    !isFoldersLoading &&
+    !isFoldersError &&
+    !folders.some((folder) => folder.id === folderParam);
+  const selectedFolderId = isStaleFolder ? null : folderParam;
+  const organizationId = useOrgTeamStore((state) => state.activeOrgID);
+  const teamId = useOrgTeamStore((state) => state.activeTeamID);
+  const isTenantReady = useOrgTeamStore((state) => state.isLoaded);
+
+  // Remembered while the folder is live, so deleting it (or an ancestor) can
+  // land the user one level up instead of back at the root.
+  const ancestorIdsRef = useRef<string[]>([]);
+  if (selectedFolderId !== null) {
+    ancestorIdsRef.current = ancestorsOf(folders, selectedFolderId)
+      .slice(0, -1)
+      .map((folder) => folder.id);
+  }
+
+  const currentSearch = searchParams.toString();
   useEffect(() => {
-    setSelectedFolderId(null);
-    setSelectedFolderScope(null);
-  }, [activeOrgID, activeTeamID, collaborationEnabled]);
+    if (!isStaleFolder) return;
+    const survivingAncestor = [...ancestorIdsRef.current]
+      .reverse()
+      .find((id) => folders.some((folder) => folder.id === id));
+    router.replace(
+      folderHref(pathname, currentSearch, survivingAncestor ?? null),
+    );
+  }, [isStaleFolder, pathname, currentSearch, router, folders]);
 
   const debouncedSearch = useDebouncedValue(
     searchTerm.trim(),
@@ -52,12 +81,16 @@ export function useArtifactsPage() {
 
   const q = debouncedSearch || undefined;
   const origin = originFilter === "all" ? undefined : originFilter;
+  // "From: <expert>" narrows the files shown where you are, the way "Type"
+  // does. `include_user_files` is left unsent, so the tab keeps meaning "made
+  // in this expert's chats".
+  const expertId = expertFilter ?? undefined;
   // No folder selected → show only root-level files; a folder is selected →
   // scope the listing to that folder.
-  const folderId = currentFolderId ?? undefined;
+  const folderId = selectedFolderId ?? undefined;
   // While searching, span the whole workspace (including files inside folders)
   // so global search isn't limited to root-level files.
-  const rootOnly = currentFolderId === null && !q;
+  const rootOnly = selectedFolderId === null && !q;
 
   const query = useInfiniteQuery({
     queryKey: [
@@ -67,6 +100,7 @@ export function useArtifactsPage() {
         origin: origin ?? null,
         folderId: folderId ?? null,
         rootOnly,
+        expertId: expertId ?? null,
         organizationId,
         teamId,
         isTenantReady,
@@ -81,6 +115,7 @@ export function useArtifactsPage() {
           origin,
           folder_id: folderId,
           root_only: rootOnly,
+          expert_id: expertId,
         },
         getTenantRequestInit(organizationId, teamId, isTenantReady),
       ),
@@ -107,25 +142,19 @@ export function useArtifactsPage() {
     debouncedSearch,
     originFilter,
     setOriginFilter,
-    selectedFolderId: currentFolderId,
-    selectFolder: (folder: WorkspaceFolder | null) => {
-      if (
-        !collaborationEnabled &&
-        folder &&
-        (folder.organization_id !== activeOrgID ||
-          (folder.team_id ?? null) !== activeTeamID)
-      )
-        return;
-      setSelectedFolderId(folder?.id ?? null);
-      setSelectedFolderScope(
-        folder
-          ? {
-              organizationId: folder.organization_id ?? null,
-              teamId: folder.team_id ?? null,
-            }
-          : null,
-      );
+    selectedFolderId,
+    // Entering a folder is a step forward, so the back button leaves it;
+    // leaving replaces, so back does not drop you straight back inside.
+    openFolder: (folderId: string) =>
+      router.push(folderHref(pathname, currentSearch, folderId)),
+    closeFolder: () => {
+      if (folderParam === null) return;
+      router.replace(folderHref(pathname, currentSearch, null));
     },
+    expertFilter,
+    setExpertFilter,
+    view,
+    setView,
     hasMore: !!query.hasNextPage,
     isLoadingMore: query.isFetchingNextPage,
     loadMore: () => {
@@ -134,13 +163,27 @@ export function useArtifactsPage() {
   };
 }
 
+function folderHref(
+  pathname: string,
+  search: string,
+  folderId: string | null,
+): string {
+  const params = new URLSearchParams(search);
+  if (folderId) params.set(FOLDER_PARAM, folderId);
+  else params.delete(FOLDER_PARAM);
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
+}
+
 function flattenFiles(
   data: InfiniteData<ListPage> | undefined,
 ): WorkspaceFileItem[] {
   if (!data) return [];
-  return data.pages.flatMap((page) =>
-    page.status === 200 ? (page.data.files ?? []) : [],
-  );
+  // Hidden here rather than in the fetch: paging offsets count every file
+  // the server returned (see countLoadedFiles).
+  return data.pages
+    .flatMap((page) => (page.status === 200 ? (page.data.files ?? []) : []))
+    .filter((file) => !isHiddenWorkspaceFile(file));
 }
 
 function countLoadedFiles(pages: ListPage[]): number {

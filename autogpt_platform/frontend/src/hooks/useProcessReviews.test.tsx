@@ -4,6 +4,7 @@ import { HttpResponse, http } from "msw";
 import type { ReactNode } from "react";
 import { expect, test, vi } from "vitest";
 import {
+  getGetV2GetPendingReviewsForChatSessionQueryKey,
   getGetV2GetPendingReviewsForExecutionQueryKey,
   getGetV2GetPendingReviewsQueryKey,
 } from "@/app/api/__generated__/endpoints/executions/executions";
@@ -36,11 +37,11 @@ const item = {
   approved: true,
   auto_approve_future: false,
 };
-const scopedAction = {
-  item,
-  graphExecId: "run-1",
-  organizationId: "org-1",
-  teamId: "team-1",
+const reviewScope = {
+  node_exec_id: item.node_exec_id,
+  graph_exec_id: "run-1",
+  organization_id: "org-1",
+  team_id: "team-1",
 };
 
 // Dual-key invalidation is what makes the home count and the thread's list
@@ -56,7 +57,7 @@ test("invalidates both the user-wide and the per-execution review queries", asyn
   );
   const { result, invalidatedKeys } = setup();
 
-  await result.current.processReviews([scopedAction, scopedAction]);
+  await result.current.processReviews([item], [reviewScope, reviewScope]);
 
   const keys = invalidatedKeys();
   expect(keys).toContainEqual(getGetV2GetPendingReviewsQueryKey());
@@ -72,6 +73,38 @@ test("invalidates both the user-wide and the per-execution review queries", asyn
   ).toHaveLength(1);
 });
 
+test("a chat review invalidates its session's queue, not an execution's", async () => {
+  server.use(
+    getPostV2ProcessReviewActionMockHandler200({
+      approved_count: 1,
+      rejected_count: 0,
+      failed_count: 0,
+    }),
+  );
+  const { result, invalidatedKeys } = setup();
+
+  await result.current.processReviews(
+    [item],
+    [
+      {
+        node_exec_id: item.node_exec_id,
+        graph_exec_id: null,
+        session_id: "chat-1",
+      },
+    ],
+  );
+
+  const keys = invalidatedKeys();
+  expect(keys).toContainEqual(
+    getTeamScopedQueryKey(
+      getGetV2GetPendingReviewsForChatSessionQueryKey("chat-1"),
+      null,
+      null,
+    ),
+  );
+  expect(keys).toHaveLength(2);
+});
+
 test("still invalidates when the mutation rejects", async () => {
   server.use(
     http.post("/api/proxy/api/review/action", () => HttpResponse.error()),
@@ -79,7 +112,7 @@ test("still invalidates when the mutation rejects", async () => {
   const { result, invalidatedKeys } = setup();
 
   await expect(
-    result.current.processReviews([scopedAction]),
+    result.current.processReviews([item], [reviewScope]),
   ).rejects.toBeDefined();
 
   expect(invalidatedKeys()).toContainEqual(getGetV2GetPendingReviewsQueryKey());

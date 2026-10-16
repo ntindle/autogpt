@@ -28,6 +28,11 @@ import {
   getTenantRequestInit,
 } from "@/components/contextual/TeamPicker/helpers";
 import { useBuilderTenantScope } from "./useBuilderTenantScope";
+import { retryUnlessClientError } from "../helpers/graphLoadError";
+import {
+  describeSaveError,
+  markInvalidFields,
+} from "../helpers/saveGraphError";
 
 export type SaveGraphOptions = {
   showToast?: boolean;
@@ -71,6 +76,7 @@ export const useSaveGraph = ({
           tenantScope.organizationId,
           tenantScope.teamId,
         ),
+        retry: retryUnlessClientError,
       },
       request: getTenantRequestInit(
         tenantScope.organizationId,
@@ -100,20 +106,11 @@ export const useSaveGraph = ({
           onSuccess?.(data);
           if (showToast) {
             toast({
-              title: "Graph saved successfully",
-              description: "The graph has been saved successfully.",
+              title: "Workflow saved successfully",
+              description: "The workflow has been saved successfully.",
               variant: "default",
             });
           }
-        },
-        onError: (error) => {
-          onError?.(error);
-          toast({
-            title: "Error saving graph",
-            description:
-              (error as any).message ?? "An unexpected error occurred.",
-            variant: "destructive",
-          });
         },
       },
     });
@@ -136,20 +133,11 @@ export const useSaveGraph = ({
           onSuccess?.(data);
           if (showToast) {
             toast({
-              title: "Graph saved successfully",
-              description: "The graph has been saved successfully.",
+              title: "Workflow saved successfully",
+              description: "The workflow has been saved successfully.",
               variant: "default",
             });
           }
-        },
-        onError: (error) => {
-          onError?.(error);
-          toast({
-            title: "Error saving graph",
-            description:
-              (error as any).message ?? "An unexpected error occurred.",
-            variant: "destructive",
-          });
         },
       },
       request: getTenantRequestInit(
@@ -158,7 +146,7 @@ export const useSaveGraph = ({
       ),
     });
 
-  const saveGraph = useCallback(
+  const persistGraph = useCallback(
     async (values?: { name?: string; description?: string }) => {
       const graphNodes = useNodeStore.getState().getBackendNodes();
       const graphLinks = useEdgeStore.getState().getBackendLinks();
@@ -169,7 +157,7 @@ export const useSaveGraph = ({
           name:
             values?.name ||
             graph.name ||
-            `New Agent ${new Date().toISOString()}`,
+            `New Workflow ${new Date().toISOString()}`,
           description: values?.description ?? graph.description ?? "",
           nodes: graphNodes,
           links: graphLinks,
@@ -179,7 +167,7 @@ export const useSaveGraph = ({
           if (showToast) {
             toast({
               title: "No changes to save",
-              description: "The graph is the same as the saved version.",
+              description: "The workflow is the same as the saved version.",
               variant: "default",
             });
           }
@@ -198,7 +186,7 @@ export const useSaveGraph = ({
         return graphData;
       } else {
         const data: Graph = {
-          name: values?.name || `New Agent ${new Date().toISOString()}`,
+          name: values?.name || `New Workflow ${new Date().toISOString()}`,
           description: values?.description || "",
           nodes: graphNodes,
           links: graphLinks,
@@ -217,6 +205,24 @@ export const useSaveGraph = ({
       }
     },
     [graph, toast, createNewGraph, updateGraph],
+  );
+
+  // Resolves to null when the save fails; the user has been told why.
+  const saveGraph = useCallback(
+    async (values?: { name?: string; description?: string }) => {
+      let saved: GraphModel;
+      try {
+        saved = await persistGraph(values);
+      } catch (error) {
+        onError?.(error);
+        markInvalidFields(error);
+        toast(describeSaveError(error));
+        return null;
+      }
+      useNodeStore.getState().clearAllNodeErrors();
+      return saved;
+    },
+    [persistGraph, onError, toast],
   );
 
   return {

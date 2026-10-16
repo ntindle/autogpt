@@ -40,6 +40,9 @@ afterEach(() => {
       history: [],
       activeTab: "files",
       lastArtifact: null,
+      mode: "artifact",
+      computer: null,
+      isComputerOpen: false,
     },
   });
 });

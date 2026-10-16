@@ -9,6 +9,7 @@ export interface ExtendedFormContextType extends FormContextType {
   showOptionalToggle?: boolean;
   organizationId?: string | null;
   teamId?: string | null;
+  domIdPrefix?: string;
 }
 
 export type PathSegment = {

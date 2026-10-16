@@ -31,14 +31,23 @@ export function useGraphScheduleListItem({ schedule }: Args) {
     nextRunDate && !Number.isNaN(nextRunDate.valueOf())
       ? formatDistanceToNow(nextRunDate, { addSuffix: true })
       : null;
-  const nextRunLabel = nextRunRelative ? `Next ${nextRunRelative}` : "Pending";
+  // One source of truth: the row prefixes it, the View dialog shows it bare.
+  const nextRunValue = nextRunRelative
+    ? nextRunRelative
+    : schedule.next_run_time
+      ? "Pending"
+      : "Paused";
+  const nextRunLabel = nextRunRelative
+    ? `Next ${nextRunRelative}`
+    : nextRunValue;
   const nextRunTitle = nextRunDate ? nextRunDate.toString() : undefined;
 
   const recurrenceLabel = schedule.cron
     ? safeHumanizeCronExpression(schedule.cron)
     : "Runs once";
 
-  const agentLabel = schedule.agent_name || schedule.name || "Scheduled agent";
+  const agentLabel =
+    schedule.agent_name || schedule.name || "Scheduled workflow";
   const agentHref = getBuilderHref({
     graphId: schedule.graph_id,
     graphVersion: schedule.graph_version,
@@ -79,7 +88,7 @@ export function useGraphScheduleListItem({ schedule }: Args) {
 
   return {
     nextRunLabel,
-    nextRunRelative,
+    nextRunValue,
     nextRunTitle,
     recurrenceLabel,
     agentLabel,

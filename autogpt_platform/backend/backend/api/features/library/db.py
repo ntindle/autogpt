@@ -9,6 +9,7 @@ import prisma.errors
 import prisma.models
 import prisma.types
 from prisma.enums import GrantCapability
+from starlette.datastructures import Headers
 
 import backend.api.features.store.image_gen as store_image_gen
 import backend.api.features.store.media as store_media
@@ -42,6 +43,7 @@ from backend.data.tenancy import (
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.integrations.webhooks.graph_lifecycle_hooks import (
     before_graph_activate,
+    clear_unowned_auto_credentials,
     on_graph_deactivate,
 )
 from backend.util.background import spawn_background_task
@@ -54,6 +56,7 @@ from backend.util.exceptions import (
 )
 from backend.util.json import SafeJson
 from backend.util.models import Pagination
+from backend.util.product_analytics import track_listing_added_to_library
 from backend.util.settings import Config
 
 from . import model as library_model
@@ -170,51 +173,6 @@ async def _fetch_execution_counts(
         ): int((row.get("_count") or {}).get("_all") or 0)
         for row in rows
     }
-
-
-async def _fetch_matching_store_version_ids(
-    agents: list[prisma.models.LibraryAgent],
-) -> dict[tuple[str, int], str]:
-    """Map (graph_id, graph_version) → approved StoreListingVersion id.
-
-    Only approved, non-deleted versions are returned so the ids are always
-    valid install targets. Matching on the exact graph version keeps installs
-    version-stable: the id refers to the snapshot the library agent holds,
-    not the listing's current active version.
-    """
-    pairs = {(a.agentGraphId, a.agentGraphVersion) for a in agents}
-    if not pairs:
-        return {}
-    pair_filters = [
-        {"agentGraphId": graph_id, "agentGraphVersion": graph_version}
-        for graph_id, graph_version in sorted(pairs)
-    ]
-    try:
-        versions = await prisma.models.StoreListingVersion.prisma().find_many(
-            where={
-                "OR": pair_filters,
-                **installable_store_version_where(),
-            },
-            distinct=["agentGraphId", "agentGraphVersion"],
-            order=[
-                {"agentGraphId": "asc"},
-                {"agentGraphVersion": "asc"},
-                {"createdAt": "desc"},
-                {"id": "desc"},
-            ],
-        )
-    except Exception:
-        logger.warning(
-            "Failed to fetch store listing versions for library agents",
-            exc_info=True,
-        )
-        return {}
-    matches: dict[tuple[str, int], str] = {}
-    for version in versions:
-        pair = (version.agentGraphId, version.agentGraphVersion)
-        if pair in pairs and pair not in matches:
-            matches[pair] = version.id
-    return matches
 
 
 async def _fetch_marketplace_details(
@@ -731,6 +689,8 @@ async def get_library_agent_refs_by_graph_ids(
     organization_id: str | None = None,
     team_id_restriction: str | None = None,
     personal_only: bool = False,
+    *,
+    include_deleted: bool = False,
 ) -> list[library_model.LibraryAgentRef]:
     """Resolve display name + id for the given graphs in one query.
 
@@ -740,12 +700,18 @@ async def get_library_agent_refs_by_graph_ids(
 
     One newest ref is returned per exact graph and tenant scope. The same
     marketplace graph can legitimately be installed into several teams.
+    ``@@unique([userId, agentGraphId, agentGraphVersion])`` allows several
+    rows per graph, so exactly one ref per graph is returned — the newest
+    version — instead of whichever row the DB happened to return last.
+
+    With ``include_deleted`` a graph whose every library row was removed
+    still resolves to its last name, marked ``is_deleted``; a live row
+    always wins over a removed one.
     """
     if not graph_ids:
         return []
     where: prisma.types.LibraryAgentWhereInput = {
         "agentGraphId": {"in": graph_ids},
-        "isDeleted": False,
     }
     if organization_id is None:
         where["userId"] = user_id
@@ -762,9 +728,11 @@ async def get_library_agent_refs_by_graph_ids(
                 team_id_restriction=team_id_restriction,
             )
         ]
+    if not include_deleted:
+        where["isDeleted"] = False
     agents = await prisma.models.LibraryAgent.prisma().find_many(
         where=where,
-        order=[{"agentGraphVersion": "asc"}],
+        order=[{"isDeleted": "desc"}, {"agentGraphVersion": "asc"}],
     )
     newest_by_scope = {
         (agent.agentGraphId, agent.organizationId, agent.teamId): (
@@ -772,6 +740,8 @@ async def get_library_agent_refs_by_graph_ids(
                 id=agent.id,
                 graph_id=agent.agentGraphId,
                 name=agent.name or "",
+                image_url=agent.imageUrl,
+                is_deleted=agent.isDeleted,
                 organization_id=agent.organizationId,
                 team_id=agent.teamId,
             )
@@ -946,7 +916,14 @@ async def add_generated_agent_image(
         )
         if image_url is None:
             image = await store_image_gen.generate_agent_image(graph)
-            image_file = fastapi.UploadFile(file=image, filename=filename)
+
+            # Create UploadFile with the correct filename and content_type
+            image_file = fastapi.UploadFile(
+                file=image,
+                filename=filename,
+                headers=Headers({"content-type": "image/jpeg"}),
+            )
+
             image_url = await store_media.upload_media(
                 user_id=user_id,
                 file=image_file,
@@ -1306,6 +1283,8 @@ async def _create_graph_in_library_locked(
     # to a user-friendly response.
     if graph_model.is_active:
         graph_model = await before_graph_activate(graph_model, user_id=user_id)
+    else:
+        await clear_unowned_auto_credentials(graph_model, user_id)
 
     created_graph = await graph_db.create_graph(
         graph_model,
@@ -1385,6 +1364,8 @@ async def _update_graph_in_library_locked(
     # version half-saved. Raises GraphActivationError for the caller.
     if graph_model.is_active:
         graph_model = await before_graph_activate(graph_model, user_id=user_id)
+    else:
+        await clear_unowned_auto_credentials(graph_model, user_id)
 
     created_graph = await graph_db.create_graph(
         graph_model,
@@ -1414,7 +1395,7 @@ async def _update_graph_in_library_locked(
 
         # Migrate webhook-attached presets to the new version so that
         # existing webhook URLs continue to trigger the latest agent version.
-        # This path is only reached from the CoPilot/AutoPilot agent-update
+        # This path is only reached from the CoPilot/Otto agent-update
         # flow, which has no user-facing channel for skipped-preset warnings,
         # so the migration result is intentionally discarded here. Skipped
         # presets are surfaced on the interactive graph-activation endpoints
@@ -2025,7 +2006,9 @@ async def is_store_listing_version_available_for_install(
           AND slv."submissionStatus" = 'APPROVED'
           AND sl."isDeleted" = false
         {lock_clause}
-        """.format(schema_prefix=schema_prefix, lock_clause=lock_clause),
+        """.format(
+            schema_prefix=schema_prefix, lock_clause=lock_clause
+        ),
     )
     client = tx if tx is not None else prisma.get_client()
     rows = await client.query_raw(query, store_listing_version_id)
@@ -2037,8 +2020,15 @@ async def add_store_agent_to_library(
     user_id: str,
     organization_id: str | None = None,
     team_id: str | None = None,
+    *,
+    track_listing_added: bool = True,
 ) -> library_model.LibraryAgent:
     """Adds a marketplace agent to the user’s library.
+
+    ``track_listing_added`` sends ``listing_added_to_library`` on a first-time
+    add. Pass ``False`` when the system installs the agent on the user's
+    behalf (an expert's preloads or workflows), which is not the user adding
+    a listing.
 
     See also: `add_store_agent_to_library_as_admin()` which uses
     `get_graph_as_admin` to bypass marketplace status checks for admin review.
@@ -2049,6 +2039,7 @@ async def add_store_agent_to_library(
         tx=None,
         organization_id=organization_id,
         team_id=team_id,
+        track_listing_added=track_listing_added,
     )
 
 
@@ -2057,8 +2048,14 @@ async def add_store_agent_to_library_in_transaction(
     user_id: str,
     tx: prisma.Prisma,
 ) -> library_model.LibraryAgent:
-    """Add a marketplace agent using the caller's transaction."""
-    return await _add_store_agent_to_library(store_listing_version_id, user_id, tx=tx)
+    """Add a marketplace agent using the caller's transaction.
+
+    Sends no ``listing_added_to_library``: the caller may still roll back, and
+    the upsert cannot tell a first-time add from a restore.
+    """
+    return await _add_store_agent_to_library(
+        store_listing_version_id, user_id, tx=tx, track_listing_added=False
+    )
 
 
 async def _add_store_agent_to_library(
@@ -2068,6 +2065,7 @@ async def _add_store_agent_to_library(
     tx: prisma.Prisma | None,
     organization_id: str | None = None,
     team_id: str | None = None,
+    track_listing_added: bool,
 ) -> library_model.LibraryAgent:
     logger.debug(
         "Adding agent from store listing version #%s to library for user #%s",
@@ -2091,7 +2089,7 @@ async def _add_store_agent_to_library(
     graph_model = await resolve_graph_model_for_library(
         store_listing_version, user_id, admin=False
     )
-    return await add_graph_to_library(
+    library_agent = await add_graph_to_library(
         graph_model,
         user_id,
         store_listing_version,
@@ -2099,6 +2097,14 @@ async def _add_store_agent_to_library(
         organization_id=organization_id,
         team_id=team_id,
     )
+    if track_listing_added:
+        track_listing_added_to_library(
+            user_id=user_id,
+            store_listing_version_id=store_listing_version.id,
+            graph_id=graph_model.id,
+            library_agent_id=library_agent.id,
+        )
+    return library_agent
 
 
 async def add_store_agent_to_library_as_admin(
@@ -2977,7 +2983,7 @@ async def list_presets(
         graph_id: Agent Graph ID to filter by.
         expert_id: Expert ID to match when expert filtering is enabled.
         filter_by_expert: Whether to filter by the exact expert scope. This allows
-            ``None`` to select AutoPilot presets instead of disabling the filter.
+            ``None`` to select Otto presets instead of disabling the filter.
 
     Returns:
         A LibraryAgentPresetResponse containing a list of presets and pagination info.
@@ -3901,3 +3907,48 @@ async def list_trigger_agents(
         library_model.LibraryAgent.from_db(t, schedule_info=schedule_info)
         for t in triggers
     ]
+
+
+async def _fetch_matching_store_version_ids(
+    agents: list[prisma.models.LibraryAgent],
+) -> dict[tuple[str, int], str]:
+    """Map (graph_id, graph_version) → approved StoreListingVersion id.
+
+    Only approved, non-deleted versions are returned so the ids are always
+    valid install targets. Matching on the exact graph version keeps installs
+    version-stable: the id refers to the snapshot the library agent holds,
+    not the listing's current active version.
+    """
+    pairs = {(a.agentGraphId, a.agentGraphVersion) for a in agents}
+    if not pairs:
+        return {}
+    pair_filters = [
+        {"agentGraphId": graph_id, "agentGraphVersion": graph_version}
+        for graph_id, graph_version in sorted(pairs)
+    ]
+    try:
+        versions = await prisma.models.StoreListingVersion.prisma().find_many(
+            where={
+                "OR": pair_filters,
+                **installable_store_version_where(),
+            },
+            distinct=["agentGraphId", "agentGraphVersion"],
+            order=[
+                {"agentGraphId": "asc"},
+                {"agentGraphVersion": "asc"},
+                {"createdAt": "desc"},
+                {"id": "desc"},
+            ],
+        )
+    except Exception:
+        logger.warning(
+            "Failed to fetch store listing versions for library agents",
+            exc_info=True,
+        )
+        return {}
+    matches: dict[tuple[str, int], str] = {}
+    for version in versions:
+        pair = (version.agentGraphId, version.agentGraphVersion)
+        if pair in pairs and pair not in matches:
+            matches[pair] = version.id
+    return matches

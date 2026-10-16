@@ -8,6 +8,11 @@ import { AgentExecutionStatus } from "@/app/api/__generated__/models/agentExecut
 import type { GraphExecutionMeta } from "@/app/api/__generated__/models/graphExecutionMeta";
 import type { LibraryAgent } from "@/app/api/__generated__/models/libraryAgent";
 import { okData } from "@/app/api/helpers";
+import {
+  describeFailedSteps,
+  getFailedStepCount,
+  isCompletedWithErrors,
+} from "@/lib/run-health";
 import { useMemo } from "react";
 import {
   getTeamScopedQueryKey,
@@ -85,10 +90,11 @@ export function useSitrepItems(
       error: 0,
       running: 1,
       stale: 2,
-      success: 3,
-      listening: 4,
-      scheduled: 5,
-      idle: 6,
+      warning: 3,
+      success: 4,
+      listening: 5,
+      scheduled: 6,
+      idle: 7,
     };
     items.sort((a, b) => order[a.priority] - order[b.priority]);
 
@@ -168,8 +174,26 @@ function buildSitrepFromExecutions(
     (e) => e.status === AgentExecutionStatus.COMPLETED,
   );
   if (lastCompleted) {
-    const summary =
-      lastCompleted.stats?.activity_status ?? "Completed successfully";
+    const summary = lastCompleted.stats?.activity_status;
+    if (isCompletedWithErrors(lastCompleted)) {
+      const failedSteps = describeFailedSteps(
+        getFailedStepCount(lastCompleted),
+      );
+      return {
+        id: `${agent.id}-${lastCompleted.id}`,
+        agentID: agent.id,
+        agentName: agent.name,
+        executionID: lastCompleted.id,
+        organizationId:
+          lastCompleted.organization_id ?? agent.organization_id ?? null,
+        teamId: lastCompleted.team_id ?? agent.team_id ?? null,
+        priority: "warning",
+        message: summary
+          ? `${failedSteps} — ${summary}`
+          : `Completed with errors: ${failedSteps}`,
+        status: "idle",
+      };
+    }
     return {
       id: `${agent.id}-${lastCompleted.id}`,
       agentID: agent.id,
@@ -179,7 +203,7 @@ function buildSitrepFromExecutions(
         lastCompleted.organization_id ?? agent.organization_id ?? null,
       teamId: lastCompleted.team_id ?? agent.team_id ?? null,
       priority: "success",
-      message: typeof summary === "string" ? summary : "Completed successfully",
+      message: summary ?? "Completed successfully",
       status: "idle",
     };
   }

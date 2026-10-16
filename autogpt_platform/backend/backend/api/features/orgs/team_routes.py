@@ -74,6 +74,27 @@ async def _live_org_view(
         yield live_ctx
 
 
+async def _authorize_team_management(
+    ctx: RequestContext, org_id: str, ws_id: str
+) -> None:
+    """Authorize a management action against the target workspace from the URL path.
+
+    Independent of the caller's active team (X-Team-Id): allowed when the caller
+    administers the target workspace directly, or holds org-level MANAGE_WORKSPACES
+    over the org that owns it. The target workspace must belong to the path org.
+    """
+    if ctx.org_id != org_id:
+        raise HTTPException(403, detail="Not a member of this organization")
+    await team_db.get_team(ws_id, expected_org_id=org_id)
+    if check_org_permission(ctx, OrgAction.MANAGE_WORKSPACES):
+        return
+    if await team_db.is_admin_of_team(ws_id, ctx.user_id):
+        return
+    raise HTTPException(
+        403, detail="Must be a workspace admin or org admin to manage this workspace"
+    )
+
+
 @router.post(
     "",
     summary="Create workspace",
@@ -167,6 +188,7 @@ async def update_team(
     await require_org_collaboration(ctx.user_id)
     if ctx.org_id != org_id:
         raise HTTPException(403, detail="Not a member of this organization")
+    await _authorize_team_management(ctx, org_id, ws_id)
     return await team_db.update_team(
         ws_id,
         {
@@ -195,6 +217,14 @@ async def delete_team(
         Security(requires_org_permission(OrgAction.MANAGE_WORKSPACES)),
     ],
 ) -> None:
+    # Deliberate asymmetry with _authorize_team_management: team admins may
+    # rename a team and manage its members, but deletion is destructive and
+    # stays org-admin-only (MANAGE_WORKSPACES).
+    #
+    # MANAGE_WORKSPACES only proves the caller administers their *active*
+    # org (ctx.org_id); without this guard an admin of org A could delete
+    # a workspace in org B (the permission passes, and get_team only checks
+    # the workspace is in the path org). Mirror every sibling route.
     if ctx.org_id != org_id:
         raise HTTPException(403, detail="Not a member of this organization")
     await team_db.delete_team(
@@ -285,6 +315,7 @@ async def add_member(
         raise HTTPException(400, detail="Use the workspace join action to add yourself")
     if ctx.org_id != org_id:
         raise HTTPException(403, detail="Not a member of this organization")
+    await _authorize_team_management(ctx, org_id, ws_id)
     return await team_db.add_team_member(
         ws_id=ws_id,
         user_id=request.user_id,
@@ -312,6 +343,7 @@ async def update_member(
         raise HTTPException(400, detail="You cannot change your own workspace role")
     if ctx.org_id != org_id:
         raise HTTPException(403, detail="Not a member of this organization")
+    await _authorize_team_management(ctx, org_id, ws_id)
     return await team_db.update_team_member(
         ws_id=ws_id,
         user_id=uid,
@@ -336,6 +368,7 @@ async def remove_member(
     uid: str,
     ctx: Annotated[RequestContext, Security(get_request_context)],
 ) -> None:
+    await _authorize_team_management(ctx, org_id, ws_id)
     if uid == ctx.user_id:
         raise HTTPException(400, detail="Use the workspace leave action")
     if ctx.org_id != org_id:

@@ -13,7 +13,8 @@ import {
   PostHogUserTracker,
 } from "@/providers/posthog/posthog-provider";
 import { AdsConversionTracker } from "@/services/analytics/AdsConversionTracker";
-import { LaunchDarklyProvider } from "@/services/feature-flags/feature-flag-provider";
+import { AttributionReporter } from "@/services/analytics/AttributionReporter";
+import { FeatureFlagProvider } from "@/services/feature-flags/feature-flag-provider";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider, ThemeProviderProps } from "next-themes";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
@@ -31,11 +32,12 @@ export function Providers({ children, ...props }: ThemeProviderProps) {
             <Suspense fallback={null}>
               <SentryUserTracker />
               <PostHogUserTracker />
+              <AttributionReporter />
               <AdsConversionTracker />
               <PostHogPageViewTracker />
             </Suspense>
             <CredentialsProvider>
-              <LaunchDarklyProvider>
+              <FeatureFlagProvider>
                 <OrgTeamProvider>
                   <OnboardingProvider>
                     <ThemeProvider forcedTheme="light" {...props}>
@@ -43,7 +45,7 @@ export function Providers({ children, ...props }: ThemeProviderProps) {
                     </ThemeProvider>
                   </OnboardingProvider>
                 </OrgTeamProvider>
-              </LaunchDarklyProvider>
+              </FeatureFlagProvider>
             </CredentialsProvider>
           </BackendAPIProvider>
         </PostHogProvider>
