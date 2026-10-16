@@ -28,8 +28,9 @@ from pydantic import BaseModel, ConfigDict
 
 from backend.data.db_accessors import orgs_db
 
-from .client import derive_memory_group_id, derive_org_group_id, derive_team_group_id
+from .client import derive_org_group_id, derive_team_group_id
 from .rollout import SHARED_MEMORY_DISABLED, shared_memory_enabled
+from .scope import MemoryScope
 
 logger = logging.getLogger(__name__)
 
@@ -236,7 +237,7 @@ async def resolve_warm_targets(
     """
     targets = [
         TierTarget(
-            group_id=derive_memory_group_id(user_id, expert_id),
+            group_id=MemoryScope.build(user_id, expert_id).group_id,
             tier=MemoryTier.personal,
             label=None,
         )
@@ -321,7 +322,7 @@ async def resolve_search_targets(
     if include_personal:
         targets.append(
             TierTarget(
-                group_id=derive_memory_group_id(user_id, expert_id),
+                group_id=MemoryScope.build(user_id, expert_id).group_id,
                 tier=MemoryTier.personal,
                 label=None,
             )

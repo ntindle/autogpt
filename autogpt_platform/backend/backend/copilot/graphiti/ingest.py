@@ -14,9 +14,10 @@ from graphiti_core.nodes import EpisodeType
 
 from backend.data.db_accessors import context_without_live_leases, live_resource_lease
 
-from .client import derive_memory_group_id, ensure_indices_once, get_graphiti_client
+from .client import ensure_indices_once, get_graphiti_client
 from .memory_model import MemoryEnvelope, MemoryKind, MemoryStatus, SourceKind
 from .rollout import shared_memory_enabled
+from .scope import MemoryScope
 from .tiers import get_team_membership, hold_buffer_enabled, is_org_admin
 from .types import EDGE_TYPE_MAP, EDGE_TYPES, ENTITY_TYPES
 
@@ -431,7 +432,7 @@ async def enqueue_conversation_turn(
         return
 
     try:
-        group_id = derive_memory_group_id(user_id, expert_id)
+        group_id = MemoryScope.build(user_id, expert_id).group_id
     except ValueError:
         logger.warning("Invalid memory scope for ingestion: %s", user_id[:12])
         return
@@ -499,7 +500,7 @@ async def enqueue_conversation_turn(
 
 
 async def enqueue_episode(
-    user_id: str,
+    scope: MemoryScope,
     session_id: str,
     *,
     name: str,
@@ -508,12 +509,11 @@ async def enqueue_episode(
     is_json: bool = False,
     edge_metadata: dict | None = None,
     completion: IngestionCompletion | None = None,
-    expert_id: str | None = None,
     group_id: str | None = None,
     organization_id: str | None = None,
     team_id: str | None = None,
 ) -> bool:
-    """Enqueue an arbitrary episode for background ingestion.
+    """Enqueue an arbitrary episode for background ingestion in ``scope``.
 
     Used by ``MemoryStoreTool`` so that explicit memory-store calls go
     through the same per-group serialization queue as conversation turns.
@@ -543,22 +543,11 @@ async def enqueue_episode(
     ``True`` — a dropped episode is never enqueued and the worker never
     completes it.
     """
-    if not user_id:
-        return False
-
+    user_id = scope.owner_user_id
     is_personal = group_id is None
     if not is_personal and not await shared_memory_enabled(user_id):
         return False
-    if is_personal:
-        try:
-            resolved_group_id = derive_memory_group_id(user_id, expert_id)
-        except ValueError:
-            logger.warning(
-                "Invalid memory scope for episode ingestion: %s", user_id[:12]
-            )
-            return False
-    else:
-        resolved_group_id = group_id
+    resolved_group_id = scope.group_id if is_personal else group_id
 
     body_bytes = len(episode_body.encode("utf-8"))
     if body_bytes > MAX_EPISODE_BODY_BYTES:

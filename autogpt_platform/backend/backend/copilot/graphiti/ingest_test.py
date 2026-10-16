@@ -12,6 +12,7 @@ import pytest
 from graphiti_core.nodes import EpisodeType
 
 from . import ingest
+from .scope import MemoryScope
 
 
 @pytest.fixture(autouse=True)
@@ -105,8 +106,8 @@ class TestIngestionWorkerExceptionHandling:
 
         with (
             patch.object(
-                ingest,
-                "derive_memory_group_id",
+                ingest.MemoryScope,
+                "build",
                 side_effect=AssertionError("worker must not re-derive memory scope"),
             ) as derive_mock,
             patch.object(
@@ -146,14 +147,11 @@ class TestIngestionWorkerExceptionHandling:
             }
         )
 
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_test"),
-            patch.object(
-                ingest,
-                "get_graphiti_client",
-                new_callable=AsyncMock,
-                side_effect=RuntimeError("connection failed"),
-            ),
+        with patch.object(
+            ingest,
+            "get_graphiti_client",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("connection failed"),
         ):
             original_timeout = ingest._WORKER_IDLE_TIMEOUT
             ingest._WORKER_IDLE_TIMEOUT = 0.05
@@ -283,14 +281,11 @@ class TestWaitForIngestion:
             }
         )
 
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_scoped"),
-            patch.object(
-                ingest,
-                "get_graphiti_client",
-                new_callable=AsyncMock,
-                return_value=mock_client,
-            ),
+        with patch.object(
+            ingest,
+            "get_graphiti_client",
+            new_callable=AsyncMock,
+            return_value=mock_client,
         ):
             worker = asyncio.create_task(ingest._ingestion_worker("user_scoped", queue))
             try:
@@ -332,11 +327,6 @@ class TestEnqueueConversationTurn:
         with (
             patch.object(
                 ingest,
-                "derive_memory_group_id",
-                return_value="expert_private_group",
-            ) as derive_mock,
-            patch.object(
-                ingest,
                 "_enqueue_payload",
                 new=enqueue_mock,
             ),
@@ -354,13 +344,10 @@ class TestEnqueueConversationTurn:
                 expert_id="expert-1",
             )
 
-        derive_mock.assert_called_once_with("user-1", "expert-1")
+        expert_group = MemoryScope.for_expert("user-1", "expert-1").group_id
         enqueue_mock.assert_awaited_once()
-        assert enqueue_mock.await_args.args[:2] == (
-            "user-1",
-            "expert_private_group",
-        )
-        assert queue.get_nowait()["group_id"] == "expert_private_group"
+        assert enqueue_mock.await_args.args[:2] == ("user-1", expert_group)
+        assert queue.get_nowait()["group_id"] == expert_group
 
 
 class TestMemoryGroupQueueIsolation:
@@ -445,17 +432,10 @@ class TestQueueFullScenario:
             return_value=mock_understanding
         )
 
-        with (
-            patch.object(
-                ingest,
-                "derive_memory_group_id",
-                return_value="user_abc-valid-id",
-            ),
-            patch(
-                "backend.copilot.graphiti.ingest.resolve_user_name",
-                new_callable=AsyncMock,
-                return_value="Alice",
-            ),
+        with patch(
+            "backend.copilot.graphiti.ingest.resolve_user_name",
+            new_callable=AsyncMock,
+            return_value="Alice",
         ):
             # Create a tiny queue so it fills instantly.
             tiny_q: asyncio.Queue = asyncio.Queue(maxsize=1)
@@ -526,27 +506,18 @@ class TestEnqueueEpisode:
     @pytest.mark.asyncio
     async def test_expert_personal_episode_schedules_personal_dreams(self) -> None:
         enqueue_mock = AsyncMock(return_value=True)
-        with (
-            patch.object(
-                ingest,
-                "derive_memory_group_id",
-                return_value="expert_private_group",
-            ) as derive_mock,
-            patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
-        ):
+        with (patch.object(ingest, "_enqueue_payload", new=enqueue_mock),):
             result = await ingest.enqueue_episode(
-                user_id="user-1",
+                scope=MemoryScope.for_expert("user-1", "expert-1"),
                 session_id="sess1",
                 name="private_ep",
                 episode_body="private memory",
-                expert_id="expert-1",
             )
 
         assert result is True
-        derive_mock.assert_called_once_with("user-1", "expert-1")
         assert enqueue_mock.await_args.args[:2] == (
             "user-1",
-            "expert_private_group",
+            MemoryScope.for_expert("user-1", "expert-1").group_id,
         )
         assert enqueue_mock.await_args.kwargs["schedule_dreams"] is True
 
@@ -555,16 +526,12 @@ class TestEnqueueEpisode:
         enqueue_mock = AsyncMock(return_value=True)
         completion = ingest.IngestionCompletion()
         metadata = {"status": "tentative", "source_kind": "user_asserted"}
-        with (
-            patch.object(ingest, "derive_memory_group_id") as derive_mock,
-            patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
-        ):
+        with (patch.object(ingest, "_enqueue_payload", new=enqueue_mock),):
             result = await ingest.enqueue_episode(
-                user_id="user-1",
+                scope=MemoryScope.for_expert("user-1", "expert-1"),
                 session_id="sess1",
                 name="team_ep",
                 episode_body="shared memory",
-                expert_id="expert-1",
                 group_id="team_team-1",
                 edge_metadata=metadata,
                 completion=completion,
@@ -573,7 +540,6 @@ class TestEnqueueEpisode:
             )
 
         assert result is True
-        derive_mock.assert_not_called()
         assert enqueue_mock.await_args.args[:2] == ("user-1", "team_team-1")
         payload = enqueue_mock.await_args.args[2]
         assert payload["group_id"] == "team_team-1"
@@ -673,12 +639,9 @@ class TestSharedIngestionLiveBarrier:
     async def test_enqueue_episode_returns_true_on_success(self) -> None:
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
         enqueue_mock = _enqueue_mock(q)
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=enqueue_mock):
             result = await ingest.enqueue_episode(
-                user_id="abc",
+                scope=MemoryScope.for_user("abc"),
                 session_id="sess1",
                 name="test_ep",
                 episode_body="hello",
@@ -688,27 +651,16 @@ class TestSharedIngestionLiveBarrier:
             assert not q.empty()
 
     @pytest.mark.asyncio
-    async def test_enqueue_episode_returns_false_for_empty_user(self) -> None:
-        result = await ingest.enqueue_episode(
-            user_id="",
-            session_id="sess1",
-            name="test_ep",
-            episode_body="hello",
-        )
-        assert result is False
-
-    @pytest.mark.asyncio
-    async def test_enqueue_episode_returns_false_on_invalid_user(self) -> None:
-        with patch.object(
-            ingest, "derive_memory_group_id", side_effect=ValueError("bad id")
-        ):
-            result = await ingest.enqueue_episode(
-                user_id="bad",
-                session_id="sess1",
-                name="test_ep",
-                episode_body="hello",
+    async def test_enqueue_episode_writes_to_the_scope_it_was_given(self) -> None:
+        q: asyncio.Queue = asyncio.Queue(maxsize=100)
+        enqueue_mock = _enqueue_mock(q)
+        scope = MemoryScope.for_expert("abc", "expert-1")
+        with patch.object(ingest, "_enqueue_payload", new=enqueue_mock):
+            assert await ingest.enqueue_episode(
+                scope, "sess1", name="test_ep", episode_body="hello"
             )
-            assert result is False
+        assert enqueue_mock.await_args.args[:2] == ("abc", scope.group_id)
+        assert q.get_nowait()["group_id"] == scope.group_id
 
     @pytest.mark.asyncio
     async def test_enqueue_episode_rejects_oversized_body_without_queueing(
@@ -718,12 +670,9 @@ class TestSharedIngestionLiveBarrier:
         worker or queue is touched — degraded dream writes must not reach
         FalkorDB or the extraction LLM."""
         enqueue_mock = AsyncMock()
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=enqueue_mock):
             result = await ingest.enqueue_episode(
-                user_id="abc",
+                scope=MemoryScope.for_user("abc"),
                 session_id="sess1",
                 name="runaway_consolidated_fact",
                 episode_body="x" * (ingest.MAX_EPISODE_BODY_BYTES + 1),
@@ -736,12 +685,9 @@ class TestSharedIngestionLiveBarrier:
     async def test_enqueue_episode_accepts_body_at_exact_size_cap(self) -> None:
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
         enqueue_mock = _enqueue_mock(q)
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=enqueue_mock):
             result = await ingest.enqueue_episode(
-                user_id="abc",
+                scope=MemoryScope.for_user("abc"),
                 session_id="sess1",
                 name="cap_sized_ep",
                 episode_body="x" * ingest.MAX_EPISODE_BODY_BYTES,
@@ -754,14 +700,11 @@ class TestSharedIngestionLiveBarrier:
         """Multi-byte UTF-8 content is measured in encoded bytes, so a
         char-count under the cap can still be rejected."""
         enqueue_mock = AsyncMock()
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=enqueue_mock):
             # "é" encodes to 2 bytes — half the cap in chars, just over in bytes.
             body = "é" * (ingest.MAX_EPISODE_BODY_BYTES // 2 + 1)
             result = await ingest.enqueue_episode(
-                user_id="abc",
+                scope=MemoryScope.for_user("abc"),
                 session_id="sess1",
                 name="multibyte_ep",
                 episode_body=body,
@@ -773,12 +716,9 @@ class TestSharedIngestionLiveBarrier:
     async def test_enqueue_episode_json_mode(self) -> None:
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
         enqueue_mock = _enqueue_mock(q)
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=enqueue_mock):
             result = await ingest.enqueue_episode(
-                user_id="abc",
+                scope=MemoryScope.for_user("abc"),
                 session_id="sess1",
                 name="test_ep",
                 episode_body='{"content": "hello"}',
@@ -799,7 +739,6 @@ class TestDerivedFindingLane:
         enqueue_mock = _enqueue_mock(q)
 
         with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
             patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
             patch(
                 "backend.copilot.graphiti.ingest.resolve_user_name",
@@ -828,7 +767,6 @@ class TestDerivedFindingLane:
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
         enqueue_mock = _enqueue_mock(q)
         with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
             patch.object(ingest, "_enqueue_payload", new=enqueue_mock),
             patch(
                 "backend.copilot.graphiti.ingest.resolve_user_name",
@@ -1217,13 +1155,10 @@ class TestEnqueueEpisodeEdgeMetadata:
     @pytest.mark.asyncio
     async def test_edge_metadata_rides_payload_sidecar(self) -> None:
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=_enqueue_mock(q)),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=_enqueue_mock(q)):
             meta = {"status": "active", "provenance": "dream:p1"}
             await ingest.enqueue_episode(
-                user_id="abc",
+                scope=MemoryScope.for_user("abc"),
                 session_id="s",
                 name="dream_ep",
                 episode_body="{}",
@@ -1238,12 +1173,12 @@ class TestEnqueueEpisodeEdgeMetadata:
         """Conversation turns / memory-store calls pass no edge_metadata →
         sidecar is None → worker skips stamping → no behavior change."""
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=_enqueue_mock(q)),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=_enqueue_mock(q)):
             await ingest.enqueue_episode(
-                user_id="abc", session_id="s", name="ep", episode_body="hi"
+                scope=MemoryScope.for_user("abc"),
+                session_id="s",
+                name="ep",
+                episode_body="hi",
             )
             payload = q.get_nowait()
             assert payload["_edge_metadata"] is None
@@ -1255,13 +1190,10 @@ class TestEnqueueEpisodeEdgeMetadata:
         """A scoped-drain caller's completion tracker is threaded onto the
         payload so the worker can signal it after processing."""
         q: asyncio.Queue = asyncio.Queue(maxsize=100)
-        with (
-            patch.object(ingest, "derive_memory_group_id", return_value="user_abc"),
-            patch.object(ingest, "_enqueue_payload", new=_enqueue_mock(q)),
-        ):
+        with patch.object(ingest, "_enqueue_payload", new=_enqueue_mock(q)):
             completion = ingest.IngestionCompletion()
             await ingest.enqueue_episode(
-                user_id="abc",
+                scope=MemoryScope.for_user("abc"),
                 session_id="s",
                 name="dream_ep",
                 episode_body="{}",

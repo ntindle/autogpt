@@ -16,6 +16,7 @@ from ._format import (
 from .client import get_graphiti_client
 from .config import graphiti_config
 from .lifecycle import active_shared_search_filter, filter_active_shared_edges
+from .scope import MemoryScope
 from .tiers import MemoryTier, TierTarget, merge_tiered, resolve_warm_targets
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,9 @@ async def fetch_warm_context(
         return None
 
     try:
+        scope = MemoryScope.build(user_id, expert_id)
         return await asyncio.wait_for(
-            _fetch(user_id, message, expert_id, organization_id, team_id),
+            _fetch(scope, message, organization_id, team_id),
             timeout=graphiti_config.context_timeout,
         )
     except asyncio.TimeoutError:
@@ -67,22 +69,20 @@ async def fetch_warm_context(
 
 
 async def _fetch(
-    user_id: str,
+    scope: MemoryScope,
     message: str,
-    expert_id: str | None = None,
     organization_id: str | None = None,
     team_id: str | None = None,
 ) -> str | None:
+    user_id = scope.owner_user_id
     if organization_id is None:
-        return await _fetch_authorized(user_id, message, expert_id, None, None)
+        return await _fetch_authorized(scope, message, None, None)
 
     async with live_resource_lease(
         user_id, organization_id, team_id, "view"
     ) as allowed:
         if allowed:
-            action = _fetch_authorized(
-                user_id, message, expert_id, organization_id, team_id
-            )
+            action = _fetch_authorized(scope, message, organization_id, team_id)
             return (
                 await allowed.run(action) if hasattr(allowed, "run") else await action
             )
@@ -92,25 +92,23 @@ async def _fetch(
             user_id, organization_id, None, "view"
         ) as org_allowed:
             if org_allowed:
-                action = _fetch_authorized(
-                    user_id, message, expert_id, organization_id, None
-                )
+                action = _fetch_authorized(scope, message, organization_id, None)
                 return (
                     await org_allowed.run(action)
                     if hasattr(org_allowed, "run")
                     else await action
                 )
 
-    return await _fetch_authorized(user_id, message, expert_id, None, None)
+    return await _fetch_authorized(scope, message, None, None)
 
 
 async def _fetch_authorized(
-    user_id: str,
+    scope: MemoryScope,
     message: str,
-    expert_id: str | None = None,
     organization_id: str | None = None,
     team_id: str | None = None,
 ) -> str | None:
+    user_id, expert_id = scope.owner_user_id, scope.expert_id
     # Imported lazily so the module can be imported without graphiti-core
     # installed (matches the pattern in client.py).
     from graphiti_core.search.search_config_recipes import (
@@ -203,7 +201,7 @@ async def _fetch_authorized(
     # Only personal edges may reach assistant-specific ratification; shared-tier
     # ratification is an admin concern. Fire-and-forget keeps chat non-blocking.
     if personal_edges:
-        _spawn_ratification_hits(user_id, expert_id, personal_edges)
+        _spawn_ratification_hits(scope, personal_edges)
 
     merged_facts = merge_tiered(
         personal_edges, shared_edges, graphiti_config.context_max_facts
@@ -232,7 +230,7 @@ def _on_hit_task_done(task: asyncio.Task) -> None:
         logger.warning("Ratification hit task %s failed", task.get_name(), exc_info=exc)
 
 
-def _spawn_ratification_hits(user_id: str, expert_id: str | None, edges) -> None:
+def _spawn_ratification_hits(scope: MemoryScope, edges) -> None:
     """Fire-and-forget the ratification hit-hook for retrieved edges.
 
     Imports lazily so the dream/ratification module isn't pulled into
@@ -247,8 +245,8 @@ def _spawn_ratification_hits(user_id: str, expert_id: str | None, edges) -> None
     from backend.copilot.dream.ratification import try_ratify_on_hit
 
     task = asyncio.create_task(
-        try_ratify_on_hit(user_id, edge_uuids, expert_id=expert_id),
-        name=f"ratify-hits-{user_id[:12]}",
+        try_ratify_on_hit(scope, edge_uuids),
+        name=f"ratify-hits-{scope.owner_user_id[:12]}",
     )
     _pending_hit_tasks.add(task)
     task.add_done_callback(_on_hit_task_done)

@@ -18,11 +18,16 @@ from backend.util.feature_flag import Flag
 
 from . import ingest, rollout, tiers
 from .client import derive_memory_group_id
+from .scope import MemoryScope
 
 
 @pytest.fixture(autouse=True)
 def _rollout_off(monkeypatch: pytest.MonkeyPatch, _enable_shared_memory_rollout):
     monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "false")
+    monkeypatch.setattr(
+        "backend.copilot.tools.graphiti_store.resolve_user_name",
+        AsyncMock(return_value="Test owner"),
+    )
 
 
 @pytest.mark.asyncio
@@ -115,7 +120,7 @@ async def test_off_rejects_shared_enqueue_and_drops_already_queued_work():
         ingest, "_enqueue_payload", AsyncMock(return_value=True)
     ) as enqueue:
         assert not await ingest.enqueue_episode(
-            "user-1",
+            MemoryScope.for_user("user-1"),
             "session-1",
             name="Shared",
             episode_body="Policy",
@@ -124,7 +129,10 @@ async def test_off_rejects_shared_enqueue_and_drops_already_queued_work():
         )
         enqueue.assert_not_awaited()
         assert await ingest.enqueue_episode(
-            "user-1", "session-1", name="Private", episode_body="Preference"
+            MemoryScope.for_user("user-1"),
+            "session-1",
+            name="Private",
+            episode_body="Preference",
         )
         assert enqueue.await_args.args[1] == "user_user-1"
     with patch.object(ingest, "get_graphiti_client", AsyncMock()) as client:
@@ -157,8 +165,8 @@ async def test_off_shared_forget_does_not_offer_admin_features(tool):
 
 
 def test_baseline_and_sdk_hide_shared_arguments_without_mutating_enabled_schema():
-    enabled = get_available_tools(shared_memory=True)
-    disabled = get_available_tools()
+    enabled = get_available_tools(shared_memory=True, include_deferred=True)
+    disabled = get_available_tools(include_deferred=True)
     for schema in disabled:
         name = schema["function"]["name"]
         if not name.startswith("memory_"):
