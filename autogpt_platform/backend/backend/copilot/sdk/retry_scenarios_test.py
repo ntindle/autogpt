@@ -1016,6 +1016,10 @@ def _make_sdk_patches(
             dict(new_callable=AsyncMock, return_value=""),
         ),
         (
+            f"{_SVC}.build_skills_update_notice",
+            dict(new_callable=AsyncMock, return_value=""),
+        ),
+        (
             f"{_SVC}.build_session_context",
             dict(new_callable=AsyncMock, return_value=""),
         ),
@@ -1278,6 +1282,7 @@ class TestStreamChatCompletionRetryIntegration:
         from backend.copilot.pending_messages import PendingMessage
 
         session = self._make_session()
+        session.organization_id = "saved-org"
         session.title = "Wholesale offer"
         session.metadata.workspace_task_id = "repo-task"
         session.messages[0].sequence = 0
@@ -1290,6 +1295,7 @@ class TestStreamChatCompletionRetryIntegration:
         current = WorkspaceTask(
             id="repo-task",
             user_id="test-user",
+            organization_id=session.organization_id,
             session_id=session.session_id,
             title="Updated repository context",
             plan_only=True,
@@ -1325,6 +1331,12 @@ class TestStreamChatCompletionRetryIntegration:
             stack.enter_context(
                 patch(
                     f"{_SVC}.persist_session_safe", new=AsyncMock(side_effect=persist)
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "backend.copilot.pending_message_helpers.upsert_chat_session",
+                    new=AsyncMock(side_effect=persist),
                 )
             )
             if followup:
@@ -1364,7 +1376,9 @@ class TestStreamChatCompletionRetryIntegration:
         assert "OUTDATED_INITIAL_SNAPSHOT" not in second_query
         if followup:
             assert "it's private, auth with GitHub" in second_query
-        task_db.list_workspace_tasks.assert_awaited_once_with("test-user")
+        task_db.list_workspace_tasks.assert_awaited_once_with(
+            "test-user", organization_id=session.organization_id
+        )
 
     @pytest.mark.asyncio
     async def test_prompt_too_long_retries_with_compaction(self):
