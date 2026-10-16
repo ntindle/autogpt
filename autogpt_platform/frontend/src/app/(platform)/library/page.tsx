@@ -5,7 +5,6 @@ import { useQueryState } from "nuqs";
 import { AgentsTabIntro } from "./components/AgentsTabIntro/AgentsTabIntro";
 import { LibraryActionHeader } from "./components/LibraryActionHeader/LibraryActionHeader";
 import { LibraryAgentList } from "./components/LibraryAgentList/LibraryAgentList";
-import { SharedWithTeamsSection } from "./components/SharedWithTeamsSection/SharedWithTeamsSection";
 import { useLibraryListPage } from "./components/useLibraryListPage";
 import { FavoriteAnimationProvider } from "./context/FavoriteAnimationContext";
 import type { LibraryTab, AgentStatusFilter } from "./types";
@@ -48,7 +47,6 @@ export default function LibraryPage() {
     >
       <main className="pt-160 container min-h-screen space-y-4 pb-20 pt-16 sm:px-8 md:px-12">
         <LibraryActionHeader setSearchTerm={setSearchTerm} />
-        <SharedWithTeamsSection />
         <LibraryAgentList
           searchTerm={searchTerm}
           librarySort={librarySort}
