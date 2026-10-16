@@ -31,6 +31,8 @@ import logging
 from typing import Literal
 
 from backend.copilot.config import ChatConfig
+from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import memory_organization_id
 from backend.copilot.rate_limit import (
     RateLimitExceeded,
     RateLimitUnavailable,
@@ -150,6 +152,7 @@ async def record_phase_cost(
     pass_id: str,
     phase_usage: PhaseUsage,
     execution_path: ExecutionPath,
+    scope: MemoryScope | None = None,
 ) -> None:
     """Charge one phase's spend against the user's window + log a row.
 
@@ -197,6 +200,9 @@ async def record_phase_cost(
         graph_exec_id_override=pass_id,
         extra_metadata={
             "source": "dream_pass",
+            "organization_id": await memory_organization_id(scope) if scope else None,
+            "expert_id": scope.expert_id if scope else None,
+            "memory_scope_key": scope.scope_key if scope else None,
             "dream_pass_id": pass_id,
             "dream_phase": phase_usage.phase,
             "execution_path": execution_path,

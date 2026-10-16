@@ -23,7 +23,7 @@ from backend.copilot.graphiti.rollout import (
     SHARED_MEMORY_DISABLED,
     shared_memory_enabled,
 )
-from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import resolve_memory_scope
 from backend.copilot.graphiti.tiers import (
     TierError,
     can_write_org_memory,
@@ -228,7 +228,9 @@ class MemoryStoreTool(BaseTool):
             )
 
         try:
-            memory_scope = MemoryScope.build(user_id, session.expert_id)
+            memory_scope = await resolve_memory_scope(
+                user_id, session.expert_id, session.organization_id
+            )
         except ValueError:
             return ErrorResponse(
                 message="Invalid user ID for memory operations.",

@@ -761,3 +761,13 @@ def posthog_lifecycle_db():
         posthog_lifecycle_db = get_database_manager_async_client(should_retry=False)
 
     return posthog_lifecycle_db
+
+
+def memory_db():
+    if db.is_connected():
+        from backend.data import memory_scope
+
+        return memory_scope
+    from backend.util.clients import get_database_manager_async_client
+
+    return get_database_manager_async_client()

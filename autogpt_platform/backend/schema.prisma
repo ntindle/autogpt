@@ -216,6 +216,9 @@ model User {
 
   ExperimentAssignments ExperimentAssignment[]
   Attribution           UserAttribution?
+
+  memoryHome   PersonalMemoryOrganization?
+  memoryScopes MemoryScopeRegistry[]
 }
 
 // One row per (user, experiment): the arm a user was bucketed into the first
@@ -3117,6 +3120,9 @@ model Organization {
   // WHERE isPersonal AND deletedAt IS NULL AND bootstrapUserId IS NOT NULL enforces
   // at most one live personal org per user — created via SQL migration
   // 20260713120000_org_one_personal_per_user (Prisma can't model partial indexes).
+
+  memoryOwners PersonalMemoryOrganization[]
+  memoryScopes MemoryScopeRegistry[]
 }
 
 model OrganizationAlias {
@@ -3609,4 +3615,23 @@ model LlmModelMigration {
   // migrations per source: UNIQUE (sourceModelSlug) WHERE isReverted = false
   @@index([targetModelSlug])
   @@index([sourceModelSlug, isReverted])
+}
+
+model PersonalMemoryOrganization {
+  userId         String       @id
+  User           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String
+  Organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+}
+
+model MemoryScopeRegistry {
+  scopeKey       String        @id
+  userId         String
+  User           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizationId String?
+  Organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  expertId       String?
+  groupId        String
+
+  @@index([userId])
 }

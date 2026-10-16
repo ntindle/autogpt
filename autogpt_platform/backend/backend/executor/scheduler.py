@@ -1384,8 +1384,10 @@ def execute_community_rebuild(user_id: str):
         )
         return
 
+    from backend.copilot.graphiti.maintenance import rebuild_all_memory_communities
+
     result = run_async(
-        rebuild_communities_for_user(user_id),
+        rebuild_all_memory_communities(user_id),
         timeout=SCHEDULER_DREAM_OPERATION_TIMEOUT_SECONDS,
     )
     if result.get("error"):
@@ -1495,10 +1497,7 @@ def execute_nightly_batch_sync(user_id: str):
     Returns ``None`` only when the runtime flag gate short-circuits
     before the submitter runs.
     """
-    from backend.copilot.dream.nightly_batch import (
-        NightlyBatchResult,
-        run_nightly_batch_submit,
-    )
+    from backend.copilot.dream.nightly_batch import NightlyBatchResult
     from backend.util.feature_flag import Flag, is_feature_enabled
 
     if not run_async(is_feature_enabled(Flag.DREAM_PASS_ENABLED, user_id)):
@@ -1508,8 +1507,10 @@ def execute_nightly_batch_sync(user_id: str):
         )
         return None
 
+    from backend.copilot.graphiti.maintenance import run_all_memory_nightly
+
     result: NightlyBatchResult = run_async(
-        run_nightly_batch_submit(user_id),
+        run_all_memory_nightly(user_id),
         timeout=SCHEDULER_DREAM_OPERATION_TIMEOUT_SECONDS,
     )
     if result.error:

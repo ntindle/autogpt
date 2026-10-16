@@ -26,6 +26,7 @@ from typing import TypeVar
 
 from backend.copilot.config import ChatConfig
 from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import resolve_memory_scope
 from backend.copilot.trial_cost_context import attributed_usage
 from backend.util.feature_flag import Flag, is_feature_enabled
 
@@ -730,6 +731,7 @@ async def _execute_dream_pass_async(
     user_id: str,
     *,
     expert_id: str | None,
+    organization_id: str | None = None,
     config: ChatConfig | None = None,
     status_id: str | None = None,
 ) -> DreamPassResult:
@@ -762,7 +764,7 @@ async def _execute_dream_pass_async(
 
     ttl = DEFAULT_LOCK_TTL_SECONDS
     try:
-        scope = MemoryScope.build(user_id, expert_id)
+        scope = await resolve_memory_scope(user_id, expert_id, organization_id)
         lock_context = dream_lock(scope, ttl_seconds=ttl)
         async with lock_context as dream_lock_handle:
             # Pre-flight billing check. Runs inside the lock so a
@@ -890,6 +892,7 @@ async def _execute_dream_pass_async(
                 user_id=user_id,
                 pass_id=pass_id,
                 phase_usage=step_usages[-1],
+                scope=scope,
                 execution_path=execution_path,
             )
             consolidated = consolidate_completion.value
@@ -917,6 +920,7 @@ async def _execute_dream_pass_async(
                 user_id=user_id,
                 pass_id=pass_id,
                 phase_usage=step_usages[-1],
+                scope=scope,
                 execution_path=execution_path,
             )
             recombined = recombine_completion.value
@@ -944,6 +948,7 @@ async def _execute_dream_pass_async(
                 user_id=user_id,
                 pass_id=pass_id,
                 phase_usage=step_usages[-1],
+                scope=scope,
                 execution_path=execution_path,
             )
             sanitized = sanitize_completion.value
@@ -1056,6 +1061,7 @@ async def execute_dream_pass(
     *,
     status_id: str | None = None,
     expert_id: str | None = None,
+    organization_id: str | None = None,
 ) -> DreamPassResult:
     """Public async entry point used by the scheduler + admin trigger.
 
@@ -1066,7 +1072,10 @@ async def execute_dream_pass(
     sync callers pass ``None`` and never hit the batch path.
     """
     return await _execute_dream_pass_async(
-        user_id, status_id=status_id, expert_id=expert_id
+        user_id,
+        status_id=status_id,
+        expert_id=expert_id,
+        organization_id=organization_id,
     )
 
 

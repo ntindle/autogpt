@@ -18,7 +18,7 @@ import pytest
 
 from backend.copilot.graphiti.ingest import IngestionCompletion
 from backend.copilot.graphiti.scope import MemoryScope
-from backend.data.db_accessors import orgs_db as real_orgs_db
+from backend.data.db_accessors import memory_db as real_memory_db
 
 from . import apply as apply_mod
 from .fetch import DreamInput
@@ -503,10 +503,10 @@ async def test_dream_session_resolves_tenant_through_db_manager(mocker):
     mocker.patch("backend.data.db_accessors.chat_db", return_value=db)
     # The autouse stub replaces the accessor; put the real one back so the
     # connection check below decides where the lookup goes.
-    mocker.patch("backend.data.db_accessors.orgs_db", real_orgs_db)
+    mocker.patch("backend.copilot.graphiti.scope_resolution.memory_db", real_memory_db)
     mocker.patch("backend.data.db.is_connected", return_value=False)
     db_manager = MagicMock(
-        get_user_default_team=AsyncMock(return_value=("org-1", "team-1"))
+        get_personal_memory_organization=AsyncMock(return_value="org-1")
     )
     mocker.patch(
         "backend.util.clients.get_database_manager_async_client",
@@ -515,10 +515,10 @@ async def test_dream_session_resolves_tenant_through_db_manager(mocker):
 
     await apply_mod._create_dream_session(MemoryScope.for_user("u1"), "p1")
 
-    db_manager.get_user_default_team.assert_awaited_once_with("u1")
+    db_manager.get_personal_memory_organization.assert_awaited_once_with("u1")
     kwargs = db.create_chat_session.call_args.kwargs
     assert kwargs["organization_id"] == "org-1"
-    assert kwargs["team_id"] == "team-1"
+    assert kwargs["team_id"] is None
 
 
 @pytest.mark.asyncio

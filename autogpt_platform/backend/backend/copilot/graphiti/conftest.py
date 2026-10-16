@@ -36,6 +36,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import AsyncIterator
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -291,3 +292,20 @@ async def seeded_graph(
         now=now_iso,
     )
     return driver, group_id
+
+
+@pytest.fixture(autouse=True)
+def memory_storage_boundary(request, monkeypatch):
+    if request.node.get_closest_marker("integration"):
+        return
+    from backend.copilot.graphiti import scope_resolution
+    from backend.data import db_accessors
+
+    memory_store = MagicMock()
+    memory_store.get_personal_memory_organization = AsyncMock(return_value="org-1")
+    memory_store.register_memory_scope = AsyncMock()
+    monkeypatch.setattr(scope_resolution, "memory_db", lambda: memory_store)
+    monkeypatch.setattr(db_accessors, "memory_db", lambda: memory_store)
+    from backend.copilot.graphiti import ingest
+
+    monkeypatch.setattr(ingest, "memory_db", lambda: memory_store)

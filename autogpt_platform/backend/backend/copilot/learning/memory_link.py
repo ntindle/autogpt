@@ -21,7 +21,7 @@ from backend.copilot.graphiti.memory_model import (
     MemoryStatus,
     SourceKind,
 )
-from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import resolve_memory_scope
 from backend.data.skill_versions import SkillVersionRecord
 
 logger = logging.getLogger(__name__)
@@ -49,16 +49,18 @@ def build_reference_envelope(version: SkillVersionRecord) -> MemoryEnvelope:
     )
 
 
-async def link_version_to_memory(user_id: str, version: SkillVersionRecord) -> bool:
+async def link_version_to_memory(
+    user_id: str, version: SkillVersionRecord, *, organization_id: str | None = None
+) -> bool:
     """Best-effort; returns whether an episode was queued. Never raises."""
     try:
-        if not await is_enabled_for_user(user_id):
+        if version.user_id != user_id or not await is_enabled_for_user(user_id):
             return False
         envelope = build_reference_envelope(version)
         # ``dream_`` name prefix: the dream pass must not treat our own
         # write as new user activity worth a paid consolidation pass.
         return await enqueue_episode(
-            MemoryScope.build(user_id, version.expert_id),
+            await resolve_memory_scope(user_id, version.expert_id, organization_id),
             f"skill_learning_{version.id}",
             name=f"dream_skill_{version.id}",
             episode_body=envelope.model_dump_json(),

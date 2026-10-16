@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from backend.copilot.graphiti.falkordb_driver import AutoGPTFalkorDriver, open_driver
 from backend.copilot.graphiti.scope import HIT_TRACKER_KEY_PREFIX, MemoryScope
+from backend.copilot.graphiti.scope_resolution import resolve_memory_scope
 from backend.copilot.tools.graphiti_forget import mark_edges_superseded
 
 from .ratification_hits import (
@@ -68,7 +69,7 @@ class RatificationResult(BaseModel):
 
 
 async def run_ratification_pass(
-    user_id: str, expert_id: str | None = None
+    user_id: str, expert_id: str | None = None, organization_id: str | None = None
 ) -> RatificationResult:
     """Promote or supersede every ``status='tentative'`` edge for one user.
 
@@ -83,7 +84,7 @@ async def run_ratification_pass(
     result = RatificationResult(user_id=user_id, started_at=started_at)
 
     try:
-        scope = MemoryScope.build(user_id, expert_id)
+        scope = await resolve_memory_scope(user_id, expert_id, organization_id)
     except ValueError as exc:
         result.error = f"invalid_user_id: {exc}"
         result.completed_at = datetime.now(timezone.utc)

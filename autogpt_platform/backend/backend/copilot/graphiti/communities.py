@@ -43,7 +43,7 @@ from .client import (
     make_flex_graphiti_client,
 )
 from .config import graphiti_config
-from .scope import MemoryScope
+from .scope_resolution import resolve_memory_scope
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +268,7 @@ async def rebuild_communities_for_user(
     user_id: str,
     *,
     expert_id: str | None = None,
+    organization_id: str | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     """Destroy and rebuild ``:Community`` nodes for one user's graph.
@@ -301,7 +302,7 @@ async def rebuild_communities_for_user(
     }
 
     try:
-        scope = MemoryScope.build(user_id, expert_id)
+        scope = await resolve_memory_scope(user_id, expert_id, organization_id)
     except ValueError as exc:
         result["error"] = f"invalid_user_id: {exc}"
         logger.warning("Skipping community rebuild — invalid user_id %s", user_id[:12])

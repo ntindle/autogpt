@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 import autogpt_libs.auth as autogpt_auth_lib
+from autogpt_libs.auth.dependencies import get_request_context
+from autogpt_libs.auth.models import RequestContext
 from fastapi import APIRouter, HTTPException, Path, Query, Security
 from redis.exceptions import ResponseError
 
@@ -31,6 +33,7 @@ from backend.api.features.memory.models import (
 from backend.copilot.graphiti.config import is_enabled_for_user
 from backend.copilot.graphiti.falkordb_driver import AutoGPTFalkorDriver, open_driver
 from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import resolve_memory_scope
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +64,9 @@ def _is_missing_graph_error(exc: BaseException) -> bool:
     return any(marker in msg for marker in _MISSING_GRAPH_MARKERS)
 
 
-async def _resolve_scope(user_id: str, expert_id: str | None) -> MemoryScope:
+async def _resolve_scope(
+    user_id: str, expert_id: str | None, organization_id: str | None = None
+) -> MemoryScope:
     """Resolve the caller-owned memory scope for the request.
 
     Memory must be enabled for the caller, and an expert scope must name an
@@ -75,7 +80,7 @@ async def _resolve_scope(user_id: str, expert_id: str | None) -> MemoryScope:
 
     if expert_id is None:
         try:
-            return MemoryScope.for_user(user_id)
+            return await resolve_memory_scope(user_id, organization_id=organization_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc))
 
@@ -84,7 +89,11 @@ async def _resolve_scope(user_id: str, expert_id: str | None) -> MemoryScope:
         raise HTTPException(status_code=404, detail="Expert not found")
 
     try:
-        return MemoryScope.for_expert(user_id, expert.id)
+        requested = await resolve_memory_scope(user_id, expert.id, organization_id)
+        saved = await resolve_memory_scope(user_id, expert.id, expert.organization_id)
+        if requested != saved:
+            raise HTTPException(status_code=404, detail="Expert not found")
+        return saved
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -101,9 +110,9 @@ async def _count(driver: AutoGPTFalkorDriver, query: str) -> int:
 
 
 async def _get_overview_impl(
-    user_id: str, expert_id: str | None
+    user_id: str, expert_id: str | None, organization_id: str | None = None
 ) -> MemoryScopeOverview:
-    scope = await _resolve_scope(user_id, expert_id)
+    scope = await _resolve_scope(user_id, expert_id, organization_id)
     driver = open_driver(scope)
     try:
         facts = await _count(
@@ -126,9 +135,10 @@ async def _get_overview_impl(
 @router.get("/overview", operation_id="get_my_memory_overview")
 async def get_my_memory_overview(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> MemoryScopeOverview:
     """Counts for the caller's account (Otto) memory."""
-    return await _get_overview_impl(user_id, None)
+    return await _get_overview_impl(user_id, None, organization_id=ctx.org_id)
 
 
 @router.get(
@@ -137,15 +147,16 @@ async def get_my_memory_overview(
 async def get_my_expert_memory_overview(
     expert_id: Annotated[str, _EXPERT_ID_PATH],
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> MemoryScopeOverview:
     """Counts for one of the caller's experts' isolated memory."""
-    return await _get_overview_impl(user_id, expert_id)
+    return await _get_overview_impl(user_id, expert_id, organization_id=ctx.org_id)
 
 
 async def _list_facts_impl(
-    user_id: str, expert_id: str | None, limit: int
+    user_id: str, expert_id: str | None, limit: int, organization_id: str | None = None
 ) -> MemoryFactListResponse:
-    scope = await _resolve_scope(user_id, expert_id)
+    scope = await _resolve_scope(user_id, expert_id, organization_id)
     driver = open_driver(scope)
     try:
         result = await driver.execute_query(
@@ -190,9 +201,10 @@ async def _list_facts_impl(
 async def list_my_memory_facts(
     limit: Annotated[int, _LIMIT_QUERY] = 50,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> MemoryFactListResponse:
     """Live facts in the caller's account memory, newest first."""
-    return await _list_facts_impl(user_id, None, limit)
+    return await _list_facts_impl(user_id, None, limit, organization_id=ctx.org_id)
 
 
 @router.get("/experts/{expert_id}/facts", operation_id="list_my_expert_memory_facts")
@@ -200,15 +212,19 @@ async def list_my_expert_memory_facts(
     expert_id: Annotated[str, _EXPERT_ID_PATH],
     limit: Annotated[int, _LIMIT_QUERY] = 50,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> MemoryFactListResponse:
     """Live facts in one expert's isolated memory, newest first."""
-    return await _list_facts_impl(user_id, expert_id, limit)
+    return await _list_facts_impl(user_id, expert_id, limit, organization_id=ctx.org_id)
 
 
 async def _forget_fact_impl(
-    user_id: str, expert_id: str | None, fact_uuid: str
+    user_id: str,
+    expert_id: str | None,
+    fact_uuid: str,
+    organization_id: str | None = None,
 ) -> ForgetFactResponse:
-    scope = await _resolve_scope(user_id, expert_id)
+    scope = await _resolve_scope(user_id, expert_id, organization_id)
     driver = open_driver(scope)
     try:
         # Same retraction the chat forget tool performs (``expired_at`` only —
@@ -242,9 +258,10 @@ async def _forget_fact_impl(
 async def forget_my_memory_fact(
     fact_uuid: Annotated[str, _FACT_UUID_PATH],
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ForgetFactResponse:
     """Forget one fact from the caller's account memory."""
-    return await _forget_fact_impl(user_id, None, fact_uuid)
+    return await _forget_fact_impl(user_id, None, fact_uuid, organization_id=ctx.org_id)
 
 
 @router.delete(
@@ -255,13 +272,18 @@ async def forget_my_expert_memory_fact(
     expert_id: Annotated[str, _EXPERT_ID_PATH],
     fact_uuid: Annotated[str, _FACT_UUID_PATH],
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ForgetFactResponse:
     """Forget one fact from an expert's isolated memory."""
-    return await _forget_fact_impl(user_id, expert_id, fact_uuid)
+    return await _forget_fact_impl(
+        user_id, expert_id, fact_uuid, organization_id=ctx.org_id
+    )
 
 
-async def _erase_scope_impl(user_id: str, expert_id: str | None) -> EraseMemoryResponse:
-    scope = await _resolve_scope(user_id, expert_id)
+async def _erase_scope_impl(
+    user_id: str, expert_id: str | None, organization_id: str | None = None
+) -> EraseMemoryResponse:
+    scope = await _resolve_scope(user_id, expert_id, organization_id)
     driver = open_driver(scope)
     deleted = 0
     try:
@@ -289,15 +311,17 @@ async def _erase_scope_impl(user_id: str, expert_id: str | None) -> EraseMemoryR
 @router.delete("", operation_id="erase_my_memory")
 async def erase_my_memory(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> EraseMemoryResponse:
     """Permanently erase the caller's entire account memory."""
-    return await _erase_scope_impl(user_id, None)
+    return await _erase_scope_impl(user_id, None, organization_id=ctx.org_id)
 
 
 @router.delete("/experts/{expert_id}", operation_id="erase_my_expert_memory")
 async def erase_my_expert_memory(
     expert_id: Annotated[str, _EXPERT_ID_PATH],
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> EraseMemoryResponse:
     """Permanently erase one expert's entire isolated memory."""
-    return await _erase_scope_impl(user_id, expert_id)
+    return await _erase_scope_impl(user_id, expert_id, organization_id=ctx.org_id)

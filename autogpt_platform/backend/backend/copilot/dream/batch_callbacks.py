@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import ValidationError
 
-from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import memory_scope_access
 from backend.copilot.trial_cost_context import TrialCostContext, restore_cost_context
 from backend.copilot.usage_activation import UsageActivationUnavailable
 
@@ -257,7 +257,7 @@ async def _release_lock(user_id: str, pass_id: str, expert_id: str | None) -> No
     Best-effort like ``release_dream_lock`` itself: a Redis blip on the
     token read must not propagate — on the success tail it would fire
     AFTER ``mark_complete`` and the crash guard would rewrite a completed
-    job to errored. Falls back to a token-less release (lock TTL)."""
+    job to errored. Unknown scope or token leaves the lock to expire."""
     token: str | None = None
     if pass_id:
         try:
@@ -268,11 +268,16 @@ async def _release_lock(user_id: str, pass_id: str, expert_id: str | None) -> No
                 "leaving the lock to its TTL",
                 pass_id,
             )
+    if token is None:
+        return
     try:
-        scope = MemoryScope.build(user_id, expert_id)
-    except ValueError:
-        logger.warning(
-            "Invalid memory scope for disowned dream lock of user %s — "
+        bundle = await read_input_bundle(pass_id)
+        if bundle is None or (bundle.user_id, bundle.expert_id) != (user_id, expert_id):
+            return
+        scope = bundle.memory_scope
+    except Exception:
+        logger.exception(
+            "Unavailable memory scope for disowned dream lock of user %s — "
             "leaving it for the TTL to clear",
             user_id[:12],
         )
@@ -393,7 +398,12 @@ async def _handle_dream_batch_result(
 
         authoritative_user_id = input_bundle.user_id
         authoritative_expert_id = input_bundle.expert_id
-        if user_id != authoritative_user_id or expert_id != authoritative_expert_id:
+        input_bundle.memory_scope
+        if (
+            user_id != authoritative_user_id
+            or expert_id != authoritative_expert_id
+            or payload.get("organization_id") != input_bundle.organization_id
+        ):
             logger.error(
                 "Dream batch payload memory scope mismatch for pass=%s",
                 pass_id,
@@ -408,16 +418,21 @@ async def _handle_dream_batch_result(
             )
             return
 
-        await _handle_phase_result(
-            rows=rows,
-            user_id=user_id,
-            expert_id=expert_id,
-            input_bundle=input_bundle,
-            pass_id=pass_id,
-            job_id=job_id,
-            phase_models=phase_models,
-            phase=phase,
-        )
+        async with memory_scope_access(input_bundle.memory_scope) as allowed:
+            if not allowed:
+                raise PermissionError("Dream memory scope access was revoked")
+            await allowed.run(
+                _handle_phase_result(
+                    rows=rows,
+                    user_id=user_id,
+                    expert_id=expert_id,
+                    input_bundle=input_bundle,
+                    pass_id=pass_id,
+                    job_id=job_id,
+                    phase_models=phase_models,
+                    phase=phase,
+                )
+            )
     except Exception:
         # The batch path disowned the per-user dream lock to this callback,
         # and BatchExecutor._dispatch swallows handler exceptions — so without
@@ -803,7 +818,7 @@ async def _finalize_complete(
         # every other user's pending batch. See
         # ``BATCH_INGESTION_DRAIN_TIMEOUT_SECONDS``.
         apply_stats = await apply_operations(
-            MemoryScope.build(user_id, expert_id),
+            input_bundle.memory_scope,
             pass_id,
             ops,
             known_fact_uuids=input_bundle.known_fact_uuids,
@@ -1011,6 +1026,8 @@ async def _log_all_phase_costs(
         )
         return
 
+    bundle = await read_input_bundle(pass_id)
+    scope = bundle.memory_scope if bundle is not None else None
     for phase, row in state.items():
         try:
             if row.get("error"):
@@ -1050,6 +1067,7 @@ async def _log_all_phase_costs(
                 user_id=user_id,
                 pass_id=pass_id,
                 phase_usage=usage,
+                scope=scope,
                 execution_path="anthropic_batch",
             )
         except Exception:

@@ -28,6 +28,20 @@ def _stub_dream_registration(mocker):
     )
 
 
+@pytest.fixture(autouse=True)
+def private_memory_access(monkeypatch):
+    class Lease:
+        async def run(self, action):
+            return await action
+
+    @asynccontextmanager
+    async def access(*args):
+        yield Lease()
+
+    monkeypatch.setattr(ingest, "live_resource_lease", access)
+    monkeypatch.setattr(ingest, "owns_memory_scope", AsyncMock(return_value=True))
+
+
 def _enqueue_mock(queue: asyncio.Queue) -> AsyncMock:
     async def enqueue(_user_id: str, _group_id: str, payload: dict, **_kwargs) -> bool:
         try:

@@ -15,7 +15,7 @@ from backend.copilot.graphiti.rollout import (
     SHARED_MEMORY_DISABLED,
     shared_memory_enabled,
 )
-from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import resolve_memory_scope
 from backend.copilot.model import ChatSession
 from backend.data.tenancy import ResourceAccess
 
@@ -165,7 +165,11 @@ class MemoryForgetSearchTool(BaseTool):
             )
 
         try:
-            group_id = MemoryScope.build(user_id, session.expert_id).group_id
+            group_id = (
+                await resolve_memory_scope(
+                    user_id, session.expert_id, session.organization_id
+                )
+            ).group_id
         except ValueError:
             return ErrorResponse(
                 message="Invalid user ID for memory operations.",
@@ -317,7 +321,11 @@ class MemoryForgetConfirmTool(BaseTool):
             )
 
         try:
-            group_id = MemoryScope.build(user_id, session.expert_id).group_id
+            group_id = (
+                await resolve_memory_scope(
+                    user_id, session.expert_id, session.organization_id
+                )
+            ).group_id
         except ValueError:
             return ErrorResponse(
                 message="Invalid user ID for memory operations.",

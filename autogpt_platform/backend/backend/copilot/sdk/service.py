@@ -6922,6 +6922,7 @@ async def _enqueue_graphiti_turn(
         message,
         assistant_msg=assistant_msg,
         expert_id=session.expert_id,
+        organization_id=session.organization_id,
     )
 
 

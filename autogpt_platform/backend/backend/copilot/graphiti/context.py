@@ -17,6 +17,7 @@ from .client import get_graphiti_client
 from .config import graphiti_config
 from .lifecycle import active_shared_search_filter, filter_active_shared_edges
 from .scope import MemoryScope
+from .scope_resolution import resolve_memory_scope
 from .tiers import MemoryTier, TierTarget, merge_tiered, resolve_warm_targets
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ async def fetch_warm_context(
         return None
 
     try:
-        scope = MemoryScope.build(user_id, expert_id)
+        scope = await resolve_memory_scope(user_id, expert_id, organization_id)
         return await asyncio.wait_for(
             _fetch(scope, message, organization_id, team_id),
             timeout=graphiti_config.context_timeout,
@@ -99,7 +100,7 @@ async def _fetch(
                     else await action
                 )
 
-    return await _fetch_authorized(scope, message, None, None)
+    return None
 
 
 async def _fetch_authorized(

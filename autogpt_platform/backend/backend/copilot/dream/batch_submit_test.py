@@ -33,7 +33,11 @@ def _bundle(expert_id: str | None = None) -> DreamInput:
     return DreamInput(
         user_id="u1",
         expert_id=expert_id,
-        group_id="user_u1" if expert_id is None else "expert_resolved",
+        group_id=(
+            "user_u1"
+            if expert_id is None
+            else MemoryScope.for_expert("u1", "expert-1").group_id
+        ),
         window_start=now,
         window_end=now,
     )
@@ -178,7 +182,7 @@ async def test_expert_scope_round_trips_and_routes_live_lock_lookup(fake_redis):
     bundle = await read_input_bundle("p-expert")
     assert bundle is not None
     assert bundle.expert_id == "expert-1"
-    assert bundle.group_id == "expert_resolved"
+    assert bundle.group_id == MemoryScope.for_expert("u1", "expert-1").group_id
 
 
 @pytest.mark.asyncio

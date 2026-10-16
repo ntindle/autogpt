@@ -2,7 +2,7 @@
 
 Three tiers share one FalkorDB-per-group substrate:
 
-- ``personal`` → ``user_<id>``   (private; exists today)
+- ``personal`` → owner-private org/expert scope (legacy in the original org)
 - ``team``     → ``team_<id>``   (visible to ACTIVE members of that team)
 - ``org``      → ``org_<id>``    (visible to every org member)
 
@@ -30,7 +30,7 @@ from backend.data.db_accessors import orgs_db
 
 from .client import derive_org_group_id, derive_team_group_id
 from .rollout import SHARED_MEMORY_DISABLED, shared_memory_enabled
-from .scope import MemoryScope
+from .scope_resolution import resolve_memory_scope
 
 logger = logging.getLogger(__name__)
 
@@ -237,7 +237,9 @@ async def resolve_warm_targets(
     """
     targets = [
         TierTarget(
-            group_id=MemoryScope.build(user_id, expert_id).group_id,
+            group_id=(
+                await resolve_memory_scope(user_id, expert_id, organization_id)
+            ).group_id,
             tier=MemoryTier.personal,
             label=None,
         )
@@ -322,7 +324,9 @@ async def resolve_search_targets(
     if include_personal:
         targets.append(
             TierTarget(
-                group_id=MemoryScope.build(user_id, expert_id).group_id,
+                group_id=(
+                    await resolve_memory_scope(user_id, expert_id, organization_id)
+                ).group_id,
                 tier=MemoryTier.personal,
                 label=None,
             )

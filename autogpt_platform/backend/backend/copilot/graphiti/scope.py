@@ -1,4 +1,4 @@
-"""Which memory an operation reads and writes: the account's or one expert's.
+"""Owner-private business memory, optionally partitioned by expert.
 
 A ``MemoryScope`` is built once where a request enters the memory code (API
 routes, chat tools, ingestion, the dream and community-rebuild entry points)
@@ -44,6 +44,8 @@ class MemoryScope(BaseModel):
 
     owner_user_id: str = Field(min_length=1)
     expert_id: str | None = Field(min_length=1)
+    # None denotes the durable original personal org, never the navigation org.
+    organization_id: str | None = Field(default=None, min_length=1)
     group_id: str
     scope_key: str
 
@@ -68,8 +70,21 @@ class MemoryScope(BaseModel):
         )
 
     @classmethod
-    def build(cls, user_id: str, expert_id: str | None = None) -> "MemoryScope":
-        """``for_user`` when ``expert_id`` is None, else ``for_expert``."""
+    def build(
+        cls,
+        user_id: str,
+        expert_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> "MemoryScope":
+        """Build a canonical scope; normalize saved org IDs with resolve_memory_scope."""
+        if organization_id is not None:
+            return cls(
+                owner_user_id=user_id,
+                expert_id=expert_id,
+                organization_id=organization_id,
+                group_id=derive_memory_group_id(user_id, expert_id, organization_id),
+                scope_key=derive_memory_scope_key(user_id, expert_id, organization_id),
+            )
         if expert_id is None:
             return cls.for_user(user_id)
         return cls.for_expert(user_id, expert_id)
@@ -115,12 +130,16 @@ class MemoryScope(BaseModel):
     @model_validator(mode="after")
     def _ids_match_derivation(self) -> "MemoryScope":
         derived = (
-            derive_memory_group_id(self.owner_user_id, self.expert_id),
-            derive_memory_scope_key(self.owner_user_id, self.expert_id),
+            derive_memory_group_id(
+                self.owner_user_id, self.expert_id, self.organization_id
+            ),
+            derive_memory_scope_key(
+                self.owner_user_id, self.expert_id, self.organization_id
+            ),
         )
         if (self.group_id, self.scope_key) != derived:
             raise ValueError(
                 "group_id and scope_key must be derived from owner_user_id "
-                "and expert_id"
+                "organization_id and expert_id"
             )
         return self

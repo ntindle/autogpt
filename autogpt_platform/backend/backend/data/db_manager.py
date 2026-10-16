@@ -73,6 +73,7 @@ from backend.copilot.sharing.db import link_new_execution_to_chat_share
 from backend.data import bot_analytics as bot_analytics_db
 from backend.data import bot_installs as bot_installs_db
 from backend.data import db
+from backend.data import memory_scope as memory_scope_db
 from backend.data import skill_deletion as skill_deletion_data
 from backend.data import skill_learning as skill_learning_data
 from backend.data import skill_publication as skill_publication_data
@@ -630,6 +631,11 @@ class DatabaseManager(AppService):
     # ============ Platform Linking ============ #
     # ============ Orgs ============ #
     get_user_default_team = _(get_user_default_team)
+    get_personal_memory_organization = _(
+        memory_scope_db.get_personal_memory_organization
+    )
+    register_memory_scope = _(memory_scope_db.register_memory_scope)
+    list_memory_scopes = _(memory_scope_db.list_memory_scopes)
     resolve_default_tenancy = _(resolve_default_tenancy)
     has_live_tenancy = _(has_live_tenancy)
     has_live_resource_access = _(has_live_resource_access)
@@ -1234,6 +1240,9 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     find_server_link_owner = d.find_server_link_owner
     find_server_link_owner_for_sender = d.find_server_link_owner_for_sender
     get_user_default_team = d.get_user_default_team
+    get_personal_memory_organization = d.get_personal_memory_organization
+    register_memory_scope = d.register_memory_scope
+    list_memory_scopes = d.list_memory_scopes
     resolve_default_tenancy = d.resolve_default_tenancy
     has_live_tenancy = d.has_live_tenancy
     has_live_resource_access = d.has_live_resource_access

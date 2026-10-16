@@ -122,3 +122,12 @@ def login_chain_unchanged(request):
         patch("backend.copilot.tools.e2b_sandbox.take_baseline", AsyncMock()),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def memory_storage_boundary(monkeypatch):
+    store = MagicMock()
+    store.get_personal_memory_organization = AsyncMock(return_value="org-1")
+    monkeypatch.setattr(
+        "backend.copilot.graphiti.scope_resolution.memory_db", lambda: store
+    )

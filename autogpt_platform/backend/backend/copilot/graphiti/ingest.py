@@ -12,12 +12,21 @@ from datetime import datetime, timezone
 
 from graphiti_core.nodes import EpisodeType
 
-from backend.data.db_accessors import context_without_live_leases, live_resource_lease
+from backend.data.db_accessors import (
+    context_without_live_leases,
+    live_resource_lease,
+    memory_db,
+)
 
 from .client import ensure_indices_once, get_graphiti_client
 from .memory_model import MemoryEnvelope, MemoryKind, MemoryStatus, SourceKind
 from .rollout import shared_memory_enabled
 from .scope import MemoryScope
+from .scope_resolution import (
+    memory_organization_id,
+    owns_memory_scope,
+    resolve_memory_scope,
+)
 from .tiers import get_team_membership, hold_buffer_enabled, is_org_admin
 from .types import EDGE_TYPE_MAP, EDGE_TYPES, ENTITY_TYPES
 
@@ -254,11 +263,27 @@ async def _process_ingestion_payload(
 ) -> None:
     if payload.get("group_id") != group_id:
         raise MemoryScopeViolationError("Ingestion payload memory group mismatch")
+    memory_scope_data = payload.pop("_memory_scope", None)
+    memory_scope = (
+        MemoryScope.model_validate(memory_scope_data)
+        if memory_scope_data is not None
+        else None
+    )
+    if memory_scope is not None and (
+        memory_scope.owner_user_id != user_id or memory_scope.group_id != group_id
+    ):
+        raise MemoryScopeViolationError(
+            "Ingestion payload owner or organization mismatch"
+        )
+    if memory_scope is None and group_id.startswith("private_"):
+        raise MemoryScopeViolationError("Organization memory payload scope is missing")
     resource_scope = payload.pop("_resource_scope", None)
     if (
         resource_scope is not None or group_id.startswith(("org_", "team_"))
     ) and not await shared_memory_enabled(user_id):
         logger.info("Dropping shared-memory episode while organization rollout is off")
+        return
+    if memory_scope is not None and not await owns_memory_scope(memory_scope):
         return
     client = await get_graphiti_client(group_id)
     await ensure_indices_once(group_id, client)
@@ -275,6 +300,7 @@ async def _process_ingestion_payload(
             await _stamp_edge_metadata(client, group_id, result, edge_metadata, user_id)
 
     async def apply_current_governance() -> None:
+        assert resource_scope is not None
         organization_id = resource_scope["organization_id"]
         if not await hold_buffer_enabled(organization_id):
             return
@@ -295,6 +321,14 @@ async def _process_ingestion_payload(
         if edge_metadata is not None:
             edge_metadata["status"] = MemoryStatus.tentative.value
 
+    if resource_scope is None and memory_scope is not None:
+        organization_id = await memory_organization_id(memory_scope)
+        async with live_resource_lease(
+            user_id, organization_id, None, "create"
+        ) as allowed:
+            if allowed:
+                await allowed.run(write_episode())
+        return
     if resource_scope is None:
         await write_episode()
         return
@@ -417,6 +451,7 @@ async def enqueue_conversation_turn(
     user_msg: str,
     assistant_msg: str = "",
     expert_id: str | None = None,
+    organization_id: str | None = None,
 ) -> None:
     """Enqueue a conversation turn for async background ingestion.
 
@@ -432,7 +467,8 @@ async def enqueue_conversation_turn(
         return
 
     try:
-        group_id = MemoryScope.build(user_id, expert_id).group_id
+        scope = await resolve_memory_scope(user_id, expert_id, organization_id)
+        group_id = scope.group_id
     except ValueError:
         logger.warning("Invalid memory scope for ingestion: %s", user_id[:12])
         return
@@ -458,6 +494,7 @@ async def enqueue_conversation_turn(
             "source_description": source_description,
             "reference_time": datetime.now(timezone.utc),
             "group_id": group_id,
+            "_memory_scope": scope.model_dump(),
             "custom_extraction_instructions": CUSTOM_EXTRACTION_INSTRUCTIONS,
         },
         schedule_dreams=True,
@@ -493,6 +530,7 @@ async def enqueue_conversation_turn(
                     "source_description": f"Assistant-derived finding in session {session_id}",
                     "reference_time": datetime.now(timezone.utc),
                     "group_id": group_id,
+                    "_memory_scope": scope.model_dump(),
                     "custom_extraction_instructions": CUSTOM_EXTRACTION_INSTRUCTIONS,
                 },
                 schedule_dreams=True,
@@ -570,6 +608,7 @@ async def enqueue_episode(
             "source_description": source_description,
             "reference_time": datetime.now(timezone.utc),
             "group_id": resolved_group_id,
+            "_memory_scope": scope.model_dump() if is_personal else None,
             "custom_extraction_instructions": CUSTOM_EXTRACTION_INSTRUCTIONS,
             # Sidecar — popped by the worker before the add_episode
             # spread; carries dream metadata for post-write stamping.
@@ -640,6 +679,12 @@ async def _enqueue_payload(
     Fire-and-forget; failures are swallowed inside the helper. Shared
     tiers pass ``None`` — dream curation is personal-only in v1.
     """
+    memory_scope_data = payload.get("_memory_scope")
+    if memory_scope_data is not None:
+        scope = MemoryScope.model_validate(memory_scope_data)
+        if scope.owner_user_id != user_id or scope.group_id != group_id:
+            raise MemoryScopeViolationError("Ingestion scope does not match its owner")
+        await memory_db().register_memory_scope(scope)
     state = _get_loop_state()
     is_new_group_for_this_process = False
     async with state.workers_lock:
