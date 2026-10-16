@@ -67,6 +67,7 @@ async def test_match_user_credentials_excludes_auto_creds():
         mock_store = AsyncMock()
         mock_store.get_all_creds.return_value = []
         MockCredsMgr.return_value.store = mock_store
+        MockCredsMgr.return_value.scoped.return_value = MockCredsMgr.return_value
 
         matched, missing = await match_user_credentials_to_graph(
             user_id="test-user", graph=mock_graph

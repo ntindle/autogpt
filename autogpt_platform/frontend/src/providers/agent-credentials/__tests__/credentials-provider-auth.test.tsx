@@ -32,6 +32,8 @@ vi.mock("@/components/molecules/Toast/use-toast", () => ({
   useToastOnFail: () => onFailToastMock,
 }));
 
+import { useOrgTeamStore } from "@/services/org-team/store";
+
 import CredentialsProvider, {
   CredentialsActionsContext,
   CredentialsProvidersContext,
@@ -362,5 +364,44 @@ describe("CredentialsProvider device-auth upserts", () => {
 
     expect(merged).toHaveLength(1);
     expect(merged[0].title).toBe("Renamed elsewhere");
+  });
+});
+
+describe("organization switching", () => {
+  it("discards a slow old-org list and pending upserts", async () => {
+    vi.clearAllMocks();
+    queryClient.clear();
+    apiMock.listProviders.mockResolvedValue(["google"]);
+    useAuthMock.mockReturnValue({ isLoggedIn: true, isUserLoading: false });
+    useOrgTeamStore.setState({ activeOrgID: "org-a" });
+    const oldList = deferred<CredentialsMetaResponse[]>();
+    apiMock.listCredentials
+      .mockReturnValueOnce(oldList.promise)
+      .mockResolvedValue([
+        { id: "org-b-key", provider: "google", type: "api_key" },
+      ]);
+    render(
+      <CredentialsProvider>
+        <UpsertProbe provider="google" />
+      </CredentialsProvider>,
+      { wrapper: TestWrapper },
+    );
+    await waitFor(() => expect(apiMock.listCredentials).toHaveBeenCalled());
+    act(() => screen.getByTestId("do-upsert").click());
+    act(() => useOrgTeamStore.setState({ activeOrgID: "org-b" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("saved-ids").textContent).toContain(
+        "org-b-key",
+      ),
+    );
+    await act(async () =>
+      oldList.resolve([
+        { id: "org-a-key", provider: "google", type: "api_key" },
+      ]),
+    );
+    expect(screen.getByTestId("saved-ids").textContent).not.toContain(
+      "org-a-key",
+    );
+    act(() => useOrgTeamStore.setState({ activeOrgID: null }));
   });
 });

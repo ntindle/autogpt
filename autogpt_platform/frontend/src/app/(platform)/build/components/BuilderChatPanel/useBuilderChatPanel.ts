@@ -1,3 +1,4 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
   getGetV1GetSpecificGraphQueryKey,
   useGetV1GetSpecificGraph,
@@ -98,8 +99,13 @@ export function useBuilderChatPanel({
 
   // Checked before anything is created: with no model the chat can never
   // answer, so neither the blank agent nor the session below is worth making.
+  const transportsScope = useOrgConnectionScope(
+    "transports",
+    tenantScope.organizationId,
+  );
   const transportsQuery = useGetV2ListChatTransports({
-    query: { enabled: isOpen },
+    request: transportsScope.request,
+    query: { queryKey: transportsScope.queryKey, enabled: isOpen },
   });
   const modelStatus = sessionRefusedNoModel
     ? "missing"

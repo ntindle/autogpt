@@ -762,7 +762,9 @@ class SwapProxyAddon:
         lookup = _Lookup()
         for name in sorted(wanted):
             try:
-                credential = await self._source.resolve(user_id, name, host)
+                credential = await self._source.resolve(
+                    user_id, name, host, organization_id=owner.organization_id
+                )
             except SourceUnavailable:
                 lookup.refused[name] = _UNAVAILABLE
                 continue

@@ -1,3 +1,4 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
   useGetV2ListChatTransports,
   useGetV2ListSessions,
@@ -76,8 +77,10 @@ export function useExpertKickoff({
       },
     },
   );
+  const transportsScope = useOrgConnectionScope("transports");
   const transportsQuery = useGetV2ListChatTransports({
-    query: { enabled: wantsCreatePath },
+    request: transportsScope.request,
+    query: { queryKey: transportsScope.queryKey, enabled: wantsCreatePath },
   });
 
   const onKickoffRef = useRef(onKickoff);

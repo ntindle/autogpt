@@ -16,7 +16,7 @@ from typing import (
     get_args,
 )
 
-from autogpt_libs.auth import get_optional_user_id, get_user_id
+from autogpt_libs.auth import get_optional_user_id
 from autogpt_libs.auth.permissions import OrgAction, TeamAction
 from fastapi import (
     APIRouter,
@@ -35,6 +35,7 @@ from prisma.models import LibraryAgent as PrismaLibraryAgent
 from pydantic import BaseModel, Field, model_validator
 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR, HTTP_502_BAD_GATEWAY
 
+from backend.api.credential_scope import credential_user_id, oauth_credential_scope
 from backend.api.features.library.db import set_preset_webhook, update_preset
 from backend.api.features.library.model import LibraryAgentPreset
 from backend.data.db import get_database_schema, transaction
@@ -232,7 +233,7 @@ async def login(
     provider: Annotated[
         ProviderName, Path(title="The provider to initiate an OAuth flow for")
     ],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
     request: Request,
     scopes: Annotated[
         str, Query(title="Comma-separated list of authorization scopes")
@@ -443,7 +444,7 @@ async def callback(
     ],
     code: Annotated[str, Body(title="Authorization code acquired by user login")],
     state_token: Annotated[str, Body(title="Anti-CSRF nonce")],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
     request: Request,
 ) -> CredentialsMetaResponse:
     logger.debug(f"Received OAuth callback for provider: {provider}")
@@ -453,7 +454,8 @@ async def callback(
     if provider == ProviderName.CODEX:
         await enforce_codex_access_http(user_id)
         valid_state = await _verify_callback_state(user_id, state_token, provider)
-        return await _complete_codex_login(user_id, code, valid_state)
+        async with oauth_credential_scope(user_id, valid_state):
+            return await _complete_codex_login(user_id, code, valid_state)
 
     failure_class: product_analytics.OAuthExchangeFailureClass = "invalid_state"
     # Everything secret we send the provider, in case its error echoes it back.
@@ -476,9 +478,10 @@ async def callback(
 
         failure_class = "credential_merge"
         # TODO: Allow specifying `title` to set on `credentials`
-        credentials = await _merge_or_create_credential(
-            user_id, provider, credentials, valid_state.credential_id
-        )
+        async with oauth_credential_scope(user_id, valid_state):
+            credentials = await _merge_or_create_credential(
+                user_id, provider, credentials, valid_state.credential_id
+            )
     except Exception as e:
         _track_oauth_exchange_failed(
             user_id, provider, failure_class, e, redact=tuple(redact)
@@ -732,7 +735,7 @@ async def device_auth_initiate(
         ProviderName,
         Path(title="The provider to initiate device auth for"),
     ],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
     scopes: Annotated[
         str, Query(title="Comma-separated list of authorization scopes")
     ] = "",
@@ -811,7 +814,7 @@ async def device_auth_poll(
         Path(title="The provider to poll device auth for"),
     ],
     body: DeviceAuthPollRequest,
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> DeviceAuthPollResponse:
     handler = _get_device_auth_handler(provider)
 
@@ -886,9 +889,10 @@ async def device_auth_poll(
         # than "approved" with nothing attached. A client branching on the
         # status alone would otherwise show success, wire up nothing, and be
         # unable to retry — the state token is gone by now.
-        stored = await _credential_for_grant(
-            user_id, provider, valid_state.credential_id
-        )
+        async with oauth_credential_scope(user_id, valid_state):
+            stored = await _credential_for_grant(
+                user_id, provider, valid_state.credential_id
+            )
         if stored is None:
             # Either the winner has not finished storing, or this is a
             # first-time grant with no id to match on. Report the approval
@@ -908,9 +912,10 @@ async def device_auth_poll(
             credentials.scopes = credentials.scopes[0].split(" ")
 
         try:
-            credentials = await _merge_or_create_credential(
-                user_id, provider, credentials, valid_state.credential_id
-            )
+            async with oauth_credential_scope(user_id, valid_state):
+                credentials = await _merge_or_create_credential(
+                    user_id, provider, credentials, valid_state.credential_id
+                )
         except Exception:
             # The grant is live at the provider and we could not store it, so
             # there is no local credential to revoke it with and nothing to
@@ -980,7 +985,7 @@ async def _ensure_managed_credentials_bounded(user_id: str) -> None:
 
 @router.get("/credentials", summary="List Credentials")
 async def list_credentials(
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> list[CredentialsMetaResponse]:
     # Block on provisioning so managed credentials appear on the first load
     # instead of after a refresh, but with a timeout so a slow upstream
@@ -999,7 +1004,7 @@ async def list_credentials_by_provider(
     provider: Annotated[
         ProviderName, Path(title="The provider to list credentials for")
     ],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> list[CredentialsMetaResponse]:
     await _ensure_managed_credentials_bounded(user_id)
     credentials = await creds_manager.store.get_creds_by_provider(user_id, provider)
@@ -1017,7 +1022,7 @@ async def get_credential(
         ProviderName, Path(title="The provider to retrieve credentials for")
     ],
     cred_id: Annotated[str, Path(title="The ID of the credentials to retrieve")],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> CredentialsMetaResponse:
     if is_sdk_default(cred_id):
         raise HTTPException(
@@ -1079,7 +1084,7 @@ async def get_picker_token(
     cred_id: Annotated[
         str, Path(title="The ID of the OAuth2 credentials to mint a token from")
     ],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> PickerTokenResponse:
     """Return the raw access token for an OAuth2 credential so the frontend
     can initialize a provider-hosted picker (e.g. Google Drive Picker).
@@ -1146,7 +1151,7 @@ async def get_picker_token(
 
 @router.post("/{provider}/credentials", status_code=201, summary="Create Credentials")
 async def create_credentials(
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
     provider: Annotated[
         ProviderName, Path(title="The provider to create credentials for")
     ],
@@ -1245,7 +1250,7 @@ async def delete_credentials(
         ProviderName, Path(title="The provider to delete credentials for")
     ],
     cred_id: Annotated[str, Path(title="The ID of the credentials to delete")],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
     force: Annotated[
         bool, Query(title="Whether to proceed if any linked webhooks are still in use")
     ] = False,
@@ -1425,7 +1430,9 @@ async def webhook_ingress_generic(
     user_id = webhook.user_id
     try:
         credentials = (
-            await creds_manager.get(user_id, webhook.credentials_id)
+            await creds_manager.scoped(webhook.organization_id).get(
+                user_id, webhook.credentials_id
+            )
             if webhook.credentials_id
             else None
         )
@@ -1491,7 +1498,7 @@ async def webhook_ingress_generic(
 @router.post("/webhooks/{webhook_id}/ping")
 async def webhook_ping(
     webhook_id: Annotated[str, Path(title="Our ID for the webhook")],
-    user_id: Annotated[str, Security(get_user_id)],  # require auth
+    user_id: Annotated[str, Security(credential_user_id)],  # require auth
 ):
     webhook = await get_webhook(webhook_id)
     if webhook.user_id != user_id:
@@ -1517,7 +1524,9 @@ async def webhook_ping(
         try:
             if webhook.credentials_id:
                 try:
-                    lease = await creds_manager.acquire_lease(
+                    lease = await creds_manager.scoped(
+                        webhook.organization_id
+                    ).acquire_lease(
                         user_id,
                         webhook.credentials_id,
                     )
@@ -2251,7 +2260,7 @@ def _get_provider_oauth_handler(
 
 @router.get("/ayrshare/sso_url")
 async def get_ayrshare_sso_url(
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> AyrshareSSOResponse:
     """Generate a JWT SSO URL so the user can link their social accounts.
 

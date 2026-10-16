@@ -1,5 +1,7 @@
 "use client";
 
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
+
 import Link from "next/link";
 
 import { useGetV2ListChatTransports } from "@/app/api/__generated__/endpoints/chat/chat";
@@ -12,7 +14,11 @@ import { Text } from "@/components/atoms/Text/Text";
  * is looking at their bots.
  */
 export function BotConnectionNotice() {
-  const transportsQuery = useGetV2ListChatTransports();
+  const transportsScope = useOrgConnectionScope("transports");
+  const transportsQuery = useGetV2ListChatTransports({
+    request: transportsScope.request,
+    query: { queryKey: transportsScope.queryKey },
+  });
   const transports =
     transportsQuery.data?.status === 200
       ? transportsQuery.data.data.transports

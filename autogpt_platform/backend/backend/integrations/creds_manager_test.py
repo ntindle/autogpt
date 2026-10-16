@@ -96,6 +96,9 @@ async def test_provider_runtime_refresh_never_resolves_generic_handler(mocker):
     )
     credentials = _provider_runtime_credentials()
 
+    mocker.patch.object(
+        manager.store, "get_creds_by_id", AsyncMock(return_value=credentials)
+    )
     locked = await manager.refresh_if_needed("user-a", credentials, lock=True)
     unlocked = await manager.refresh_if_needed("user-a", credentials, lock=False)
 
@@ -194,6 +197,9 @@ async def test_linear_refresh_uses_locked_path_even_when_copilot_requests_unlock
     )
     unlocked = mocker.patch.object(manager, "_refresh_unlocked", AsyncMock())
 
+    mocker.patch.object(
+        manager.store, "get_creds_by_id", AsyncMock(return_value=credentials)
+    )
     result = await manager.refresh_if_needed("user-a", credentials, lock=False)
 
     assert result is credentials

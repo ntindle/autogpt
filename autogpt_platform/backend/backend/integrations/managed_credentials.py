@@ -149,7 +149,7 @@ _PROVIDERS: dict[str, ManagedCredentialProvider] = {}
 # Avoids redundant DB checks on every GET /credentials call.
 # maxsize caps memory; TTL re-checks periodically (e.g. when new providers
 # are added).  ~100K entries ≈ 4-8 MB.
-_provisioned_users = TTLCache[str, bool](maxsize=100_000, ttl=3600)
+_provisioned_users = TTLCache[tuple[str, str | None], bool](maxsize=100_000, ttl=3600)
 
 
 def register_managed_provider(provider: ManagedCredentialProvider) -> None:
@@ -309,7 +309,8 @@ async def ensure_managed_credentials(
 
     Providers are checked concurrently via ``asyncio.gather``.
     """
-    if user_id in _provisioned_users:
+    scope_key = (user_id, store.organization_id)
+    if scope_key in _provisioned_users:
         return
 
     results = await asyncio.gather(
@@ -320,7 +321,7 @@ async def ensure_managed_credentials(
     # was already present.  A transient failure (network timeout, Redis
     # blip) returns False, so the next page load will retry.
     if all(results):
-        _provisioned_users[user_id] = True
+        _provisioned_users[scope_key] = True
 
 
 async def cleanup_managed_credentials(

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useOrgTeamStore } from "@/services/org-team/store";
 import { connectMCPOAuth } from "../mcp-oauth";
 import type { CredentialsMetaResponse } from "@/app/api/__generated__/models/credentialsMetaResponse";
 import { openOAuthPopup, preOpenOAuthPopup } from "../oauth-popup";
@@ -114,4 +115,42 @@ describe("MCP OAuth attempt ownership", () => {
     });
     await rejected;
   });
+});
+
+it("pins OAuth exchange to the initiating organization after a switch", async () => {
+  vi.resetAllMocks();
+  useOrgTeamStore.setState({ activeOrgID: "org-a", activeTeamID: null });
+  const pending = deferred<{ code: string; state: string }>();
+  vi.mocked(preOpenOAuthPopup).mockReturnValue(null);
+  vi.mocked(postV2InitiateOauthLoginForAnMcpServer).mockResolvedValue(login);
+  vi.mocked(openOAuthPopup).mockReturnValue({
+    promise: pending.promise,
+    cleanup: { abort: vi.fn(), signal: new AbortController().signal },
+    popupBlocked: false,
+    fallbackBlocked: false,
+  });
+  vi.mocked(postV2ExchangeOauthCodeForMcpTokens).mockResolvedValue({
+    status: 200,
+    data: {
+      id: "credential",
+      provider: "mcp",
+      type: "oauth2",
+      title: null,
+      scopes: null,
+      username: null,
+    },
+    headers: new Headers(),
+  });
+  const result = connectMCPOAuth({
+    serverURL: "https://mcp.example.com",
+    signal: new AbortController().signal,
+  });
+  await vi.waitFor(() => expect(openOAuthPopup).toHaveBeenCalledOnce());
+  useOrgTeamStore.setState({ activeOrgID: "org-b" });
+  pending.resolve({ code: "code", state: "state" });
+  await result;
+  const request = vi.mocked(postV2ExchangeOauthCodeForMcpTokens).mock
+    .calls[0][1];
+  expect(new Headers(request?.headers).get("X-Org-Id")).toBe("org-a");
+  useOrgTeamStore.setState({ activeOrgID: null });
 });

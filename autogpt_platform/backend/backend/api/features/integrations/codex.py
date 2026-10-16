@@ -3,11 +3,11 @@ import secrets
 from typing import TYPE_CHECKING, Annotated, Literal
 from urllib.parse import quote, urlencode
 
-from autogpt_libs.auth import get_user_id
 from fastapi import APIRouter, HTTPException, Path, Security, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
+from backend.api.credential_scope import credential_user_id
 from backend.api.features.integrations.codex_device_page import render_device_login_page
 from backend.integrations.codex.access import enforce_codex_access_http
 from backend.integrations.codex.login import (
@@ -47,7 +47,7 @@ class CodexLoginStatusResponse(BaseModel):
 )
 async def codex_account(
     credential_id: Annotated[str, Path(min_length=1)],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> CodexAccountSnapshot:
     await enforce_codex_access_http(user_id)
     lease = await _acquire_codex_lease(user_id, credential_id)
@@ -69,7 +69,7 @@ async def codex_account(
 )
 async def codex_rate_limits(
     credential_id: Annotated[str, Path(min_length=1)],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> CodexRateLimitsSnapshot:
     await enforce_codex_access_http(user_id)
     lease = await _acquire_codex_lease(user_id, credential_id)
@@ -92,7 +92,7 @@ async def codex_rate_limits(
 )
 async def device_login_page(
     login_id: Annotated[str, Path(min_length=1)],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> HTMLResponse:
     attempt = await codex_login_coordinator.get(user_id, login_id)
     if attempt is None:
@@ -108,7 +108,7 @@ async def device_login_page(
 )
 async def device_login_status(
     login_id: Annotated[str, Path(min_length=1)],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> CodexLoginStatusResponse:
     attempt = await codex_login_coordinator.get(user_id, login_id)
     if attempt is None:
@@ -123,7 +123,7 @@ async def device_login_status(
 )
 async def cancel_device_login(
     login_id: Annotated[str, Path(min_length=1)],
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> None:
     try:
         found = await codex_login_coordinator.cancel(user_id, login_id)

@@ -241,6 +241,7 @@ from backend.data.user import (
     get_user_email_verification,
     get_user_integrations,
     get_user_notification_preference,
+    get_user_personal_organization_id,
     get_user_subscription_tier,
     heal_orphaned_auth_identities,
     is_marketing_opted_out,
@@ -470,6 +471,7 @@ class DatabaseManager(AppService):
     get_user_integrations = _(get_user_integrations)
     update_user_integrations = _(update_user_integrations)
     get_user_credentials = _(get_user_credentials)
+    get_user_personal_organization_id = _(get_user_personal_organization_id)
     set_user_credentials = _(set_user_credentials)
 
     # ============ User Comms ============ #
@@ -1118,6 +1120,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_user_integrations = d.get_user_integrations
     update_user_integrations = d.update_user_integrations
     get_user_credentials = d.get_user_credentials
+    get_user_personal_organization_id = d.get_user_personal_organization_id
     set_user_credentials = d.set_user_credentials
 
     # ============ Human In The Loop ============ #

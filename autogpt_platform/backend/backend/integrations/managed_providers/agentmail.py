@@ -29,14 +29,18 @@ class AgentMailManagedProvider(ManagedCredentialProvider):
     async def provision(
         self, user_id: str, store: IntegrationCredentialsStore
     ) -> Credentials:
-        _ = store  # AgentMail provisions via its own API client, not the store.
+        owner_key = (
+            user_id
+            if await store.is_personal_scope(user_id)
+            else f"{user_id}:{store.organization_id}"
+        )
         from agentmail import AsyncAgentMail
 
         client = AsyncAgentMail(api_key=settings.secrets.agentmail_api_key)
 
         # client_id makes pod creation idempotent — if a pod already exists
         # for this user_id the SDK returns the existing pod.
-        pod = await client.pods.create(client_id=user_id, name=f"{user_id}-pod")
+        pod = await client.pods.create(client_id=owner_key, name=f"{owner_key}-pod")
 
         # NOTE: api_keys.create() is NOT idempotent.  If the caller retries
         # after a partial failure (pod created, key created, but store write
@@ -54,7 +58,7 @@ class AgentMailManagedProvider(ManagedCredentialProvider):
             api_key=SecretStr(api_key_obj.api_key),
             expires_at=None,
             is_managed=True,
-            metadata={"pod_id": pod.pod_id},
+            metadata={"pod_id": pod.pod_id, "client_id": owner_key},
         )
 
     async def deprovision(self, user_id: str, credential: Credentials) -> None:
@@ -75,7 +79,9 @@ class AgentMailManagedProvider(ManagedCredentialProvider):
             # as a safety measure against cross-user deletion via the
             # org-level API key.
             pod = await client.pods.get(pod_id=pod_id)
-            if getattr(pod, "client_id", None) and pod.client_id != user_id:
+            if getattr(
+                pod, "client_id", None
+            ) and pod.client_id != credential.metadata.get("client_id", user_id):
                 logger.error(
                     "Pod %s client_id=%s does not match user %s — "
                     "refusing to delete",

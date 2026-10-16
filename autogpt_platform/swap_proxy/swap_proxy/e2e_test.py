@@ -67,7 +67,7 @@ class FakeSource:
             raise SourceUnavailable("down")
         return {"github"} if host_in_list(host, self.hosts) else set()
 
-    async def resolve(self, user_id, name, host):
+    async def resolve(self, user_id, name, host, organization_id=None):
         self.asked.append((user_id, name, host))
         if self.down:
             raise SourceUnavailable("down")

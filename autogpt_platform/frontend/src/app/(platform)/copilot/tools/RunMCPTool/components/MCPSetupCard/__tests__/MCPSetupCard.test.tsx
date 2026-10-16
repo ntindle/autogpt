@@ -1,3 +1,5 @@
+import { useOrgTeamStore } from "@/services/org-team/store";
+import { CopilotTenantScopeProvider } from "../../../../../CopilotTenantScopeContext";
 import {
   act,
   render,
@@ -404,10 +406,13 @@ describe("MCPSetupCard", () => {
     await waitFor(() => {
       expect(screen.getByText(/connected to example\.com/i)).toBeDefined();
     });
-    expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith({
-      server_url: "https://mcp.example.com/mcp",
-      token: "Bearer my-secret-token",
-    });
+    expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith(
+      {
+        server_url: "https://mcp.example.com/mcp",
+        token: "Bearer my-secret-token",
+      },
+      { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+    );
   });
 
   it("stores a selected Basic credential with an explicit prefix", async () => {
@@ -452,10 +457,13 @@ describe("MCPSetupCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /use token/i }));
 
     await waitFor(() => {
-      expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith({
-        server_url: "https://mcp.example.com/mcp",
-        token: "Basic cGstbGYtYWJjZA==",
-      });
+      expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith(
+        {
+          server_url: "https://mcp.example.com/mcp",
+          token: "Basic cGstbGYtYWJjZA==",
+        },
+        { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+      );
     });
   });
 
@@ -504,10 +512,13 @@ describe("MCPSetupCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /use token/i }));
 
     await waitFor(() => {
-      expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith({
-        server_url: "https://mcp.example.com/mcp",
-        token: "Basic new-encoded-value",
-      });
+      expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith(
+        {
+          server_url: "https://mcp.example.com/mcp",
+          token: "Basic new-encoded-value",
+        },
+        { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+      );
     });
   });
 
@@ -1148,10 +1159,13 @@ describe("MCPSetupCard", () => {
     });
 
     await waitFor(() => {
-      expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith({
-        server_url: "https://mcp.example.com/mcp",
-        token: "Basic encoded-chain-value",
-      });
+      expect(postV2StoreABearerTokenForAnMcpServer).toHaveBeenCalledWith(
+        {
+          server_url: "https://mcp.example.com/mcp",
+          token: "Basic encoded-chain-value",
+        },
+        { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+      );
     });
   });
 
@@ -1194,9 +1208,13 @@ describe("MCPSetupCard", () => {
     );
 
     await waitFor(() =>
-      expect(mockGrant).toHaveBeenCalledWith("expert-maria", {
-        credential_ids: ["cred-existing"],
-      }),
+      expect(mockGrant).toHaveBeenCalledWith(
+        "expert-maria",
+        {
+          credential_ids: ["cred-existing"],
+        },
+        { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+      ),
     );
     await waitFor(() => expect(mockOnSend).toHaveBeenCalled());
   });
@@ -1259,11 +1277,17 @@ describe("MCPSetupCard", () => {
       popupBlocked: false,
       fallbackBlocked: false,
     });
-    const mcpOAuthCallback = vi.fn().mockResolvedValue({
-      id: "cred-oauth",
-      provider: "mcp",
-      type: "oauth2",
-    });
+    let resolveCallback!: (value: {
+      id: string;
+      provider: string;
+      type: string;
+    }) => void;
+    const mcpOAuthCallback = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveCallback = resolve;
+        }),
+    );
     const providers = {
       mcp: { mcpOAuthCallback },
     } as unknown as CredentialsProvidersContextType;
@@ -1275,18 +1299,29 @@ describe("MCPSetupCard", () => {
     );
 
     render(
-      <CredentialsProvidersContext.Provider value={providers}>
-        <MCPSetupCard output={makeExpertOutput([])} />
-      </CredentialsProvidersContext.Provider>,
+      <CopilotTenantScopeProvider organizationId="org-a" teamId={null}>
+        <CredentialsProvidersContext.Provider value={providers}>
+          <MCPSetupCard output={makeExpertOutput([])} />
+        </CredentialsProvidersContext.Provider>
+      </CopilotTenantScopeProvider>,
     );
     fireEvent.click(
       screen.getByRole("button", { name: /connect example\.com/i }),
     );
 
+    await waitFor(() => expect(mcpOAuthCallback).toHaveBeenCalledOnce());
+    act(() => useOrgTeamStore.setState({ activeOrgID: "org-b" }));
+    await act(async () => {
+      resolveCallback({ id: "cred-oauth", provider: "mcp", type: "oauth2" });
+    });
     await waitFor(() =>
-      expect(mockGrant).toHaveBeenCalledWith("expert-maria", {
-        credential_ids: ["cred-oauth"],
-      }),
+      expect(mockGrant).toHaveBeenCalledWith(
+        "expert-maria",
+        {
+          credential_ids: ["cred-oauth"],
+        },
+        { headers: { "X-Org-Id": "org-a", "X-Team-Id": "" } },
+      ),
     );
     expect(mockOnSend).not.toHaveBeenCalled();
 
@@ -1295,6 +1330,7 @@ describe("MCPSetupCard", () => {
     });
 
     await waitFor(() => expect(mockOnSend).toHaveBeenCalledTimes(1));
+    useOrgTeamStore.setState({ activeOrgID: null });
   });
 
   it("grants only once when Grant access is clicked twice", async () => {
@@ -1361,9 +1397,13 @@ describe("MCPSetupCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /Grant access/ }));
 
     await waitFor(() => expect(mockOnSend).toHaveBeenCalled());
-    expect(mockGrant).toHaveBeenLastCalledWith("expert-maria", {
-      credential_ids: ["cred-new"],
-    });
+    expect(mockGrant).toHaveBeenLastCalledWith(
+      "expert-maria",
+      {
+        credential_ids: ["cred-new"],
+      },
+      { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+    );
   });
 
   it("grants a freshly connected credential to the expert", async () => {
@@ -1412,9 +1452,13 @@ describe("MCPSetupCard", () => {
     fireEvent.click(screen.getByRole("button", { name: /use token/i }));
 
     await waitFor(() =>
-      expect(mockGrant).toHaveBeenCalledWith("expert-maria", {
-        credential_ids: ["cred-new"],
-      }),
+      expect(mockGrant).toHaveBeenCalledWith(
+        "expert-maria",
+        {
+          credential_ids: ["cred-new"],
+        },
+        { headers: { "X-Org-Id": "", "X-Team-Id": "" } },
+      ),
     );
     await waitFor(() => expect(mockOnSend).toHaveBeenCalled());
   });

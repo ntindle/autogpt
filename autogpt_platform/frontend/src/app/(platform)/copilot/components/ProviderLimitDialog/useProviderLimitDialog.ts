@@ -1,6 +1,8 @@
+"use client";
+
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import { useCopilotTenantScope } from "../../CopilotTenantScopeContext";
 import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
-("use client");
 
 import { useQueryClient } from "@tanstack/react-query";
 
@@ -33,8 +35,13 @@ export function useProviderLimitDialog({
   const queryClient = useQueryClient();
   const scope = useCopilotTenantScope();
 
+  const connectionsScope = useOrgConnectionScope(
+    "connections",
+    scope.organizationId,
+  );
   const connectionsQuery = useGetV2ListChatConnections({
-    query: { enabled: Boolean(failure) },
+    request: connectionsScope.request,
+    query: { queryKey: connectionsScope.queryKey, enabled: Boolean(failure) },
   });
   const offers =
     connectionsQuery.data?.status === 200

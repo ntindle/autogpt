@@ -119,10 +119,12 @@ def _make_sdk_default_cred(provider: str = "openai"):
 
 
 @pytest.fixture(autouse=True)
-def setup_auth(mock_jwt_user):
-    from autogpt_libs.auth.jwt_utils import get_jwt_payload
+def setup_auth():
+    from backend.api.credential_scope import credential_user_id
 
-    app.dependency_overrides[get_jwt_payload] = mock_jwt_user["get_jwt_payload"]
+    app.dependency_overrides[credential_user_id] = (
+        lambda: "3e53486c-cf57-477e-ba2a-cb02dc828e1a"
+    )
     yield
     app.dependency_overrides.clear()
 
@@ -865,8 +867,8 @@ class TestWebhookPingOwnership:
 
         assert resp.status_code == 404
 
-    def test_revoked_webhook_scope_returns_403_without_pinging(self, test_user_id):
-        webhook = _make_webhook(user_id=test_user_id)
+    def test_revoked_webhook_scope_returns_403_without_pinging(self):
+        webhook = _make_webhook(user_id=JWT_USER_ID)
 
         @asynccontextmanager
         async def deny_scope(*_args, **_kwargs):
@@ -894,8 +896,8 @@ class TestWebhookPingOwnership:
         mock_get_mgr.assert_not_called()
         mock_creds.acquire_lease.assert_not_called()
 
-    def test_owned_webhook_pings(self, test_user_id):
-        webhook = _make_webhook(user_id=test_user_id)
+    def test_owned_webhook_pings(self):
+        webhook = _make_webhook(user_id=JWT_USER_ID)
         webhook_manager = MagicMock()
         webhook_manager.trigger_ping = AsyncMock()
         lease = MagicMock(credentials=_make_oauth2_cred())
@@ -921,12 +923,13 @@ class TestWebhookPingOwnership:
                 new=_run_with_credential_lease,
             ),
         ):
+            mock_creds.scoped.return_value = mock_creds
             mock_creds.acquire_lease = AsyncMock(return_value=lease)
             resp = client.post("/webhooks/wh-123/ping")
 
         assert resp.status_code == 200
         assert resp.json() is True
-        mock_creds.acquire_lease.assert_awaited_once_with(test_user_id, "cred-456")
+        mock_creds.acquire_lease.assert_awaited_once_with(JWT_USER_ID, "cred-456")
         webhook_manager.trigger_ping.assert_awaited_once()
         lease.release.assert_awaited_once()
 

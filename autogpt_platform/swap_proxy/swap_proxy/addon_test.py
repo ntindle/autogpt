@@ -48,7 +48,7 @@ class Source:
             raise SourceUnavailable("bindings")
         return {"github"} if host == HOST else set()
 
-    async def resolve(self, user_id, name, host):
+    async def resolve(self, user_id, name, host, organization_id=None):
         if self.down:
             raise SourceUnavailable("resolve")
         if self.token is None:

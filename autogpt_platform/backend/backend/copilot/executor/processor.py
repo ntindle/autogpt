@@ -61,6 +61,7 @@ from backend.data.db_accessors import (
 from backend.data.model import OAuth2Credentials
 from backend.executor.cluster_lock import ClusterLock
 from backend.integrations.codex.transport import CodexCredentialIntegrityError
+from backend.integrations.credential_scope import credential_scope
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.integrations.microsoft_365_copilot.service import (
     stream_chat_completion_microsoft_365,
@@ -701,6 +702,7 @@ class CoPilotProcessor:
             )
             if dispatch_lease_id is None:
                 raise RuntimeError("workspace_access_revoked")
+            cost_context_stack.enter_context(credential_scope(session.organization_id))
             if entry.llm_auth_provider == "platform":
                 # Every platform-billed turn passes the allowance here, from
                 # whichever path queued it (see backend.copilot.budget_gate).

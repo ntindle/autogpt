@@ -12,9 +12,9 @@ import fastapi
 import httpx
 import pytest
 import pytest_asyncio
-from autogpt_libs.auth import get_user_id
 from pydantic import SecretStr
 
+from backend.api.credential_scope import credential_user_id
 from backend.api.features.mcp.oauth_registration import preregistered_client
 from backend.api.features.mcp.routes import NO_OAUTH_CODE, router
 from backend.blocks.mcp.client import MCPClientError, MCPTool
@@ -23,7 +23,7 @@ from backend.util.request import HTTPClientError, HTTPServerError
 
 app = fastapi.FastAPI()
 app.include_router(router)
-app.dependency_overrides[get_user_id] = lambda: "test-user-id"
+app.dependency_overrides[credential_user_id] = lambda: "test-user-id"
 
 
 @pytest_asyncio.fixture(scope="module")
@@ -177,7 +177,7 @@ class TestDiscoverTools:
             lookup.assert_not_awaited()
         else:
             lookup.assert_awaited_once_with(
-                "test-user-id", "https://mcp.example.com/mcp"
+                "test-user-id", "https://mcp.example.com/mcp", []
             )
 
     @pytest.mark.asyncio(loop_scope="session")
@@ -905,7 +905,7 @@ class TestOAuthLogin:
 def _callback_mocks(mock_cm, mock_settings, MockHandler, state_metadata):
     """Wire the mocks a successful ``/oauth/callback`` needs."""
     mock_settings.config.frontend_base_url = "http://localhost:3000"
-    mock_state = AsyncMock()
+    mock_state = AsyncMock(organization_id=None)
     mock_state.state_metadata = {
         "authorize_url": "https://auth.example.com/authorize",
         "token_url": "https://auth.example.com/token",
@@ -1061,7 +1061,7 @@ class TestOAuthCallback:
             mock_settings.config.frontend_base_url = "http://localhost:3000"
 
             # Mock state verification
-            mock_state = AsyncMock()
+            mock_state = AsyncMock(organization_id=None)
             mock_state.state_metadata = {
                 "authorize_url": "https://auth.sentry.io/authorize",
                 "token_url": "https://auth.sentry.io/token",
@@ -1115,7 +1115,7 @@ class TestOAuthCallback:
             patch("backend.api.features.mcp.routes.MCPOAuthHandler") as MockHandler,
         ):
             mock_settings.config.frontend_base_url = "http://localhost:3000"
-            mock_state = AsyncMock()
+            mock_state = AsyncMock(organization_id=None)
             mock_state.state_metadata = {
                 "authorize_url": "https://auth.example.com/authorize",
                 "token_url": "https://auth.example.com/token",
@@ -1227,6 +1227,11 @@ class TestStoreToken:
             manager.refresh_if_needed = AsyncMock(
                 side_effect=AssertionError("manual credentials must not refresh")
             )
+            lease = MagicMock(credentials=stored_credential)
+            lease.release = AsyncMock()
+            lease.validate = AsyncMock()
+            lease.wait_for_failure = asyncio.Event().wait
+            manager.acquire_lease = AsyncMock(return_value=lease)
             mcp_client = client_cls.return_value
             mcp_client.initialize = AsyncMock(
                 return_value={

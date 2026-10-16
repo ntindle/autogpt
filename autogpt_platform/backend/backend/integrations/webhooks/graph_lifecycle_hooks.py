@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Optional, cast, overload
 from backend.blocks._base import BlockSchema
 from backend.data.graph import set_node_webhook
 from backend.data.integrations import get_webhook
+from backend.integrations.credential_scope import credential_scope
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 
 from . import get_webhook_manager, supports_webhooks
@@ -47,12 +48,16 @@ async def before_graph_activate(graph: "GraphModel", user_id: str) -> "GraphMode
         GraphActivationError: when a required node credential is missing or
             unusable.
     """
-    await clear_unowned_auto_credentials(graph, user_id)
-    graph = await _before_graph_activate(graph, user_id)
-    graph.sub_graphs = await asyncio.gather(
-        *(_before_graph_activate(sub_graph, user_id) for sub_graph in graph.sub_graphs)
-    )
-    return graph
+    with credential_scope(graph.organization_id):
+        await clear_unowned_auto_credentials(graph, user_id)
+        graph = await _before_graph_activate(graph, user_id)
+        graph.sub_graphs = await asyncio.gather(
+            *(
+                _before_graph_activate(sub_graph, user_id)
+                for sub_graph in graph.sub_graphs
+            )
+        )
+        return graph
 
 
 async def clear_unowned_auto_credentials(graph: "GraphModel", user_id: str) -> None:
@@ -67,7 +72,12 @@ async def clear_unowned_auto_credentials(graph: "GraphModel", user_id: str) -> N
     """
     if not graph.auto_credentials_refs():
         return
-    owned_ids = {c.id for c in await credentials_manager.store.get_all_creds(user_id)}
+    owned_ids = {
+        c.id
+        for c in await credentials_manager.scoped(
+            graph.organization_id
+        ).store.get_all_creds(user_id)
+    }
     for node, field_name, credentials_id in graph.clear_auto_credentials(
         keep_ids=owned_ids
     ):
@@ -223,7 +233,9 @@ async def on_graph_deactivate(graph: "GraphModel", user_id: str):
     ⚠️ Assuming node entities are not re-used between graph versions, ⚠️
     this hook calls `on_node_deactivate` on all nodes in `graph`.
     """
-    get_credentials = credentials_manager.cached_getter(user_id)
+    get_credentials = credentials_manager.scoped(graph.organization_id).cached_getter(
+        user_id
+    )
     updated_nodes = []
     for node in graph.nodes:
         block_input_schema = cast(BlockSchema, node.block.input_schema)

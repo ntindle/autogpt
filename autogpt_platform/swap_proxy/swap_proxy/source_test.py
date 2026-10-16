@@ -55,7 +55,12 @@ async def test_resolve_names_the_user_and_the_host_and_is_cached_briefly():
     assert calls == [
         (
             "/resolve_swap_credential",
-            {"user_id": "user-a", "name": "github", "host": "api.github.com"},
+            {
+                "user_id": "user-a",
+                "name": "github",
+                "host": "api.github.com",
+                "organization_id": None,
+            },
         )
     ]
 
@@ -139,3 +144,23 @@ async def test_no_table_at_all_is_unavailable():
     source, _ = _backend(lambda path, body: httpx.Response(503))
     with pytest.raises(SourceUnavailable):
         await source.bound_names("github.com")
+
+
+async def test_same_user_org_answers_are_cached_separately():
+    def handler(path, body):
+        return httpx.Response(
+            200,
+            json={
+                "name": "github",
+                "values": {"access_token": body["organization_id"]},
+                "allowed_hosts": ["api.github.com"],
+            },
+        )
+
+    source, calls = _backend(handler)
+    for org in ["org-a", "org-b", "org-a"]:
+        credential = await source.resolve(
+            "user-a", "github", "api.github.com", organization_id=org
+        )
+        assert credential.values == {"access_token": org}
+    assert len(calls) == 2

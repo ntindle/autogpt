@@ -9,11 +9,14 @@ export async function grantToExpert(
   queryClient: QueryClient,
   expertId: string,
   credentialId: string,
+  request: RequestInit,
 ): Promise<boolean> {
   try {
-    const response = await grantExpertCredentials(expertId, {
-      credential_ids: [credentialId],
-    });
+    const response = await grantExpertCredentials(
+      expertId,
+      { credential_ids: [credentialId] },
+      request,
+    );
     if (response.status !== 200) return false;
   } catch {
     return false;

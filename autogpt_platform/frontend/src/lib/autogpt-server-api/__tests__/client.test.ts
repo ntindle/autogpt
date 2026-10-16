@@ -1,3 +1,4 @@
+import { useOrgTeamStore } from "@/services/org-team/store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth/actions", () => ({
@@ -160,6 +161,36 @@ describe("BackendAPI tenant scope", () => {
     const headers = new Headers(fetchSpy.mock.calls[0][1]?.headers);
     expect(headers.get(ORG_HEADER_NAME)).toBe("org-a");
     expect(headers.get(TEAM_HEADER_NAME)).toBe("team-a");
+  });
+
+  it("captures the active org before awaiting request helpers and honors pinned scope", async () => {
+    const api = new BackendAPI("http://test", "ws://test");
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("[]", { status: 200 }));
+    useOrgTeamStore.setState({ activeOrgID: "org-a", activeTeamID: null });
+    try {
+      const request = api.listCredentials();
+      useOrgTeamStore.setState({ activeOrgID: "org-b" });
+      await request;
+      expect(
+        new Headers(fetchSpy.mock.calls[0][1]?.headers).get(ORG_HEADER_NAME),
+      ).toBe("org-a");
+      await api
+        .withTenantScope({ organizationId: "org-a", teamId: null })
+        .listCredentials();
+      expect(
+        new Headers(fetchSpy.mock.calls[1][1]?.headers).get(ORG_HEADER_NAME),
+      ).toBe("org-a");
+      await api
+        .withTenantScope({ organizationId: null, teamId: null })
+        .listCredentials();
+      expect(
+        new Headers(fetchSpy.mock.calls[2][1]?.headers).has(ORG_HEADER_NAME),
+      ).toBe(false);
+    } finally {
+      useOrgTeamStore.setState({ activeOrgID: null });
+    }
   });
 
   it("attaches the explicit scope to XHR uploads", async () => {

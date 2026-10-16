@@ -39,6 +39,7 @@ class Owner:
     user_id: Optional[str]
     sandbox_id: Optional[str]
     swaps: bool = False
+    organization_id: Optional[str] = None
 
     @property
     def swap_user_id(self) -> Optional[str]:
@@ -81,4 +82,5 @@ class OwnerDirectory:
             sandbox_id=record.get("sandbox_id") or None,
             # Fail closed: only an explicit true.
             swaps=record.get("swaps") is True,
+            organization_id=record.get("organization_id") or None,
         )

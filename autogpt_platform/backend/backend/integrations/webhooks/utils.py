@@ -124,7 +124,9 @@ async def setup_webhook_for_block(
     if auto_setup_webhook:
         assert credentials_id is not None
         try:
-            lease = await credentials_manager.acquire_lease(user_id, credentials_id)
+            lease = await credentials_manager.scoped(organization_id).acquire_lease(
+                user_id, credentials_id
+            )
         except ValueError as error:
             raise ValueError(
                 f"Cannot set up {provider.value} webhook without credentials: "
@@ -181,7 +183,7 @@ async def prune_webhook_with_credential_lease(
     if not webhook.credentials_id:
         return await manager.prune_webhook_if_dangling(user_id, webhook.id, None)
     try:
-        lease = await credentials_manager.acquire_lease(
+        lease = await credentials_manager.scoped(webhook.organization_id).acquire_lease(
             user_id,
             webhook.credentials_id,
         )

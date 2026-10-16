@@ -111,7 +111,9 @@ async def ensure_task_session(task: WorkspaceTask):
     session = await get_chat_session(task.session_id, task.user_id)
     if session:
         return session
-    provider, credential = await resolve_default_chat_route(task.user_id)
+    provider, credential = await resolve_default_chat_route(
+        task.user_id, organization_id=task.organization_id
+    )
     session = await create_chat_session(
         task.user_id,
         session_id=task.session_id,

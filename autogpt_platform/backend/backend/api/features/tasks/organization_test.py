@@ -1,4 +1,5 @@
 import os
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -186,3 +187,46 @@ async def test_schedule_list_and_pause_cannot_reach_other_org(owner, organizatio
         with pytest.raises(NotFoundError):
             await set_schedule_paused(owner, jobs[1].id, True, organization_id=denton)
     scheduler.pause_schedule.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_chat_uses_saved_org_connection_after_switch(
+    owner, organizations, monkeypatch
+):
+    from backend.api.features.tasks import service
+    from backend.copilot import transports
+    from backend.copilot.transports_test import _codex_credentials
+    from backend.data import user
+    from backend.integrations.credential_scope import credential_scope
+
+    _, denton, reviewer = organizations
+    a, b = _codex_credentials(str(uuid4())), _codex_credentials(str(uuid4()))
+    await user.set_user_credentials(owner, [a], denton)
+    await user.set_user_credentials(owner, [b], reviewer)
+    monkeypatch.setattr(
+        transports, "has_codex_access_for_discovery", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(transports, "is_deployment_chat_available", lambda: False)
+    monkeypatch.setattr(
+        transports,
+        "user_db",
+        lambda: SimpleNamespace(
+            get_user_default_chat_route=AsyncMock(return_value=("codex", a.id))
+        ),
+    )
+    task = await tasks.create_workspace_task(
+        owner, TaskCreate(title="Denton work"), denton
+    )
+    task = await tasks.bind_workspace_task_session(
+        owner, task.id, organization_id=denton
+    )
+    monkeypatch.setattr(service, "get_chat_session", AsyncMock(return_value=None))
+    create = AsyncMock(
+        return_value=SimpleNamespace(session_id=task.session_id, user_id=owner)
+    )
+    monkeypatch.setattr(service, "create_chat_session", create)
+    monkeypatch.setattr(service, "update_session_title", AsyncMock())
+    with credential_scope(reviewer):
+        await service.ensure_task_session(task)
+    assert create.await_args.kwargs["organization_id"] == denton
+    assert create.await_args.kwargs["llm_credential_id"] == a.id

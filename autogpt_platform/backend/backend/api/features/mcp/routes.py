@@ -11,10 +11,10 @@ from typing import Annotated, Any
 from urllib.parse import urlparse
 
 import fastapi
-from autogpt_libs.auth import get_user_id
 from fastapi import Security
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
+from backend.api.credential_scope import credential_user_id, oauth_credential_scope
 from backend.api.features.integrations.router import (
     CredentialsMetaResponse,
     to_meta_response,
@@ -128,7 +128,7 @@ class DiscoverToolsResponse(BaseModel):
 )
 async def discover_tools(
     request: DiscoverToolsRequest,
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> DiscoverToolsResponse:
     """
     Connect to an MCP server and return its available tools.
@@ -250,7 +250,7 @@ class MCPOAuthLoginResponse(BaseModel):
 )
 async def mcp_oauth_login(
     request: MCPOAuthLoginRequest,
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> MCPOAuthLoginResponse:
     """
     Discover OAuth metadata from the MCP server and return a login URL.
@@ -535,7 +535,7 @@ class MCPOAuthCallbackResponse(BaseModel):
 )
 async def mcp_oauth_callback(
     request: MCPOAuthCallbackRequest,
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> CredentialsMetaResponse:
     """
     Exchange the authorization code for tokens and store the credential.
@@ -553,111 +553,113 @@ async def mcp_oauth_callback(
             detail="Invalid or expired state token.",
         )
 
-    meta = valid_state.state_metadata
-    expected_issuer = meta.get("issuer") or ""
-    # RFC 9207 / MCP 2026-07-28: ``iss`` must match the issuer discovered at
-    # login, otherwise the code may come from a mix-up attack.  A server that
-    # advertises ``iss`` support must send it; older servers may omit it.
-    if request.iss is None:
-        if meta.get("iss_required"):
+    async with oauth_credential_scope(user_id, valid_state):
+        manager = creds_manager
+        meta = valid_state.state_metadata
+        expected_issuer = meta.get("issuer") or ""
+        # RFC 9207 / MCP 2026-07-28: ``iss`` must match the issuer discovered at
+        # login, otherwise the code may come from a mix-up attack.  A server that
+        # advertises ``iss`` support must send it; older servers may omit it.
+        if request.iss is None:
+            if meta.get("iss_required"):
+                raise fastapi.HTTPException(
+                    status_code=400,
+                    detail="Authorization response is missing the issuer identifier "
+                    "the authorization server advertised it would send.",
+                )
+        elif expected_issuer and request.iss != expected_issuer:
             raise fastapi.HTTPException(
                 status_code=400,
-                detail="Authorization response is missing the issuer identifier "
-                "the authorization server advertised it would send.",
+                detail="Authorization response issuer does not match the "
+                "authorization server this login was started with.",
             )
-    elif expected_issuer and request.iss != expected_issuer:
-        raise fastapi.HTTPException(
-            status_code=400,
-            detail="Authorization response issuer does not match the "
-            "authorization server this login was started with.",
+
+        frontend_base_url = settings.config.frontend_base_url
+        if not frontend_base_url:
+            raise fastapi.HTTPException(
+                status_code=500,
+                detail="Frontend base URL is not configured.",
+            )
+        redirect_uri = f"{frontend_base_url}/auth/integrations/mcp_callback"
+
+        handler = MCPOAuthHandler(
+            client_id=meta["client_id"],
+            client_secret=meta.get("client_secret", ""),
+            redirect_uri=redirect_uri,
+            authorize_url=meta["authorize_url"],
+            token_url=meta["token_url"],
+            revoke_url=meta.get("revoke_url"),
+            resource_url=meta.get("resource_url"),
+            token_endpoint_auth_method=meta.get("token_endpoint_auth_method"),
         )
 
-    frontend_base_url = settings.config.frontend_base_url
-    if not frontend_base_url:
-        raise fastapi.HTTPException(
-            status_code=500,
-            detail="Frontend base URL is not configured.",
+        try:
+            credentials = await handler.exchange_code_for_tokens(
+                request.code, valid_state.scopes, valid_state.code_verifier
+            )
+        except Exception as e:
+            raise fastapi.HTTPException(
+                status_code=400,
+                detail=f"OAuth token exchange failed: {e}",
+            )
+
+        # Enrich credential metadata for future lookup and token refresh
+        if credentials.metadata is None:
+            credentials.metadata = {}
+        # Two catalog entries sign in at a different URL from the one their
+        # tools are called on (Context7 and Parallel). Binding the credential to
+        # the sign-in URL made lookup miss: the user completed OAuth, the dialog
+        # said connected, and every later call fell back to public limits with
+        # nothing reporting a problem. Record the URL the tools actually use.
+        catalog_entry = get_mcp_catalog_entry_for_url(meta["server_url"])
+        tools_url = (
+            catalog_entry.mcp_server.server_url
+            if catalog_entry and catalog_entry.mcp_server.server_url
+            else meta["server_url"]
         )
-    redirect_uri = f"{frontend_base_url}/auth/integrations/mcp_callback"
-
-    handler = MCPOAuthHandler(
-        client_id=meta["client_id"],
-        client_secret=meta.get("client_secret", ""),
-        redirect_uri=redirect_uri,
-        authorize_url=meta["authorize_url"],
-        token_url=meta["token_url"],
-        revoke_url=meta.get("revoke_url"),
-        resource_url=meta.get("resource_url"),
-        token_endpoint_auth_method=meta.get("token_endpoint_auth_method"),
-    )
-
-    try:
-        credentials = await handler.exchange_code_for_tokens(
-            request.code, valid_state.scopes, valid_state.code_verifier
+        credentials.metadata["mcp_server_url"] = tools_url
+        credentials.metadata["mcp_client_id"] = meta["client_id"]
+        credentials.metadata["mcp_client_secret"] = (
+            ""
+            if meta.get("token_endpoint_auth_method") == "none"
+            else meta.get("client_secret", "")
         )
-    except Exception as e:
-        raise fastapi.HTTPException(
-            status_code=400,
-            detail=f"OAuth token exchange failed: {e}",
-        )
+        credentials.metadata["mcp_token_endpoint_auth_method"] = meta.get(
+            "token_endpoint_auth_method"
+        ) or ("client_secret_post" if meta.get("client_secret") else "none")
+        credentials.metadata["mcp_token_url"] = meta["token_url"]
+        credentials.metadata["mcp_revoke_url"] = meta.get("revoke_url")
+        credentials.metadata["mcp_resource_url"] = meta.get("resource_url", "")
+        credentials.metadata["mcp_issuer"] = expected_issuer
 
-    # Enrich credential metadata for future lookup and token refresh
-    if credentials.metadata is None:
-        credentials.metadata = {}
-    # Two catalog entries sign in at a different URL from the one their
-    # tools are called on (Context7 and Parallel). Binding the credential to
-    # the sign-in URL made lookup miss: the user completed OAuth, the dialog
-    # said connected, and every later call fell back to public limits with
-    # nothing reporting a problem. Record the URL the tools actually use.
-    catalog_entry = get_mcp_catalog_entry_for_url(meta["server_url"])
-    tools_url = (
-        catalog_entry.mcp_server.server_url
-        if catalog_entry and catalog_entry.mcp_server.server_url
-        else meta["server_url"]
-    )
-    credentials.metadata["mcp_server_url"] = tools_url
-    credentials.metadata["mcp_client_id"] = meta["client_id"]
-    credentials.metadata["mcp_client_secret"] = (
-        ""
-        if meta.get("token_endpoint_auth_method") == "none"
-        else meta.get("client_secret", "")
-    )
-    credentials.metadata["mcp_token_endpoint_auth_method"] = meta.get(
-        "token_endpoint_auth_method"
-    ) or ("client_secret_post" if meta.get("client_secret") else "none")
-    credentials.metadata["mcp_token_url"] = meta["token_url"]
-    credentials.metadata["mcp_revoke_url"] = meta.get("revoke_url")
-    credentials.metadata["mcp_resource_url"] = meta.get("resource_url", "")
-    credentials.metadata["mcp_issuer"] = expected_issuer
+        hostname = server_host(meta["server_url"])
+        credentials.title = f"MCP: {hostname}"
 
-    hostname = server_host(meta["server_url"])
-    credentials.title = f"MCP: {hostname}"
+        # Remove old MCP credentials for the same server to prevent stale token buildup.
+        try:
+            old_creds = await manager.store.get_creds_by_provider(
+                user_id, ProviderName.MCP.value
+            )
+            for old in old_creds:
+                # Both URLs count. The new credential is filed under the tools
+                # URL, but ones stored before that change are under the sign-in
+                # URL, and for the two entries where those differ matching only
+                # one of them leaves a dead token behind on every reconnection.
+                if isinstance(old, OAuth2Credentials) and (old.metadata or {}).get(
+                    "mcp_server_url"
+                ) in {tools_url, meta["server_url"]}:
+                    await manager.store.delete_creds_by_id(user_id, old.id)
+                    logger.info(
+                        "Removed old MCP credential %s for %s",
+                        old.id,
+                        server_host(meta["server_url"]),
+                    )
+        except Exception:
+            logger.debug("Could not clean up old MCP credentials", exc_info=True)
 
-    # Remove old MCP credentials for the same server to prevent stale token buildup.
-    try:
-        old_creds = await creds_manager.store.get_creds_by_provider(
-            user_id, ProviderName.MCP.value
-        )
-        for old in old_creds:
-            # Both URLs count. The new credential is filed under the tools
-            # URL, but ones stored before that change are under the sign-in
-            # URL, and for the two entries where those differ matching only
-            # one of them leaves a dead token behind on every reconnection.
-            if isinstance(old, OAuth2Credentials) and (old.metadata or {}).get(
-                "mcp_server_url"
-            ) in {tools_url, meta["server_url"]}:
-                await creds_manager.store.delete_creds_by_id(user_id, old.id)
-                logger.info(
-                    "Removed old MCP credential %s for %s",
-                    old.id,
-                    server_host(meta["server_url"]),
-                )
-    except Exception:
-        logger.debug("Could not clean up old MCP credentials", exc_info=True)
+        await manager.create(user_id, credentials)
 
-    await creds_manager.create(user_id, credentials)
-
-    return to_meta_response(credentials)
+        return to_meta_response(credentials)
 
 
 # ======================== Manual Authentication ======================== #
@@ -690,7 +692,7 @@ class MCPStoreTokenRequest(BaseModel):
 )
 async def mcp_store_token(
     request: MCPStoreTokenRequest,
-    user_id: Annotated[str, Security(get_user_id)],
+    user_id: Annotated[str, Security(credential_user_id)],
 ) -> CredentialsMetaResponse:
     """
     Store a Basic/Bearer credential or complete Authorization header for an MCP server.

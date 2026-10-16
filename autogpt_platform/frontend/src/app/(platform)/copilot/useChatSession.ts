@@ -1,3 +1,4 @@
+import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
   getGetV2GetSessionQueryKey,
   getGetV2ListSessionsQueryKey,
@@ -75,8 +76,14 @@ export function useChatSession({
   const queryClient = useQueryClient();
   const copilotLlmAuth = useCopilotUIStore((state) => state.copilotLlmAuth);
 
+  const transportsScope = useOrgConnectionScope(
+    "transports",
+    requestOrganizationId,
+  );
   const transportQuery = useGetV2ListChatTransports({
+    request: transportsScope.request,
     query: {
+      queryKey: transportsScope.queryKey,
       enabled: !sessionId,
       refetchOnWindowFocus: true,
       staleTime: 0,

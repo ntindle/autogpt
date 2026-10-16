@@ -39,6 +39,7 @@ from backend.data.tenancy import (
     live_resource_permission_barrier,
 )
 from backend.integrations.codex.access import has_codex_access_for_discovery
+from backend.integrations.credential_scope import credential_scope
 from backend.integrations.credentials_store import (
     is_system_credential,
     provider_matches,
@@ -74,7 +75,8 @@ async def _live_credential_action(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Credential management access was revoked",
             )
-        yield
+        with credential_scope(auth.organization_id):
+            yield
 
 
 @asynccontextmanager
@@ -92,7 +94,8 @@ async def _live_credential_view(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Credential metadata access was revoked",
             )
-        yield
+        with credential_scope(auth.organization_id):
+            yield
 
 
 # ==================== Request/Response Models ==================== #
@@ -468,6 +471,11 @@ async def complete_oauth(
         )
 
     # Verify this is an external flow (callback_url must be set)
+    if valid_state.organization_id != auth.organization_id:
+        raise HTTPException(
+            status_code=403, detail="OAuth flow belongs to another scope"
+        )
+
     if not valid_state.callback_url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

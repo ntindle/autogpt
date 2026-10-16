@@ -286,6 +286,7 @@ async def test_completion_persists_before_cross_replica_callback():
     state_store = MemoryStateStore()
     credentials = _credentials()
     manager = MagicMock()
+    manager.scoped.return_value = manager
     manager.locked_provider_credentials = MagicMock(
         side_effect=lambda *_args: _provider_locks()
     )
@@ -322,6 +323,7 @@ async def test_cross_replica_cancel_prevents_origin_from_persisting():
     session = FakeSession()
     state_store = MemoryStateStore()
     manager = MagicMock()
+    manager.scoped.return_value = manager
     manager.locked_provider_credentials = MagicMock(
         side_effect=lambda *_args: _provider_locks()
     )
@@ -424,6 +426,7 @@ async def test_cancel_during_provider_lock_wait_prevents_stale_persistence():
     provider_lock_entered = asyncio.Event()
     release_provider_lock = asyncio.Event()
     manager = MagicMock()
+    manager.scoped.return_value = manager
 
     @asynccontextmanager
     async def blocked_provider_locks() -> AsyncIterator[None]:
@@ -472,6 +475,7 @@ async def test_cancel_during_credential_upsert_finishes_state_commit():
     upsert_started = asyncio.Event()
     allow_upsert = asyncio.Event()
     manager = MagicMock()
+    manager.scoped.return_value = manager
     manager.locked_provider_credentials = MagicMock(
         side_effect=lambda *_args: _provider_locks()
     )
@@ -510,6 +514,7 @@ async def test_expired_owner_cannot_persist_after_a_new_login_claims_slot():
     session = FakeSession()
     state_store = MemoryStateStore()
     manager = MagicMock()
+    manager.scoped.return_value = manager
     manager.locked_provider_credentials = MagicMock(
         side_effect=lambda *_args: _provider_locks()
     )
@@ -586,6 +591,7 @@ async def test_runtime_error_message_cannot_leak_into_state_or_logs(caplog):
     session = FakeSession()
     state_store = MemoryStateStore()
     manager = MagicMock()
+    manager.scoped.return_value = manager
     coordinator = CodexLoginCoordinator(
         transport_factory=lambda: _transport(session),
         state_store=state_store,
