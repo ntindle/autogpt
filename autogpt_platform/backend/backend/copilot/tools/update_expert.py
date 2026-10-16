@@ -126,7 +126,10 @@ class UpdateExpertTool(BaseTool):
             )
 
         expert = await experts_db().get_expert(
-            user_id, expert_id, include_workflows=False
+            user_id,
+            expert_id,
+            include_workflows=False,
+            organization_id=session.organization_id,
         )
         if expert is None:
             return ErrorResponse(

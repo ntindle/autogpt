@@ -84,6 +84,10 @@ from backend.api.features.experts.routines import enable_routine as enable_routi
 from backend.api.features.experts.routines import get_routine as get_routine
 from backend.api.features.experts.routines import install_routines
 from backend.api.features.experts.routines import list_routines as list_routines
+from backend.api.features.experts.tenancy import (
+    ExpertLookupScope,
+    resolve_expert_creation_scope,
+)
 from backend.api.features.experts.workflow_chain import (
     build_workflow_chain,
     integration_providers,
@@ -118,8 +122,7 @@ from backend.data.expert_spend import get_weekly_spend
 from backend.data.model import NodeExecutionStats
 from backend.data.tenancy import (
     agent_graph_attachment_barrier,
-    get_user_team_ids,
-    visibility_filter,
+    has_live_resource_access,
 )
 from backend.data.user import get_user_by_id
 from backend.util import type as type_utils
@@ -479,25 +482,15 @@ async def list_experts(
         "visibility": ResourceVisibility.PRIVATE,
     }
     if organization_id is None:
-        where["ownerUserId"] = user_id
-        if personal_only:
-            where["organizationId"] = None
-            where["teamId"] = None
-    else:
-        visible_teams = (
-            team_ids
-            if team_ids is not None
-            else await get_user_team_ids(user_id, organization_id)
-        )
-        where["AND"] = [
-            visibility_filter(
-                user_id,
-                organization_id,
-                visible_teams,
-                user_field="ownerUserId",
-                team_id_restriction=team_id_restriction,
-            )
-        ]
+        organization_id, _ = await get_user_default_team(user_id)
+    if organization_id is None or not await has_live_resource_access(
+        user_id, organization_id, team_id_restriction, "view"
+    ):
+        return []
+    where["ownerUserId"] = user_id
+    where["organizationId"] = organization_id
+    if team_id_restriction is not None:
+        where["teamId"] = team_id_restriction
     rows = await prisma.models.Expert.prisma().find_many(
         where=where,
         include=_ROSTER_WORKFLOW_INCLUDE,
@@ -539,7 +532,9 @@ def _credential_fields(providers: list[str]) -> dict[str, object]:
     }
 
 
-async def list_expert_identities(user_id: str) -> list[ExpertIdentity]:
+async def list_expert_identities(
+    user_id: str, *, organization_id: str | None = None
+) -> list[ExpertIdentity]:
     """Return the lifetime roster without hydrating team-page details.
 
     Raw SQL rather than a Prisma projection: ``find_many`` has no partial
@@ -550,14 +545,21 @@ async def list_expert_identities(user_id: str) -> list[ExpertIdentity]:
     ``$1``. ``experts_db_test.py`` asserts the selected columns so a
     ``schema.prisma`` rename fails in CI instead of at runtime.
     """
+    if organization_id is None:
+        organization_id, _ = await get_user_default_team(user_id)
+    if organization_id is None or not await has_live_resource_access(
+        user_id, organization_id, None, "view"
+    ):
+        return []
     return await query_raw_with_schema(
         """
         SELECT "id", "name", "avatarUrl" AS "avatar_url", "color", "role",
                "jobTitle" AS "job_title", "isArchived" AS "is_archived"
         FROM {schema_prefix}"Expert"
-        WHERE "ownerUserId" = $1 AND "isTemplate" = false
+        WHERE "ownerUserId" = $1 AND "isTemplate" = false AND "organizationId" = $2
         """,
         user_id,
+        organization_id,
         model=ExpertIdentity,
     )
 
@@ -569,17 +571,7 @@ async def owns_active_expert(user_id: str, expert_id: str) -> bool:
     a fired (archived), template, or someone else's expert must all answer
     False here rather than being distinguished by the caller.
     """
-    return (
-        await prisma.models.Expert.prisma().count(
-            where={
-                "id": expert_id,
-                "ownerUserId": user_id,
-                "isTemplate": False,
-                "isArchived": False,
-            }
-        )
-        > 0
-    )
+    return await _owned_active_expert(user_id, expert_id) is not None
 
 
 async def active_expert_ids(user_id: str, expert_ids: set[str]) -> set[str]:
@@ -599,10 +591,24 @@ async def active_expert_ids(user_id: str, expert_ids: set[str]) -> set[str]:
             "isArchived": False,
         }
     )
-    return {row.id for row in rows}
+    accessible = {
+        (row.organizationId, row.teamId): await has_live_resource_access(
+            user_id, row.organizationId, row.teamId, "execute"
+        )
+        for row in rows
+        if row.organizationId is not None
+    }
+    return {
+        row.id
+        for row in rows
+        if row.organizationId is not None
+        and accessible.get((row.organizationId, row.teamId), False)
+    }
 
 
-async def owns_private_active_expert(user_id: str, expert_id: str) -> bool:
+async def owns_private_active_expert(
+    user_id: str, expert_id: str, *, organization_id: str | None = None
+) -> bool:
     """True iff *user_id* owns *expert_id* as a live, private hire.
 
     Stricter than :func:`owns_active_expert` by the visibility filter, which
@@ -610,7 +616,10 @@ async def owns_private_active_expert(user_id: str, expert_id: str) -> bool:
     sharing rules yet, so writing its folder would mutate an expert the chat
     side resolves to no grants at all.
     """
-    return await _owned_active_expert(user_id, expert_id) is not None
+    expert = await _owned_active_expert(user_id, expert_id)
+    return expert is not None and (
+        organization_id is None or expert.organizationId == organization_id
+    )
 
 
 async def get_expert(
@@ -620,6 +629,7 @@ async def get_expert(
     include_workflows: bool = True,
     include_archived: bool = False,
     include_credentials: bool = False,
+    organization_id: str | None | ExpertLookupScope = ExpertLookupScope.SAVED,
 ) -> Expert | None:
     """Fetch a hired expert owned by *user_id*.
 
@@ -645,13 +655,25 @@ async def get_expert(
         "isTemplate": False,
         "visibility": ResourceVisibility.PRIVATE,
     }
+    if organization_id is None:
+        organization_id, _ = await get_user_default_team(user_id)
+        if organization_id is None:
+            return None
+    if organization_id != ExpertLookupScope.SAVED:
+        where["organizationId"] = organization_id
     if not include_archived:
         where["isArchived"] = False
     row = await prisma.models.Expert.prisma().find_first(
         where=where,
         include=_WORKFLOW_INCLUDE if include_workflows else None,
     )
-    if row is None:
+    if (
+        row is None
+        or row.organizationId is None
+        or not await has_live_resource_access(
+            user_id, row.organizationId, row.teamId, "view"
+        )
+    ):
         return None
     latest_runs = await _latest_runs([row.id])
     expert = _to_model(row, latest_runs.get(row.id), await get_weekly_spend(row.id))
@@ -976,12 +998,11 @@ async def resolve_private_expert_tenancy(
     if expert is None:
         raise ExpertNotFoundError(expert_id)
 
-    organization_id, team_id = await get_user_default_team(user_id)
-    if organization_id is None:
+    if expert.organizationId is None or not await has_live_resource_access(
+        user_id, expert.organizationId, expert.teamId, "execute"
+    ):
         raise ExpertPrivateTenancyNotFoundError(expert_id)
-    if expert.organizationId != organization_id or expert.teamId != team_id:
-        raise ExpertPrivateTenancyNotFoundError(expert_id)
-    return organization_id, team_id
+    return expert.organizationId, expert.teamId
 
 
 async def hire_expert(
@@ -989,6 +1010,8 @@ async def hire_expert(
     template_id: str,
     name: str | None,
     surface: HireSurface | None = None,
+    *,
+    organization_id: str | None = None,
 ) -> HireResult:
     """Hire *template_id* and return as soon as the expert's row exists.
 
@@ -997,7 +1020,9 @@ async def hire_expert(
     whose setup failed or was abandoned starts that setup again.
     """
     try:
-        return await _hire_expert_impl(user_id, template_id, name, surface)
+        return await _hire_expert_impl(
+            user_id, template_id, name, surface, organization_id
+        )
     except Exception:
         emit_funnel_event(
             user_id,
@@ -1008,7 +1033,11 @@ async def hire_expert(
 
 
 async def _hire_expert_impl(
-    user_id: str, template_id: str, name: str | None, surface: HireSurface | None
+    user_id: str,
+    template_id: str,
+    name: str | None,
+    surface: HireSurface | None,
+    organization_id: str | None = None,
 ) -> HireResult:
     template = await prisma.models.Expert.prisma().find_first(
         where={"id": template_id, "isTemplate": True, "isArchived": False},
@@ -1017,9 +1046,9 @@ async def _hire_expert_impl(
     if template is None:
         raise ExpertTemplateNotFoundError(template_id)
 
-    organization_id, team_id = await get_user_default_team(user_id)
-    if organization_id is None:
-        raise ExpertPrivateTenancyNotFoundError(template_id)
+    organization_id, team_id = await resolve_expert_creation_scope(
+        user_id, organization_id
+    )
 
     # Copy the plain description, never the template's sample envelope: a hire
     # that skips the voice pick must not leave raw JSON in the prompt, and the
@@ -1269,7 +1298,11 @@ async def _reserve_hired_expert(
     async with transaction() as tx:
         await _lock_expert_creation(tx, user_id)
         existing = await tx.expert.find_first(
-            where={"ownerUserId": user_id, "sourceTemplateId": template_id},
+            where={
+                "ownerUserId": user_id,
+                "sourceTemplateId": template_id,
+                "organizationId": organization_id,
+            },
             include=_WORKFLOW_INCLUDE,
         )
         if existing is not None:
@@ -1326,10 +1359,11 @@ async def _resume_revived_hire(row: prisma.models.Expert) -> prisma.models.Exper
     # re-attach, and a failed reattach rolls the row back to archived so the
     # hire surfaces as retryable instead of returning an expert with dead
     # triggers.
-    organization_id, _ = await get_user_default_team(owner_user_id)
-    if organization_id is None:
+    try:
+        await resolve_private_expert_tenancy(owner_user_id, row.id)
+    except ExpertPrivateTenancyNotFoundError:
         await _rollback_revive(owner_user_id, row.id)
-        raise ExpertPrivateTenancyNotFoundError(row.id)
+        raise
 
     try:
         await scheduling.resume_expert_schedules(owner_user_id, row.id)
@@ -1419,6 +1453,7 @@ async def create_raised_expert(
     boundaries: str | None = None,
     weekly_budget: int | None = None,
     attachments: list[RaiseAttachment] | None = None,
+    organization_id: str | None = None,
 ) -> RaiseResult:
     """Raise a blank expert owned by *user_id*.
 
@@ -1427,10 +1462,12 @@ async def create_raised_expert(
     Attachments are validated before creation. A workflow or marketplace-skill
     install failure remains non-fatal and is reported in the result.
     """
-    resolved = await raise_attachments.resolve_attachments(user_id, attachments or [])
-    organization_id, team_id = await get_user_default_team(user_id)
-    if organization_id is None:
-        raise ExpertPrivateTenancyNotFoundError(name)
+    organization_id, team_id = await resolve_expert_creation_scope(
+        user_id, organization_id
+    )
+    resolved = await raise_attachments.resolve_attachments(
+        user_id, attachments or [], organization_id=organization_id
+    )
     expert = await _create_raised_expert_row(
         user_id,
         name,
@@ -1500,7 +1537,10 @@ async def _copy_library_skills(
         for name in names
         if get_default_skill_with_body(name.strip().lower()) is None
     ]
-    folders = await find_user_skill_slugs(user_id, candidates)
+    organization_id, _ = await resolve_private_expert_tenancy(user_id, expert_id)
+    folders = await find_user_skill_slugs(
+        user_id, candidates, organization_id=organization_id
+    )
     failed: list[str] = []
     for name in candidates:
         folder = folders.get(name.strip().lower())
@@ -1594,6 +1634,8 @@ async def update_skills(
     Only an explicit ``remove`` deletes anything. The expert distils new
     skills into its own folder at any time, so a list the client read earlier
     can be missing one; treating an absent name as a removal destroyed it."""
+    if await _owned_active_expert(user_id, expert_id) is None:
+        raise ExpertNotFoundError(expert_id)
     row = await prisma.models.Expert.prisma().find_first(
         where={
             "id": expert_id,
@@ -1612,7 +1654,9 @@ async def update_skills(
     # One library listing for the whole request: resolving per name turned a
     # single PUT into a storage scan per name.
     folders = await find_user_skill_slugs(
-        user_id, [current.get(name.lower()) or name for name in skills]
+        user_id,
+        [current.get(name.lower()) or name for name in skills],
+        organization_id=row.organizationId,
     )
     plan = [_plan_skill(current.get(name.lower()), name, folders) for name in skills]
     marketplace = [
@@ -1776,7 +1820,7 @@ async def _rewrite_skill_names(
 async def _owned_active_expert(
     user_id: str, expert_id: str
 ) -> prisma.models.Expert | None:
-    return await prisma.models.Expert.prisma().find_first(
+    row = await prisma.models.Expert.prisma().find_first(
         where={
             "id": expert_id,
             "ownerUserId": user_id,
@@ -1786,8 +1830,20 @@ async def _owned_active_expert(
         }
     )
 
+    if (
+        row is None
+        or row.organizationId is None
+        or not await has_live_resource_access(
+            user_id, row.organizationId, row.teamId, "execute"
+        )
+    ):
+        return None
+    return row
+
 
 async def update_soul(user_id: str, expert_id: str, soul: ExpertSoulUpdate) -> Expert:
+    if await _owned_active_expert(user_id, expert_id) is None:
+        raise ExpertNotFoundError(expert_id)
     before = await prisma.models.Expert.prisma().find_first(
         where={
             "id": expert_id,
@@ -1825,6 +1881,8 @@ async def update_soul(user_id: str, expert_id: str, soul: ExpertSoulUpdate) -> E
 
 
 async def update_avatar(user_id: str, expert_id: str, avatar_url: str | None) -> Expert:
+    if await _owned_active_expert(user_id, expert_id) is None:
+        raise ExpertNotFoundError(expert_id)
     updated = await prisma.models.Expert.prisma().update_many(
         where={
             "id": expert_id,
@@ -1847,6 +1905,8 @@ async def update_avatar(user_id: str, expert_id: str, avatar_url: str | None) ->
 async def update_budget(
     user_id: str, expert_id: str, weekly_budget: int | None
 ) -> Expert:
+    if await _owned_active_expert(user_id, expert_id) is None:
+        raise ExpertNotFoundError(expert_id)
     updated = await prisma.models.Expert.prisma().update_many(
         where={
             "id": expert_id,
@@ -1888,6 +1948,8 @@ async def update_soul_if_current(
     refusal. Archived rows are included for that reason, and a row that is
     gone outright raises rather than returning ``None``.
     """
+    if await _owned_active_expert(user_id, expert_id) is None:
+        return None
     updated = await prisma.models.Expert.prisma().update_many(
         where={
             "id": expert_id,
@@ -1954,6 +2016,8 @@ async def update_soul_fields(
     clobber each other; per-field validation mirrors ``update_soul`` via
     ``ExpertSoulFieldsPatch``.
     """
+    if await _owned_active_expert(user_id, expert_id) is None:
+        raise ExpertNotFoundError(expert_id)
     data = _soul_field_update_data(
         identity=identity,
         voice_preferences=voice_preferences,
@@ -1990,6 +2054,8 @@ async def update_soul_fields_if_current(
     expected_boundaries: str | None = None,
 ) -> bool:
     """Atomically patch Soul fields only when their previewed values still match."""
+    if await _owned_active_expert(user_id, expert_id) is None:
+        return False
     data = _soul_field_update_data(
         identity=identity,
         voice_preferences=voice_preferences,
@@ -2047,6 +2113,7 @@ async def _install_preloads(
     fatal to the hire itself. Preloads with a roster cadence also get their
     schedule created here (see ``_schedule_preload``).
     """
+    organization_id, team_id = await resolve_private_expert_tenancy(user_id, expert_id)
     failed: list[str] = []
     user_timezone: str | None = None
     if any(p.scheduleCron for p in preloads):
@@ -2067,7 +2134,11 @@ async def _install_preloads(
             continue
         try:
             library_agent = await library_db.add_store_agent_to_library(
-                preload.storeListingVersionId, user_id, track_listing_added=False
+                preload.storeListingVersionId,
+                user_id,
+                track_listing_added=False,
+                organization_id=organization_id,
+                team_id=team_id,
             )
             async with agent_graph_attachment_barrier(library_agent.graph_id):
                 row = await prisma.models.ExpertWorkflow.prisma().create(
@@ -2191,8 +2262,15 @@ async def install_workflow(
 async def _install_library_workflow(
     user_id: str, expert_id: str, library_agent_id: str
 ) -> ExpertWorkflowRef:
+    organization_id, team_id = await resolve_private_expert_tenancy(user_id, expert_id)
     library_agent = await prisma.models.LibraryAgent.prisma().find_first(
-        where={"id": library_agent_id, "userId": user_id, "isDeleted": False}
+        where={
+            "id": library_agent_id,
+            "userId": user_id,
+            "isDeleted": False,
+            "organizationId": organization_id,
+            "teamId": team_id,
+        }
     )
     if library_agent is None:
         raise NotFoundError(f"Library agent #{library_agent_id} not found")
@@ -2235,8 +2313,13 @@ async def _install_marketplace_workflow(
     if existing is not None:
         return _to_workflow_ref(existing)
 
+    organization_id, team_id = await resolve_private_expert_tenancy(user_id, expert_id)
     library_agent = await library_db.add_store_agent_to_library(
-        store_listing_version_id, user_id, track_listing_added=False
+        store_listing_version_id,
+        user_id,
+        track_listing_added=False,
+        organization_id=organization_id,
+        team_id=team_id,
     )
     async with agent_graph_attachment_barrier(library_agent.graph_id):
         try:
@@ -2457,7 +2540,9 @@ async def archive_expert(user_id: str, expert_id: str) -> None:
 MAX_PODS_PER_USER = 100
 
 
-async def create_pod(user_id: str, name: str) -> ExpertPod:
+async def create_pod(
+    user_id: str, name: str, *, organization_id: str | None = None
+) -> ExpertPod:
     """Create a pod owned by *user_id*.
 
     The count is deliberately not serialized against the insert. This cap is a
@@ -2468,21 +2553,27 @@ async def create_pod(user_id: str, name: str) -> ExpertPod:
     row lock on every create, which is the treatment ``credit.py`` reserves for
     balances and is not warranted here.
     """
-    existing = await prisma.models.ExpertPod.prisma().count(where={"userId": user_id})
+    organization_id, _ = await resolve_expert_creation_scope(user_id, organization_id)
+    existing = await prisma.models.ExpertPod.prisma().count(
+        where={"userId": user_id, "organizationId": organization_id}
+    )
     if existing >= MAX_PODS_PER_USER:
         raise ExpertPodLimitReachedError(MAX_PODS_PER_USER)
     try:
         row = await prisma.models.ExpertPod.prisma().create(
-            data={"userId": user_id, "name": name}
+            data={"userId": user_id, "name": name, "organizationId": organization_id}
         )
     except prisma.errors.UniqueViolationError:
         raise ExpertPodNameTakenError(name)
     return _to_pod(row)
 
 
-async def list_pods(user_id: str) -> list[ExpertPod]:
+async def list_pods(
+    user_id: str, *, organization_id: str | None = None
+) -> list[ExpertPod]:
+    organization_id, _ = await resolve_expert_creation_scope(user_id, organization_id)
     rows = await prisma.models.ExpertPod.prisma().find_many(
-        where={"userId": user_id},
+        where={"userId": user_id, "organizationId": organization_id},
         order={"createdAt": "asc"},
     )
     return [_to_pod(row) for row in rows]
@@ -2494,9 +2585,10 @@ async def assign_pod(user_id: str, expert_id: str, pod_id: str | None) -> Expert
     Both the expert and the target pod must belong to *user_id*; a pod owned
     by someone else is treated as not found rather than silently ignored.
     """
+    organization_id, _ = await resolve_private_expert_tenancy(user_id, expert_id)
     if pod_id is not None:
         pod = await prisma.models.ExpertPod.prisma().find_first(
-            where={"id": pod_id, "userId": user_id}
+            where={"id": pod_id, "userId": user_id, "organizationId": organization_id}
         )
         if pod is None:
             raise ExpertPodNotFoundError(pod_id)

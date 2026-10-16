@@ -12,6 +12,7 @@ from __future__ import annotations
 import itertools
 import uuid
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from backend.data.skill_content_approvals import SkillContentApproval
@@ -65,6 +66,14 @@ class FakeLearningStore:
         self.use_events: list[SkillUseEventRecord] = []
         self._clock = itertools.count()
 
+    async def resolve_skill_registry_scope(
+        self,
+        user_id: str,
+        expert_id: str | None = None,
+        organization_id: str | None = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(organization_id=organization_id, team_id="default-team")
+
     # ---- sources -------------------------------------------------------
 
     async def upsert_source_revision(
@@ -78,6 +87,7 @@ class FakeLearningStore:
         evidence_refs: list[dict[str, Any]],
         outcome_signals: list[dict[str, Any]],
         origin: str = "ordinary",
+        organization_id: str | None = None,
     ) -> LearningSourceRecord:
         rev = canonical_revision(revision)
         key = (user_id, source_kind, source_id)
@@ -94,7 +104,8 @@ class FakeLearningStore:
                 id=str(uuid.uuid4()),
                 user_id=user_id,
                 expert_id=expert_id,
-                owner_key=owner_key_for(expert_id),
+                organization_id=organization_id,
+                owner_key=owner_key_for(expert_id, organization_id=organization_id),
                 source_kind=source_kind,
                 source_id=source_id,
                 revision=rev,
@@ -114,7 +125,9 @@ class FakeLearningStore:
             )
             self.sources[record.id] = record
             return record
-        if existing.owner_key != owner_key_for(expert_id):
+        if existing.owner_key != owner_key_for(
+            expert_id, organization_id=organization_id
+        ):
             updated = existing.model_copy(
                 update={"eligibility": "inaccessible", "epoch": existing.epoch + 1}
             )
@@ -519,9 +532,14 @@ class FakeLearningStore:
         return self.heads.get(f"{user_id}|{owner_key}|{skill_name}")
 
     async def ensure_head(
-        self, user_id: str, expert_id: str | None, skill_name: str
+        self,
+        user_id: str,
+        expert_id: str | None,
+        skill_name: str,
+        *,
+        organization_id: str | None = None,
     ) -> SkillHeadRecord:
-        owner_key = owner_key_for(expert_id)
+        owner_key = owner_key_for(expert_id, organization_id=organization_id)
         existing = await self.get_head(user_id, owner_key, skill_name)
         if existing is not None:
             return existing
@@ -529,6 +547,7 @@ class FakeLearningStore:
             id=str(uuid.uuid4()),
             user_id=user_id,
             expert_id=expert_id,
+            organization_id=organization_id,
             owner_key=owner_key,
             skill_name=skill_name,
             current_version=0,
@@ -637,6 +656,7 @@ class FakeLearningStore:
             id=str(uuid.uuid4()),
             user_id=user_id,
             expert_id=head.expert_id,
+            organization_id=head.organization_id,
             owner_key=head.owner_key,
             skill_name=head.skill_name,
             head_id=head.id,
@@ -904,12 +924,14 @@ class FakeLearningStore:
         origin: str | None = None,
         state: str | None = None,
         limit: int = 50,
+        organization_id: str | None = None,
     ) -> list[SkillVersionRecord]:
         rows = [
             v
             for v in self.versions.values()
             if v.user_id == user_id
             and (owner_key is None or v.owner_key == owner_key)
+            and (organization_id is None or v.organization_id == organization_id)
             and (origin is None or v.origin == origin)
             and (state is None or v.state == state)
         ]
@@ -919,10 +941,18 @@ class FakeLearningStore:
         ]
 
     async def list_open_decisions(
-        self, user_id: str, owner_key: str | None = None
+        self,
+        user_id: str,
+        owner_key: str | None = None,
+        *,
+        organization_id: str | None = None,
     ) -> list[SkillVersionRecord]:
         return await self.list_recent_versions(
-            user_id, owner_key=owner_key, state="needs_decision", limit=100
+            user_id,
+            owner_key=owner_key,
+            state="needs_decision",
+            limit=100,
+            organization_id=organization_id,
         )
 
     async def list_versions_in_states(
@@ -997,8 +1027,9 @@ class FakeLearningStore:
         expected_current_version_id: str | None,
         behaviors: list[DeletedBehavior],
         actor_user_id: str | None,
+        organization_id: str | None = None,
     ) -> SkillDeletion:
-        owner_key = owner_key_for(expert_id)
+        owner_key = owner_key_for(expert_id, organization_id=organization_id)
         head = await self.get_head(user_id, owner_key, skill_name)
         current_id = head.current_version_id if head is not None else None
         if current_id != expected_current_version_id:
@@ -1016,9 +1047,12 @@ class FakeLearningStore:
                     evidence_fingerprints=behavior.evidence_fingerprints,
                     actor_user_id=actor_user_id,
                     reason="deleted by the owner",
+                    organization_id=organization_id,
                 )
         if head is None:
-            head = await self.ensure_head(user_id, expert_id, skill_name)
+            head = await self.ensure_head(
+                user_id, expert_id, skill_name, organization_id=organization_id
+            )
         marker = await self.create_version(
             user_id,
             head=head,
@@ -1081,6 +1115,7 @@ class FakeLearningStore:
         evidence_fingerprints: list[str],
         actor_user_id: str | None,
         reason: str,
+        organization_id: str | None = None,
     ) -> SkillSuppressionRecord:
         record = SkillSuppressionRecord(
             id=str(uuid.uuid4()),
@@ -1093,7 +1128,10 @@ class FakeLearningStore:
         )
         self.suppressions.append(record)
         self._suppression_scope = getattr(self, "_suppression_scope", {})
-        self._suppression_scope[record.id] = (user_id, owner_key_for(expert_id))
+        self._suppression_scope[record.id] = (
+            user_id,
+            owner_key_for(expert_id, organization_id=organization_id),
+        )
         return record
 
     def _scoped_suppressions(self, user_id: str, owner_key: str, skill_name: str):
@@ -1132,6 +1170,7 @@ class FakeLearningStore:
         session_id: str | None = None,
         detail: str = "",
         actor_user_id: str | None = None,
+        organization_id: str | None = None,
     ) -> SkillUseEventRecord:
         event = SkillUseEventRecord(
             id=str(uuid.uuid4()),

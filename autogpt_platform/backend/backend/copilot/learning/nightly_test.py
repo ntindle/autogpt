@@ -215,7 +215,9 @@ async def test_review_knows_every_existing_skill_in_the_owner_scope(monkeypatch)
     monkeypatch.setattr(nightly, "read_user_skill_with_body", body)
     known = await nightly._existing_skills(USER, EXPERT)
     assert {s.name for s in known} == {s.name for s in skills}
-    index.assert_awaited_once_with(USER, EXPERT, heal_missing=False)
+    index.assert_awaited_once_with(
+        USER, EXPERT, heal_missing=False, organization_id=None
+    )
     assert body.await_count <= nightly.MAX_EXISTING_SKILL_BODIES
 
 

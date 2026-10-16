@@ -25,7 +25,7 @@ from backend.api.features.experts.models import (
     HireResult,
     RaiseResult,
 )
-from backend.copilot.model import ChatSession
+from backend.copilot.model import ChatSession, get_chat_session
 from backend.data.db_accessors import experts_db
 from backend.data.redis_client import AsyncRedisClient
 from backend.util.exceptions import (
@@ -334,12 +334,16 @@ async def _apply_hire(
 ) -> ToolResponseBase:
     if preview.template_id is None:
         return _discarded_proposal_error(session_id, "template", "hire_expert")
+    session = await get_chat_session(session_id, user_id)
+    if session is None:
+        return _discarded_proposal_error(session_id, "session", "hire_expert")
     try:
         result: HireResult = await experts_db().hire_expert(
             user_id,
             preview.template_id,
             preview.name or None,
             "copilot",
+            organization_id=session.organization_id,
         )
     except Exception as e:
         return _hire_failure_response(e, session_id)
@@ -363,6 +367,9 @@ async def _apply_raise(
     session_id: str,
     preview: ExpertChangePreview,
 ) -> ToolResponseBase:
+    session = await get_chat_session(session_id, user_id)
+    if session is None:
+        return _discarded_proposal_error(session_id, "session", "raise_expert")
     try:
         result: RaiseResult = await experts_db().create_raised_expert(
             user_id,
@@ -376,6 +383,7 @@ async def _apply_raise(
             about=preview.about or None,
             boundaries=preview.boundaries or None,
             weekly_budget=preview.weekly_budget,
+            organization_id=session.organization_id,
         )
     except Exception as e:
         return _raise_failure_response(e, session_id)

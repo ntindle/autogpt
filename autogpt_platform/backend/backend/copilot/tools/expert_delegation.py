@@ -107,7 +107,9 @@ async def resolve_target_expert(
     if not wanted:
         return None
     matches = []
-    for candidate in await experts_db().list_experts(user_id, with_metrics=False):
+    for candidate in await experts_db().list_experts(
+        user_id, with_metrics=False, organization_id=session.organization_id
+    ):
         if (
             not candidate.is_archived
             and candidate.name.strip().casefold() == wanted
@@ -137,7 +139,9 @@ async def unknown_target_message(
         "teammate from your team context."
     )
     try:
-        experts = await experts_db().list_experts(user_id, with_metrics=False)
+        experts = await experts_db().list_experts(
+            user_id, with_metrics=False, organization_id=session.organization_id
+        )
     except Exception as e:
         logger.warning(f"Roster lookup for delegation error failed: {e}")
         return fallback

@@ -746,6 +746,7 @@ class DatabaseManager(AppService):
     # Exposed so the Prisma-less copilot executor + scheduler can capture
     # sources, keep the review ledger, and read/write skill versions via
     # db_accessors.skill_learning_db() / skill_versions_db().
+    resolve_skill_registry_scope = _(skill_learning_data.resolve_skill_registry_scope)
     upsert_source_revision = _(skill_learning_data.upsert_source_revision)
     get_source = _(skill_learning_data.get_source)
     get_source_by_ref = _(skill_learning_data.get_source_by_ref)
@@ -1336,6 +1337,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     set_expert_learning_paused = d.set_expert_learning_paused
 
     # ============ Skill learning ============ #
+    resolve_skill_registry_scope = d.resolve_skill_registry_scope
     upsert_source_revision = d.upsert_source_revision
     get_source = d.get_source
     get_source_by_ref = d.get_source_by_ref

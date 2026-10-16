@@ -121,7 +121,11 @@ async def settle_outcome(
         result.reviewed += 1
         result.applied += 1
         if outcome.version is not None:
-            await link_version_to_memory(user_id, outcome.version)
+            await link_version_to_memory(
+                user_id,
+                outcome.version,
+                organization_id=outcome.version.organization_id,
+            )
         # The ledger row was stamped inside the publication transaction and
         # completed with the workspace write; only the cursor remains.
         await skill_learning_db().advance_source_cursor(

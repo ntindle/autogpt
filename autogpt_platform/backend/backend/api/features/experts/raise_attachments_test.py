@@ -14,7 +14,11 @@ from backend.util.exceptions import NotFoundError
 def _transaction_losing_the_insert():
     tx = SimpleNamespace(
         expert=SimpleNamespace(
-            find_first=AsyncMock(return_value=SimpleNamespace(id="expert-1"))
+            find_first=AsyncMock(
+                return_value=SimpleNamespace(
+                    id="expert-1", organizationId="business-org", teamId="default-team"
+                )
+            )
         ),
         expertworkflow=SimpleNamespace(
             create=AsyncMock(side_effect=prisma.errors.UniqueViolationError({}))
@@ -43,6 +47,7 @@ async def _marketplace_install_race(existing: object | None):
         yield
 
     with (
+        patch.object(raise_attachments, "resolve_skill_registry_scope", AsyncMock()),
         patch.object(
             raise_attachments, "transaction", _transaction_losing_the_insert()
         ),

@@ -6,10 +6,16 @@ from backend.data.skill_learning import owner_key_for
 
 
 async def current_content_approvals(
-    user_id: str, expert_id: str | None, skill_name: str
+    user_id: str,
+    expert_id: str | None,
+    skill_name: str,
+    *,
+    organization_id: str | None = None
 ) -> list[SkillContentApproval]:
     versions = skill_versions_db()
-    head = await versions.get_head(user_id, owner_key_for(expert_id), skill_name)
+    head = await versions.get_head(
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
+    )
     if head is None or not head.current_version_id:
         return []
     current = await versions.get_version(user_id, head.current_version_id)

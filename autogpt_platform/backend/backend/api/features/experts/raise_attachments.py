@@ -21,6 +21,7 @@ from backend.copilot.tools.skills import (
     read_user_skill_with_body,
 )
 from backend.data.db import transaction
+from backend.data.skill_scope import resolve_skill_registry_scope
 from backend.data.tenancy import agent_graph_attachment_barrier
 from backend.util.exceptions import ExpertNotFoundError, NotFoundError
 
@@ -78,7 +79,10 @@ class ResolvedRaiseAttachments(BaseModel):
 
 
 async def resolve_attachments(
-    user_id: str, attachments: list[RaiseAttachment]
+    user_id: str,
+    attachments: list[RaiseAttachment],
+    *,
+    organization_id: str | None = None,
 ) -> ResolvedRaiseAttachments:
     """Pre-check every attachment. Raises if any item is not attachable."""
     workflows: list[ResolvedWorkflow] = []
@@ -90,9 +94,15 @@ async def resolve_attachments(
             continue
         seen.add(key)
         if attachment.kind == "workflow":
-            workflows.append(await _resolve_workflow(user_id, attachment))
+            workflows.append(
+                await _resolve_workflow(
+                    user_id, attachment, organization_id=organization_id
+                )
+            )
             continue
-        skills.append(await _resolve_skill(user_id, attachment))
+        skills.append(
+            await _resolve_skill(user_id, attachment, organization_id=organization_id)
+        )
     return ResolvedRaiseAttachments(workflows=workflows, skills=skills)
 
 
@@ -202,6 +212,7 @@ async def _install_marketplace_workflow_once_locked(
     expert_id: str,
     store_listing_version_id: str,
 ) -> None:
+    await resolve_skill_registry_scope(user_id, expert_id)
     async with transaction() as tx:
         is_installable = (
             await library_db.is_store_listing_version_available_for_install(
@@ -225,7 +236,11 @@ async def _install_marketplace_workflow_once_locked(
         if expert is None:
             raise ExpertNotFoundError(expert_id)
         library_agent = await library_db.add_store_agent_to_library_in_transaction(
-            store_listing_version_id, user_id, tx
+            store_listing_version_id,
+            user_id,
+            tx,
+            organization_id=expert.organizationId,
+            team_id=expert.teamId,
         )
         await tx.expertworkflow.create(
             data={
@@ -237,7 +252,7 @@ async def _install_marketplace_workflow_once_locked(
 
 
 async def _resolve_workflow(
-    user_id: str, attachment: RaiseAttachment
+    user_id: str, attachment: RaiseAttachment, *, organization_id: str | None = None
 ) -> ResolvedWorkflow:
     if attachment.source == "marketplace":
         await _validate_marketplace_listing(attachment.id)
@@ -246,7 +261,9 @@ async def _resolve_workflow(
             store_listing_version_id=attachment.id,
             library_agent_id=None,
         )
-    row = await _library_agent_row(user_id, attachment.id)
+    row = await _library_agent_row(
+        user_id, attachment.id, organization_id=organization_id
+    )
     return ResolvedWorkflow(
         attachment=attachment,
         store_listing_version_id=None,
@@ -254,7 +271,9 @@ async def _resolve_workflow(
     )
 
 
-async def _resolve_skill(user_id: str, attachment: RaiseAttachment) -> ResolvedSkill:
+async def _resolve_skill(
+    user_id: str, attachment: RaiseAttachment, *, organization_id: str | None = None
+) -> ResolvedSkill:
     slug = attachment.id.strip().lower()
     if attachment.source == "marketplace":
         try:
@@ -267,7 +286,9 @@ async def _resolve_skill(user_id: str, attachment: RaiseAttachment) -> ResolvedS
     default = get_default_skill_with_body(slug)
     if default is not None:
         return ResolvedSkill(attachment=attachment, name=default.name)
-    stored = await read_user_skill_with_body(user_id, slug)
+    stored = await read_user_skill_with_body(
+        user_id, slug, organization_id=organization_id
+    )
     if stored is None:
         raise RaiseAttachmentUnavailableError("skill", "library", slug)
     return ResolvedSkill(attachment=attachment, name=stored.name)
@@ -336,13 +357,14 @@ async def _link_library_workflow_locked(
 
 
 async def _library_agent_row(
-    user_id: str, library_agent_id: str
+    user_id: str, library_agent_id: str, *, organization_id: str | None = None
 ) -> prisma.models.LibraryAgent:
     row = await prisma.models.LibraryAgent.prisma().find_first(
         where={
             "id": library_agent_id,
             "userId": user_id,
             "isDeleted": False,
+            "organizationId": organization_id,
         }
     )
     if row is None:

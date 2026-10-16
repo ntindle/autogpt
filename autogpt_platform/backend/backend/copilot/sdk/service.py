@@ -4685,6 +4685,7 @@ async def _maybe_prepend_skills_update(
             prior_contents=[
                 m.content or "" for m in session.messages if m.role == "user"
             ],
+            organization_id=session.organization_id,
         )
     except Exception:
         logger.exception("[skills] failed to build skills update notice")
@@ -5597,7 +5598,9 @@ async def stream_chat_completion_sdk(  # pyright: ignore[reportGeneralTypeIssues
             skills_ctx_content = ""
             try:
                 skills_ctx_content = await build_skills_context(
-                    user_id, expert_id=session.expert_id
+                    user_id,
+                    expert_id=session.expert_id,
+                    organization_id=session.organization_id,
                 )
             except Exception:
                 logger.exception(

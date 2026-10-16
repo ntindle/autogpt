@@ -20,7 +20,9 @@ from backend.api.features.experts.credentials import (
 )
 from backend.api.features.experts.models import ExpertSetupItem
 from backend.api.features.experts.scheduling import unsatisfied_required_inputs
+from backend.api.features.orgs.db import get_user_default_team
 from backend.data.model import Credentials
+from backend.data.tenancy import has_live_resource_access
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +36,22 @@ _INCLUDE: prisma.types.ExpertInclude = {
 }
 
 
-async def list_setup_items(user_id: str) -> list[ExpertSetupItem]:
+async def list_setup_items(
+    user_id: str, *, organization_id: str | None = None
+) -> list[ExpertSetupItem]:
+    if organization_id is None:
+        organization_id, _ = await get_user_default_team(user_id)
+    if organization_id is None or not await has_live_resource_access(
+        user_id, organization_id, None, "view"
+    ):
+        return []
     experts = await prisma.models.Expert.prisma().find_many(
-        where={"ownerUserId": user_id, "isTemplate": False, "isArchived": False},
+        where={
+            "ownerUserId": user_id,
+            "isTemplate": False,
+            "isArchived": False,
+            "organizationId": organization_id,
+        },
         include=_INCLUDE,
         order={"createdAt": "asc"},
     )
@@ -49,7 +64,7 @@ async def list_setup_items(user_id: str) -> list[ExpertSetupItem]:
     if not pending:
         return []
 
-    credentials = await _user_credentials(user_id)
+    credentials = await _user_credentials(user_id, organization_id=organization_id)
     reachable_by_expert: dict[str, list[Credentials]] = {}
     items: list[ExpertSetupItem] = []
     for expert, workflow in pending:

@@ -104,6 +104,10 @@ async def commit_version(
     carries ``applied_pending`` and the version stays ``pending_write`` so a
     crash is recoverable without a second model call.
     """
+    if head.user_id != user_id or (
+        review is not None and review.source.owner_key != head.owner_key
+    ):
+        return CommitResult(committed=False, reason="publication scope changed")
     async with transaction() as tx:
         if review is not None:
             await _require_committable_source(tx, user_id, review)
@@ -114,6 +118,7 @@ async def commit_version(
                 data={
                     "userId": user_id,
                     "expertId": head.expert_id,
+                    "organizationId": head.organization_id,
                     "ownerKey": head.owner_key,
                     "skillName": head.skill_name,
                     "headId": head.id,

@@ -29,6 +29,7 @@ from backend.data.skill_revocations import (
 from backend.data.skill_revocations import (
     latest_independent_version_id as latest_independent_version_id,
 )
+from backend.data.skill_scope import resolve_skill_registry_scope
 from backend.data.skill_version_files import (
     SkillVersionFile,
     parse_version_files,
@@ -57,6 +58,7 @@ class SkillHeadRecord(BaseModel):
     user_id: str
     expert_id: str | None
     owner_key: str
+    organization_id: str | None = None
     skill_name: str
     current_version: int
     current_version_id: str | None
@@ -82,6 +84,7 @@ class SkillHeadRecord(BaseModel):
             user_id=row.userId,
             expert_id=row.expertId,
             owner_key=row.ownerKey,
+            organization_id=row.organizationId,
             skill_name=row.skillName,
             current_version=row.currentVersion,
             current_version_id=row.currentVersionId,
@@ -98,6 +101,7 @@ class SkillVersionRecord(BaseModel):
     user_id: str
     expert_id: str | None
     owner_key: str
+    organization_id: str | None = None
     skill_name: str
     head_id: str
     version: int
@@ -129,6 +133,7 @@ class SkillVersionRecord(BaseModel):
             user_id=row.userId,
             expert_id=row.expertId,
             owner_key=row.ownerKey,
+            organization_id=row.organizationId,
             skill_name=row.skillName,
             head_id=row.headId,
             version=row.version,
@@ -176,9 +181,15 @@ async def get_head(
 
 
 async def ensure_head(
-    user_id: str, expert_id: str | None, skill_name: str
+    user_id: str,
+    expert_id: str | None,
+    skill_name: str,
+    *,
+    organization_id: str | None = None,
 ) -> SkillHeadRecord:
-    owner_key = owner_key_for(expert_id)
+    registry = await resolve_skill_registry_scope(user_id, expert_id, organization_id)
+    organization_id = registry.organization_id
+    owner_key = owner_key_for(expert_id, organization_id)
     existing = await get_head(user_id, owner_key, skill_name)
     if existing is not None:
         return existing
@@ -187,6 +198,7 @@ async def ensure_head(
             data={
                 "userId": user_id,
                 "expertId": expert_id,
+                "organizationId": organization_id,
                 "ownerKey": owner_key,
                 "skillName": skill_name,
             }
@@ -324,6 +336,7 @@ async def create_version(
                 data={
                     "userId": user_id,
                     "expertId": head.expert_id,
+                    "organizationId": head.organization_id,
                     "ownerKey": head.owner_key,
                     "skillName": head.skill_name,
                     "headId": head.id,
@@ -387,6 +400,7 @@ async def list_recent_versions(
     user_id: str,
     *,
     owner_key: str | None = None,
+    organization_id: str | None = None,
     origin: str | None = None,
     state: str | None = None,
     limit: int = 50,
@@ -394,6 +408,7 @@ async def list_recent_versions(
     rows = await list_version_summaries(
         user_id,
         owner_key=owner_key,
+        organization_id=organization_id,
         origin=origin,
         states=[state] if state is not None else None,
         limit=limit,
@@ -402,10 +417,14 @@ async def list_recent_versions(
 
 
 async def list_open_decisions(
-    user_id: str, owner_key: str | None = None
+    user_id: str, owner_key: str | None = None, *, organization_id: str | None = None
 ) -> list[SkillVersionRecord]:
     return await list_recent_versions(
-        user_id, owner_key=owner_key, state=OPEN_DECISION_STATE, limit=100
+        user_id,
+        owner_key=owner_key,
+        organization_id=organization_id,
+        state=OPEN_DECISION_STATE,
+        limit=100,
     )
 
 

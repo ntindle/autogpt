@@ -2047,6 +2047,9 @@ async def add_store_agent_to_library_in_transaction(
     store_listing_version_id: str,
     user_id: str,
     tx: prisma.Prisma,
+    *,
+    organization_id: str | None = None,
+    team_id: str | None = None,
 ) -> library_model.LibraryAgent:
     """Add a marketplace agent using the caller's transaction.
 
@@ -2054,7 +2057,12 @@ async def add_store_agent_to_library_in_transaction(
     the upsert cannot tell a first-time add from a restore.
     """
     return await _add_store_agent_to_library(
-        store_listing_version_id, user_id, tx=tx, track_listing_added=False
+        store_listing_version_id,
+        user_id,
+        tx=tx,
+        track_listing_added=False,
+        organization_id=organization_id,
+        team_id=team_id,
     )
 
 

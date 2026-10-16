@@ -150,6 +150,10 @@ def _env(
         patch(f"{_RAISE_MODULE}.experts_db", MagicMock(return_value=db)),
         patch(f"{_UPDATE_MODULE}.experts_db", MagicMock(return_value=db)),
         patch(f"{_PROPOSAL_MODULE}.experts_db", MagicMock(return_value=db)),
+        patch(
+            f"{_PROPOSAL_MODULE}.get_chat_session",
+            AsyncMock(return_value=make_session(_USER, organization_id="saved-org")),
+        ),
         patch(f"{_HIRE_MODULE}.get_redis_async", shared_redis),
         patch(f"{_RAISE_MODULE}.get_redis_async", shared_redis),
         patch(f"{_UPDATE_MODULE}.get_redis_async", shared_redis),
@@ -532,7 +536,9 @@ class TestConfirm:
         assert isinstance(resp, ExpertChangeAppliedResponse)
         assert resp.applied is True
         assert resp.kind == "hire"
-        db.hire_expert.assert_awaited_once_with(_USER, "tpl-scout", "Recon", "copilot")
+        db.hire_expert.assert_awaited_once_with(
+            _USER, "tpl-scout", "Recon", "copilot", organization_id="saved-org"
+        )
 
     @pytest.mark.asyncio(loop_scope="session")
     async def test_confirm_raises_exactly_what_was_previewed(self):
@@ -561,6 +567,7 @@ class TestConfirm:
             about=_CHARTER["about"],
             boundaries=_CHARTER["boundaries"],
             weekly_budget=2000,
+            organization_id="saved-org",
         )
 
     @pytest.mark.asyncio(loop_scope="session")

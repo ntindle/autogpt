@@ -58,9 +58,13 @@ class ExpertWorkflowScope(BaseModel):
         )
 
 
-async def expert_workflow_scope(user_id: str, expert_id: str) -> ExpertWorkflowScope:
+async def expert_workflow_scope(
+    user_id: str, expert_id: str, *, organization_id: str | None = None
+) -> ExpertWorkflowScope:
     """Installed workflows of *expert_id*. Fails closed to an empty scope."""
-    expert = await experts_db().get_expert(user_id, expert_id)
+    expert = await experts_db().get_expert(
+        user_id, expert_id, organization_id=organization_id
+    )
     if expert is None:
         return ExpertWorkflowScope(expert_id=expert_id)
     return ExpertWorkflowScope(
@@ -78,7 +82,9 @@ async def session_workflow_scope(
     """``None`` for personal AutoPilot: every workflow in the account."""
     if session.expert_id is None:
         return None
-    return await expert_workflow_scope(user_id, session.expert_id)
+    return await expert_workflow_scope(
+        user_id, session.expert_id, organization_id=session.organization_id
+    )
 
 
 async def require_installed_workflow(
@@ -122,13 +128,16 @@ async def resolve_target_expert(
                 error="access_denied",
                 session_id=session_id,
             )
-        return session.expert_id
+        requested_expert_id = session.expert_id
     if not requested_expert_id:
         return ErrorResponse(
             message=EXPERT_REQUIRED, error="expert_required", session_id=session_id
         )
     expert = await experts_db().get_expert(
-        user_id, requested_expert_id, include_workflows=False
+        user_id,
+        requested_expert_id,
+        include_workflows=False,
+        organization_id=session.organization_id,
     )
     if expert is None:
         return ErrorResponse(
@@ -168,11 +177,14 @@ async def resolve_routine_owner(
                 error="access_denied",
                 session_id=session.session_id,
             )
-        return RoutineOwner(expert_id=session.expert_id)
+        requested_expert_id = session.expert_id
     if not requested_expert_id:
         return RoutineOwner()
     expert = await experts_db().get_expert(
-        user_id, requested_expert_id, include_workflows=False
+        user_id,
+        requested_expert_id,
+        include_workflows=False,
+        organization_id=session.organization_id,
     )
     if expert is None:
         return ErrorResponse(
@@ -243,7 +255,14 @@ async def _ungranted_credentials(
     from backend.integrations.creds_manager import IntegrationCredentialsManager
 
     try:
-        owned = await IntegrationCredentialsManager().store.get_all_creds(user_id)
+        organization_id, _ = await experts_db().resolve_private_expert_tenancy(
+            user_id, expert_id
+        )
+        owned = (
+            await IntegrationCredentialsManager()
+            .store.scoped(organization_id)
+            .get_all_creds(user_id)
+        )
         allowed = set(
             await experts_db().expert_allowed_credential_ids(user_id, expert_id)
         )

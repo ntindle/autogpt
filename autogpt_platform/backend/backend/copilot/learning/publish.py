@@ -122,7 +122,9 @@ async def publish_learned_version(request: PublishRequest) -> PublishOutcome:
     unsettled = await require_settled_head(
         request.user_id,
         await skill_versions_db().get_head(
-            request.user_id, owner_key_for(request.expert_id), request.skill_name
+            request.user_id,
+            owner_key_for(request.expert_id, organization_id=request.organization_id),
+            request.skill_name,
         ),
     )
     if unsettled is not None:
@@ -133,6 +135,7 @@ async def publish_learned_version(request: PublishRequest) -> PublishOutcome:
             request.skill_name,
             expert_id=request.expert_id,
             strict=True,
+            organization_id=request.organization_id,
         )
     except UnicodeDecodeError:
         return PublishOutcome(
@@ -145,7 +148,10 @@ async def publish_learned_version(request: PublishRequest) -> PublishOutcome:
         )
     try:
         current_files = await read_user_skill_files(
-            request.user_id, request.skill_name, expert_id=request.expert_id
+            request.user_id,
+            request.skill_name,
+            expert_id=request.expert_id,
+            organization_id=request.organization_id,
         )
     except SkillPackageError as exc:
         return PublishOutcome(
@@ -172,7 +178,10 @@ async def publish_learned_version(request: PublishRequest) -> PublishOutcome:
         failure = metadata_failure or check_skill_bundle(previous_bundle)
         if failure is not None and metadata_failure is None:
             approvals = await current_content_approvals(
-                request.user_id, request.expert_id, request.skill_name
+                request.user_id,
+                request.expert_id,
+                request.skill_name,
+                organization_id=request.organization_id,
             )
             failure = check_skill_bundle(previous_bundle, approved_matches=approvals)
         if failure is not None:
@@ -204,7 +213,10 @@ async def publish_learned_version(request: PublishRequest) -> PublishOutcome:
     if blocked is not None:
         return blocked
     if await saved_skill_limit_reached(
-        request.user_id, request.expert_id, request.skill_name
+        request.user_id,
+        request.expert_id,
+        request.skill_name,
+        organization_id=request.organization_id,
     ):
         # Checked before anything is written, so a skill that would need a
         # saved slot the owner no longer has (a new one, or an installed copy
@@ -214,7 +226,10 @@ async def publish_learned_version(request: PublishRequest) -> PublishOutcome:
 
     versions = skill_versions_db()
     head = await versions.ensure_head(
-        request.user_id, request.expert_id, request.skill_name
+        request.user_id,
+        request.expert_id,
+        request.skill_name,
+        organization_id=request.organization_id,
     )
     if request.create_only and head.current_version_id is not None:
         return PublishOutcome(
@@ -240,9 +255,13 @@ async def publish_learned_version(request: PublishRequest) -> PublishOutcome:
             keep_auto_improve=False,
             files=snapshot_files(current_files),
             only_if_head_at=head.current_version,
+            organization_id=request.organization_id,
         )
         head = await versions.ensure_head(
-            request.user_id, request.expert_id, request.skill_name
+            request.user_id,
+            request.expert_id,
+            request.skill_name,
+            organization_id=request.organization_id,
         )
         if head.current_version_id is None:
             return PublishOutcome(
@@ -313,7 +332,10 @@ async def _check_bundle(
     # trigger, or summary from the rejected output is ever persisted. The
     # metadata passed ``check_metadata`` above, so the head name is safe.
     head = await skill_versions_db().ensure_head(
-        request.user_id, request.expert_id, request.skill_name
+        request.user_id,
+        request.expert_id,
+        request.skill_name,
+        organization_id=request.organization_id,
     )
     version = await skill_versions_db().create_version(
         request.user_id,
@@ -380,13 +402,20 @@ async def _record_untracked_edit(
     if head.content_hash is None:
         return None
     raw = await read_user_skill_markdown(
-        request.user_id, request.skill_name, expert_id=request.expert_id, strict=True
+        request.user_id,
+        request.skill_name,
+        expert_id=request.expert_id,
+        strict=True,
+        organization_id=request.organization_id,
     )
     if raw is None:
         return None
     files = snapshot_files(
         await read_user_skill_files(
-            request.user_id, request.skill_name, expert_id=request.expert_id
+            request.user_id,
+            request.skill_name,
+            expert_id=request.expert_id,
+            organization_id=request.organization_id,
         )
     )
     package_hash = version_package_hash(raw, files)
@@ -430,6 +459,7 @@ async def _record_untracked_edit(
             actor_user_id=request.user_id,
             summary="Edited outside version tracking",
             expected_head=ExpectedHead(version_id=head.current_version_id),
+            organization_id=request.organization_id,
         )
     except SkillVersionConflictError:
         return PublishOutcome(
@@ -546,6 +576,8 @@ async def write_committed_version(
     a newer human correction is abandoned instead of putting its older
     bytes on top of that correction.
     """
+    if version.user_id != user_id:
+        raise ValueError("skill version belongs to another owner")
     version = version.model_copy(
         update={
             "content_approvals": [
@@ -587,6 +619,7 @@ async def write_committed_version(
             expected_head=ExpectedHead(version_id=version.id),
             files=restore_files(version.files) if version.files is not None else None,
             content_approvals=version.content_approvals,
+            organization_id=version.organization_id,
         )
     except (SkillContentBlockedError, VirusDetectedError):
         reason = "skill package rejected by content or malware scan"
@@ -620,15 +653,19 @@ async def write_committed_version(
     await skill_publication_db().complete_publication(
         user_id, version_id=version.id, review_id=review_id, reason=version.summary
     )
-    await invalidate_skills_index_cache(user_id, version.expert_id)
+    await invalidate_skills_index_cache(
+        user_id, version.expert_id, organization_id=version.organization_id
+    )
     return PublishOutcome(status="applied", version=version, reason=version.summary)
 
 
-async def reconcile_pending(user_id: str) -> int:
+async def reconcile_pending(user_id: str, *, organization_id: str | None = None) -> int:
     """Finish (or abandon) publications interrupted after the pointer swap."""
     versions = skill_versions_db()
     completed = 0
     for pending in await skill_publication_db().list_pending_publications(user_id):
+        if organization_id is not None and pending.organization_id != organization_id:
+            continue
         head = await versions.get_head(user_id, pending.owner_key, pending.skill_name)
         if head is None or head.current_version_id != pending.id:
             await skill_publication_db().abandon_publication(
@@ -648,12 +685,16 @@ async def reconcile_pending(user_id: str) -> int:
 
 
 async def reconcile_skill_for_read(
-    user_id: str, expert_id: str | None, skill_name: str
+    user_id: str,
+    expert_id: str | None,
+    skill_name: str,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     from backend.data.skill_learning import owner_key_for
 
     pending = await skill_publication_db().get_pending_publication_for_skill(
-        user_id, owner_key_for(expert_id), skill_name
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
     )
     if pending is not None:
         await write_committed_version(user_id, pending, pending.review_id)

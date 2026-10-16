@@ -60,6 +60,7 @@ def source_revision_from_record(record: LearningSourceRecord) -> SourceRevision:
             user_id=record.user_id,
             expert_id=record.expert_id,
             owner_key=record.owner_key,
+            organization_id=record.organization_id,
         ),
         revision=record.revision,
         epoch=record.epoch,
@@ -140,6 +141,21 @@ class ChatSessionSourceAdapter:
             return _eligibility(
                 record, EligibilityState.INACCESSIBLE, "conversation moved scope"
             )
+        try:
+            registry = await skill_learning_db().resolve_skill_registry_scope(
+                scope.user_id, scope.expert_id, scope.organization_id
+            )
+            session_registry = await skill_learning_db().resolve_skill_registry_scope(
+                scope.user_id, session.expert_id, session.organization_id
+            )
+            if registry.organization_id != session_registry.organization_id:
+                return _eligibility(
+                    record, EligibilityState.INACCESSIBLE, "conversation moved scope"
+                )
+        except Exception:
+            return _eligibility(
+                record, EligibilityState.INACCESSIBLE, "workspace no longer accessible"
+            )
         if scope.expert_id is not None:
             expert = await experts_db().get_expert(
                 scope.user_id, scope.expert_id, include_workflows=False
@@ -176,7 +192,7 @@ async def _evidence_messages(
         after_sequence=0,
         before_sequence=last_sequence + 1,
     )
-    if page is None or not _matches_source(page.session, source):
+    if page is None or not await _matches_source(page.session, source):
         return None
     messages = {m.sequence: m for m in page.messages if m.sequence is not None}
     missing = verification_sequences(source, last_sequence) - messages.keys()
@@ -190,7 +206,7 @@ async def _evidence_messages(
             before_sequence=last_sequence + 1,
             message_sequences=wanted,
         )
-        if proof is None or not _matches_source(proof.session, source):
+        if proof is None or not await _matches_source(proof.session, source):
             return None
         messages.update(
             {
@@ -202,12 +218,25 @@ async def _evidence_messages(
     return list(messages.values())
 
 
-def _matches_source(session: ChatSessionInfo, source: SourceRevision) -> bool:
-    return (
-        session.session_id == source.source_ref
-        and session.user_id == source.scope.user_id
-        and session.expert_id == source.scope.expert_id
-    )
+async def _matches_source(session: ChatSessionInfo, source: SourceRevision) -> bool:
+    if (
+        session.session_id != source.source_ref
+        or session.user_id != source.scope.user_id
+        or session.expert_id != source.scope.expert_id
+    ):
+        return False
+    if session.organization_id == source.scope.organization_id:
+        return True
+    try:
+        registry = await skill_learning_db().resolve_skill_registry_scope(
+            source.scope.user_id, source.scope.expert_id, source.scope.organization_id
+        )
+        session_registry = await skill_learning_db().resolve_skill_registry_scope(
+            source.scope.user_id, session.expert_id, session.organization_id
+        )
+    except Exception:
+        return False
+    return registry.organization_id == session_registry.organization_id
 
 
 def _eligibility(
@@ -237,6 +266,7 @@ async def record_chat_turn(
     return await skill_learning_db().upsert_source_revision(
         user_id,
         expert_id=session.expert_id,
+        organization_id=session.organization_id,
         source_kind=CHAT_SOURCE_KIND,
         source_id=session.session_id,
         revision=revision,
@@ -246,7 +276,12 @@ async def record_chat_turn(
     )
 
 
-def scope_for(user_id: str, expert_id: str | None) -> LearningScope:
+def scope_for(
+    user_id: str, expert_id: str | None, organization_id: str | None = None
+) -> LearningScope:
     return LearningScope(
-        user_id=user_id, expert_id=expert_id, owner_key=owner_key_for(expert_id)
+        user_id=user_id,
+        expert_id=expert_id,
+        owner_key=owner_key_for(expert_id, organization_id),
+        organization_id=organization_id,
     )

@@ -53,6 +53,7 @@ async def load_review_replay(
             or stamp.policy_version != policy_version
             or request.user_id != user_id
             or request.expert_id != source.scope.expert_id
+            or request.organization_id != source.scope.organization_id
             or stamp.source.user_id != user_id
             or stamp.source.owner_key != source.scope.owner_key
             or stamp.source.id != source.source_id

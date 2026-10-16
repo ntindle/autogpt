@@ -18,6 +18,7 @@ async def list_version_summaries(
     user_id: str,
     *,
     owner_key: str | None = None,
+    organization_id: str | None = None,
     skill_name: str | None = None,
     origin: str | None = None,
     states: list[str] | None = None,
@@ -27,6 +28,7 @@ async def list_version_summaries(
     parameters: list[object] = [user_id]
     for column, value in (
         ("ownerKey", owner_key),
+        ("organizationId", organization_id),
         ("skillName", skill_name),
         ("origin", origin),
     ):

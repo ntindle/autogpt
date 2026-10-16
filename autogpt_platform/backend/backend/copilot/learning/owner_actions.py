@@ -53,6 +53,7 @@ async def apply_owner_edit(
     keep_auto_improve: bool,
     allowed_pattern_classes: list[str],
     expected_version_id: str | None,
+    organization_id: str | None = None,
 ) -> PublishOutcome:
     """An owner's correction takes effect immediately (same content checks).
 
@@ -63,9 +64,11 @@ async def apply_owner_edit(
     this submission into a conflict with the draft kept, never a silent
     overwrite of that change.
     """
-    current = await read_user_skill_with_body(user_id, skill_name, expert_id=expert_id)
+    current = await read_user_skill_with_body(
+        user_id, skill_name, expert_id=expert_id, organization_id=organization_id
+    )
     previous = await skill_versions_db().get_head(
-        user_id, owner_key_for(expert_id), skill_name
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
     )
     try:
         await store_user_skill(
@@ -83,6 +86,7 @@ async def apply_owner_edit(
             keep_auto_improve=keep_auto_improve,
             allowed_pattern_classes=allowed_pattern_classes,
             expected_head=ExpectedHead(version_id=expected_version_id),
+            organization_id=organization_id,
         )
     except SkillContentBlockedError as exc:
         return PublishOutcome(
@@ -107,10 +111,15 @@ async def apply_owner_edit(
         )
         if replaced is not None:
             await _suppress_replaced_behavior(
-                user_id, expert_id, replaced, body, reason="edited by the owner"
+                user_id,
+                expert_id,
+                replaced,
+                body,
+                reason="edited by the owner",
+                organization_id=organization_id,
             )
     resolved = await skill_versions_db().get_head(
-        user_id, owner_key_for(expert_id), skill_name
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
     )
     version = (
         await skill_versions_db().get_version(user_id, resolved.current_version_id)
@@ -130,6 +139,7 @@ async def restore_version(
     reason: str = "Restored by the owner",
     suppress_behavior: bool = True,
     replacing_version_id: str | None = None,
+    organization_id: str | None = None,
 ) -> PublishOutcome:
     """Restore prior content as a new version, suppressing owner-rejected behavior.
 
@@ -146,17 +156,21 @@ async def restore_version(
     if (
         target is None
         or target.skill_name != skill_name
-        or target.owner_key != owner_key_for(expert_id)
+        or target.owner_key != owner_key_for(expert_id, organization_id=organization_id)
     ):
         return PublishOutcome(status="conflict", reason="version not found")
     if target.state in ("invalidated", "blocked_content") or not target.content:
         return PublishOutcome(
             status="stale_eligibility", reason="that version can no longer be used"
         )
-    unavailable = await _unavailable_sources(user_id, expert_id, target)
+    unavailable = await _unavailable_sources(
+        user_id, expert_id, target, organization_id=organization_id
+    )
     if unavailable:
         return PublishOutcome(status="stale_eligibility", reason=unavailable)
-    head = await versions.get_head(user_id, owner_key_for(expert_id), skill_name)
+    head = await versions.get_head(
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
+    )
     if head is None:
         return PublishOutcome(status="conflict", reason="skill has no version history")
     if (
@@ -197,6 +211,7 @@ async def restore_version(
                 target.content,
                 reason="undone by restore",
                 head_files=target.files,
+                organization_id=organization_id,
             )
         logger.info(
             "Restored %s to v%s for user %s (replaced v%s, %d chars)",
@@ -218,6 +233,7 @@ async def decide_proposal(
     action: Literal["apply", "keep_current", "apply_edited"],
     edited_body: str | None,
     actor_user_id: str,
+    organization_id: str | None = None,
 ) -> PublishOutcome:
     """Resolve one open proposal. Applying re-checks eligibility first."""
     if action == "apply_edited" and not (edited_body or "").strip():
@@ -229,12 +245,15 @@ async def decide_proposal(
     if (
         proposal is None
         or proposal.skill_name != skill_name
-        or proposal.owner_key != owner_key_for(expert_id)
+        or proposal.owner_key
+        != owner_key_for(expert_id, organization_id=organization_id)
     ):
         return PublishOutcome(status="conflict", reason="proposal not found")
     if proposal.state != "needs_decision":
         return PublishOutcome(status="conflict", reason="proposal is no longer open")
-    head = await versions.get_head(user_id, owner_key_for(expert_id), skill_name)
+    head = await versions.get_head(
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
+    )
     if head is None:
         return PublishOutcome(status="conflict", reason="skill has no version history")
     if action == "keep_current":
@@ -242,7 +261,12 @@ async def decide_proposal(
             user_id, proposal.id, "archived", "owner kept the current version"
         )
         await _suppress_replaced_behavior(
-            user_id, expert_id, proposal, head_body="", reason="owner kept current"
+            user_id,
+            expert_id,
+            proposal,
+            head_body="",
+            reason="owner kept current",
+            organization_id=organization_id,
         )
         return PublishOutcome(status="applied", version=proposal, reason="kept current")
     if head.current_version_id != proposal.base_version_id:
@@ -255,6 +279,7 @@ async def decide_proposal(
     stale = await require_fresh_eligibility(
         PublishRequest(
             user_id=user_id,
+            organization_id=organization_id,
             expert_id=expert_id,
             skill_name=skill_name,
             description=proposal.description,
@@ -337,11 +362,18 @@ def _snapshot_of(dependency: dict[str, object]) -> dict[str, object]:
 
 
 async def _unavailable_sources(
-    user_id: str, expert_id: str | None, version: SkillVersionRecord
+    user_id: str,
+    expert_id: str | None,
+    version: SkillVersionRecord,
+    *,
+    organization_id: str | None = None,
 ) -> str | None:
     """Reason a version's contributing sources no longer allow its use."""
     scope = LearningScope(
-        user_id=user_id, expert_id=expert_id, owner_key=owner_key_for(expert_id)
+        user_id=user_id,
+        expert_id=expert_id,
+        organization_id=organization_id,
+        owner_key=owner_key_for(expert_id, organization_id=organization_id),
     )
     for dependency in version.sources:
         adapter = get_source_adapter(str(dependency.get("source_kind", "")))
@@ -366,6 +398,7 @@ async def _suppress_replaced_behavior(
     *,
     reason: str,
     head_files: list[SkillVersionFile] | None = None,
+    organization_id: str | None = None,
 ) -> None:
     """Suppress an automated behaviour the owner just removed."""
     if replaced.origin not in ("saved_overnight", "requested") or not replaced.content:
@@ -394,6 +427,7 @@ async def _suppress_replaced_behavior(
             ],
             actor_user_id=user_id,
             reason=reason,
+            organization_id=organization_id,
         )
     except Exception:
         logger.warning(

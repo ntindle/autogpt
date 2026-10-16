@@ -131,7 +131,7 @@ class ListExpertChatsTool(BaseTool):
         has_more = len(chats) > page_size
         chats = chats[:page_size]
 
-        names = await _expert_names(user_id)
+        names = await _expert_names(user_id, organization_id=session.organization_id)
         if not chats:
             who = names.get(one_expert, one_expert) if one_expert else "any expert"
             return ExpertChatListResponse(
@@ -388,10 +388,14 @@ def _fit_budget(
     return kept, False
 
 
-async def _expert_names(user_id: str) -> dict[str, str]:
+async def _expert_names(
+    user_id: str, *, organization_id: str | None = None
+) -> dict[str, str]:
     """Expert id → name, so a listing reads as a person rather than a uuid."""
     try:
-        experts = await experts_db().list_experts(user_id, with_metrics=False)
+        experts = await experts_db().list_experts(
+            user_id, with_metrics=False, organization_id=organization_id
+        )
     except Exception as e:
         logger.warning(f"expert roster lookup failed: {e}")
         return {}

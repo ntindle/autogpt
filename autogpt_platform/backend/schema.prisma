@@ -1319,9 +1319,9 @@ model Expert {
   visibility     ResourceVisibility @default(PRIVATE)
   Team           Team?              @relation(fields: [teamId], references: [id], onDelete: Restrict)
 
-  // Hire idempotency: one hired copy per (user, template). Postgres allows
+  // Hire idempotency: one hired copy per (user, organization, template). Postgres allows
   // multiple NULL ownerUserId rows, so templates are unaffected.
-  @@unique([ownerUserId, sourceTemplateId])
+  @@unique([ownerUserId, organizationId, sourceTemplateId])
   @@index([ownerUserId, isArchived])
   @@index([isTemplate, isArchived])
   @@index([teamId])
@@ -1551,6 +1551,8 @@ model SkillLearningSource {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
+  organizationId String?
+
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Scope owner: an expert id, or null for the personal (AutoPilot) scope.
@@ -1603,6 +1605,8 @@ model SkillLearningReview {
   updatedAt   DateTime  @default(now()) @updatedAt
   completedAt DateTime?
 
+  organizationId String?
+
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   expertId String?
@@ -1649,6 +1653,8 @@ model SkillHead {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
+  organizationId String?
+
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   expertId String?
@@ -1682,6 +1688,8 @@ model SkillHead {
 model SkillVersion {
   id        String   @id @default(uuid())
   createdAt DateTime @default(now())
+
+  organizationId String?
 
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1740,6 +1748,8 @@ model SkillSuppression {
   id        String   @id @default(uuid())
   createdAt DateTime @default(now())
 
+  organizationId String?
+
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   expertId String?
@@ -1763,6 +1773,8 @@ model SkillSuppression {
 model SkillUseEvent {
   id        String   @id @default(uuid())
   createdAt DateTime @default(now())
+
+  organizationId String?
 
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -1788,6 +1800,8 @@ model ExpertPod {
   id        String   @id @default(uuid())
   createdAt DateTime @default(now())
 
+  organizationId String?
+
   userId String
   User   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -1796,7 +1810,7 @@ model ExpertPod {
   Experts Expert[]
 
   // Doubles as the userId lookup index for list_pods.
-  @@unique([userId, name])
+  @@unique([userId, organizationId, name])
 }
 
 ////////////////////////////////////////////////////////////
@@ -2670,6 +2684,7 @@ model StoreListingVersion {
 // that model's agentGraphId is required and its StoreAgent view exposes the
 // graph as non-null.
 model SkillListing {
+  organizationId String?
   id        String   @id @default(uuid())
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt

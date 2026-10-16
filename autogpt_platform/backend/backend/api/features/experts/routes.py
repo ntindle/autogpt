@@ -2,6 +2,7 @@ import logging
 
 import autogpt_libs.auth as autogpt_auth_lib
 import fastapi
+from autogpt_libs.auth import RequestContext, get_request_context
 from fastapi import APIRouter, Security
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -36,6 +37,7 @@ from backend.api.features.experts.models import (
     RaiseResult,
     validate_avatar_url,
 )
+from backend.api.features.experts.tenancy import require_expert_request_scope
 from backend.blocks.desktop._api import DesktopStream
 from backend.copilot.computer import (
     ComputerInfo,
@@ -53,7 +55,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/experts",
     tags=["experts", "private"],
-    dependencies=[Security(autogpt_auth_lib.requires_user)],
+    dependencies=[
+        Security(autogpt_auth_lib.requires_user),
+        Security(require_expert_request_scope),
+    ],
 )
 
 router.include_router(avatar_routes.router)
@@ -177,10 +182,15 @@ async def list_expert_templates(
 async def hire_expert(
     request: HireRequest,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> HireResult:
     try:
         return await experts_db.hire_expert(
-            user_id, request.template_id, request.name, request.surface
+            user_id,
+            request.template_id,
+            request.name,
+            request.surface,
+            organization_id=ctx.org_id,
         )
     except experts_db.ExpertTemplateNotFoundError as e:
         raise fastapi.HTTPException(status_code=404, detail=str(e))
@@ -215,6 +225,7 @@ async def hire_expert(
 async def create_raised_expert(
     request: CreateRaisedExpertRequest,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> RaiseResult:
     try:
         return await experts_db.create_raised_expert(
@@ -228,6 +239,7 @@ async def create_raised_expert(
             about=request.about,
             weekly_budget=request.weekly_budget,
             attachments=request.attachments,
+            organization_id=ctx.org_id,
         )
     except experts_db.FirstJobUnavailableError as e:
         raise fastapi.HTTPException(
@@ -259,9 +271,10 @@ async def create_raised_expert(
 @router.get("", operation_id="list_experts")
 async def list_experts(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[Expert]:
     """List the user's active hired experts."""
-    return await experts_db.list_experts(user_id)
+    return await experts_db.list_experts(user_id, organization_id=ctx.org_id)
 
 
 # Pod routes are declared before "/{expert_id}" so "/experts/pods" is not
@@ -274,9 +287,12 @@ async def list_experts(
 async def create_expert_pod(
     request: CreatePodRequest,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ExpertPod:
     try:
-        return await experts_db.create_pod(user_id, request.name)
+        return await experts_db.create_pod(
+            user_id, request.name, organization_id=ctx.org_id
+        )
     except (
         experts_db.ExpertPodNameTakenError,
         experts_db.ExpertPodLimitReachedError,
@@ -290,8 +306,9 @@ async def create_expert_pod(
 @router.get("/pods", operation_id="list_expert_pods")
 async def list_expert_pods(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[ExpertPod]:
-    return await experts_db.list_pods(user_id)
+    return await experts_db.list_pods(user_id, organization_id=ctx.org_id)
 
 
 @router.patch(
@@ -303,6 +320,7 @@ async def assign_expert_pod(
     expert_id: str,
     request: AssignPodRequest,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Expert:
     try:
         return await experts_db.assign_pod(user_id, expert_id, request.pod_id)
@@ -316,17 +334,19 @@ async def assign_expert_pod(
 @router.get("/identities", operation_id="list_expert_identities")
 async def list_expert_identities(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[ExpertIdentity]:
     """List the lightweight active and archived identity projection for chat."""
-    return await experts_db.list_expert_identities(user_id)
+    return await experts_db.list_expert_identities(user_id, organization_id=ctx.org_id)
 
 
 @router.get("/setup", operation_id="list_expert_setup_items")
 async def list_expert_setup_items(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[ExpertSetupItem]:
     """What still stands between each expert's scheduled workflows and a schedule."""
-    return await expert_setup.list_setup_items(user_id)
+    return await expert_setup.list_setup_items(user_id, organization_id=ctx.org_id)
 
 
 @router.get(
@@ -337,6 +357,7 @@ async def list_expert_setup_items(
 async def get_expert(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Expert:
     expert = await experts_db.get_expert(user_id, expert_id, include_credentials=True)
     if expert is None:
@@ -352,6 +373,7 @@ async def get_expert(
 async def list_expert_runs(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[ExpertRun]:
     """Recent executions attributed to this expert, with a classified output
     type for the Work surface's typed viewer."""
@@ -369,6 +391,7 @@ async def list_expert_runs(
 async def get_expert_activity(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ExpertActivity:
     """Daily chat-session and run counts for the expert's activity graph."""
     try:
@@ -385,6 +408,7 @@ async def get_expert_activity(
 async def get_expert_computer(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ComputerInfo:
     """The expert's own computer: its box as E2B lists it, and whether its
     screen is on. E2B knows nothing about the screen; that flag is ours,
@@ -414,6 +438,7 @@ async def get_expert_computer(
 async def start_expert_desktop(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> DesktopStream:
     """Start or resume the expert's desktop and return its live stream.
 
@@ -464,6 +489,7 @@ class GrantCredentialsRequest(BaseModel):
 async def list_expert_credentials(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[ExpertCredentialRef]:
     """The integrations this expert is allowed to use."""
     try:
@@ -484,6 +510,7 @@ async def grant_expert_credentials(
     expert_id: str,
     request: GrantCredentialsRequest,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[ExpertCredentialRef]:
     try:
         return await expert_credentials.grant_expert_credentials(
@@ -504,6 +531,7 @@ async def revoke_expert_credential(
     expert_id: str,
     credential_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[ExpertCredentialRef]:
     try:
         return await expert_credentials.revoke_expert_credential(
@@ -522,6 +550,7 @@ async def update_expert_soul(
     expert_id: str,
     request: ExpertSoulUpdate,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Expert:
     try:
         return await experts_db.update_soul(user_id, expert_id, request)
@@ -541,6 +570,7 @@ async def update_expert_skills(
     expert_id: str,
     request: ExpertSkillsUpdate,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Expert:
     try:
         return await experts_db.update_skills(
@@ -571,6 +601,7 @@ async def update_expert_avatar(
     expert_id: str,
     request: ExpertAvatarUpdate,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Expert:
     current = await experts_db.get_expert(user_id, expert_id)
     if current is None:
@@ -590,6 +621,7 @@ async def update_expert_budget(
     expert_id: str,
     request: ExpertBudgetUpdate,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Expert:
     try:
         return await experts_db.update_budget(user_id, expert_id, request.weekly_budget)
@@ -606,6 +638,7 @@ async def install_expert_workflow(
     expert_id: str,
     request: InstallWorkflowRequest,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ExpertWorkflowRef:
     try:
         return await experts_db.install_workflow(
@@ -631,6 +664,7 @@ async def remove_expert_workflow(
     expert_id: str,
     workflow_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> None:
     try:
         await experts_db.remove_workflow(user_id, expert_id, workflow_id)
@@ -651,6 +685,7 @@ async def remove_expert_workflow(
 async def get_expert_detach_preview(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ExpertDetachPreview:
     """What archiving this expert would pause — schedules and triggers —
     so the client can show a clear confirmation prompt."""
@@ -668,6 +703,7 @@ async def get_expert_detach_preview(
 async def resume_expert_schedules(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Expert:
     """One-click reversal of a budget/archive pause."""
     resumed = await scheduling.resume_expert_schedules(user_id, expert_id)
@@ -688,6 +724,7 @@ async def resume_expert_schedules(
 async def archive_expert(
     expert_id: str,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> fastapi.Response:
     try:
         await experts_db.archive_expert(user_id, expert_id)

@@ -2,6 +2,7 @@
 listing to their library: neither install path may send
 ``listing_added_to_library``."""
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -9,6 +10,21 @@ import prisma.models
 import pytest
 
 from backend.api.features.experts import experts_db
+
+
+@pytest.fixture(autouse=True)
+def saved_scope(mocker):
+    mocker.patch.object(
+        experts_db,
+        "resolve_private_expert_tenancy",
+        AsyncMock(return_value=("business-org", "default-team")),
+    )
+
+    @asynccontextmanager
+    async def barrier(_graph_id):
+        yield
+
+    mocker.patch.object(experts_db, "agent_graph_attachment_barrier", barrier)
 
 
 @pytest.mark.asyncio
@@ -19,7 +35,9 @@ async def test_hire_preloads_do_not_count_as_listing_adds():
     workflow_client = SimpleNamespace(
         create=AsyncMock(return_value=SimpleNamespace(id="workflow-1"))
     )
-    add = AsyncMock(return_value=SimpleNamespace(id="library-agent-1"))
+    add = AsyncMock(
+        return_value=SimpleNamespace(id="library-agent-1", graph_id="graph-1")
+    )
     with (
         patch.object(experts_db.library_db, "add_store_agent_to_library", add),
         patch.object(
@@ -29,7 +47,13 @@ async def test_hire_preloads_do_not_count_as_listing_adds():
         failed = await experts_db._install_preloads("expert-1", "user-1", [preload])
 
     assert failed == []
-    add.assert_awaited_once_with("slv-1", "user-1", track_listing_added=False)
+    add.assert_awaited_once_with(
+        "slv-1",
+        "user-1",
+        track_listing_added=False,
+        organization_id="business-org",
+        team_id="default-team",
+    )
 
 
 @pytest.mark.asyncio
@@ -38,7 +62,9 @@ async def test_marketplace_workflow_install_does_not_count_as_listing_add():
         find_first=AsyncMock(return_value=None),
         create=AsyncMock(return_value=SimpleNamespace(id="workflow-1")),
     )
-    add = AsyncMock(return_value=SimpleNamespace(id="library-agent-1"))
+    add = AsyncMock(
+        return_value=SimpleNamespace(id="library-agent-1", graph_id="graph-1")
+    )
     with (
         patch.object(experts_db.library_db, "add_store_agent_to_library", add),
         patch.object(
@@ -49,5 +75,11 @@ async def test_marketplace_workflow_install_does_not_count_as_listing_add():
     ):
         await experts_db._install_marketplace_workflow("user-1", "expert-1", "slv-1")
 
-    add.assert_awaited_once_with("slv-1", "user-1", track_listing_added=False)
+    add.assert_awaited_once_with(
+        "slv-1",
+        "user-1",
+        track_listing_added=False,
+        organization_id="business-org",
+        team_id="default-team",
+    )
     assert emit.call_args.args[1] == "workflow_installed_on_expert"

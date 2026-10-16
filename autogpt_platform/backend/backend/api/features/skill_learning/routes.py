@@ -11,6 +11,7 @@ import logging
 from typing import Annotated
 
 import autogpt_libs.auth as autogpt_auth_lib
+from autogpt_libs.auth import RequestContext, get_request_context
 from fastapi import APIRouter, HTTPException, Path, Query, Security
 
 from backend.api.features.experts import experts_db
@@ -77,10 +78,14 @@ _VERSION_PATH = Path(min_length=1, max_length=128, description="Skill version id
 _LIMIT_QUERY = Query(ge=1, le=200)
 
 
-async def _require_scope(user_id: str, expert_id: str | None) -> str | None:
+async def _require_scope(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> str | None:
     if expert_id is None:
         return None
-    if not await experts_db.owns_private_active_expert(user_id, expert_id):
+    if not await experts_db.owns_private_active_expert(
+        user_id, expert_id, organization_id=organization_id
+    ):
         raise HTTPException(status_code=404, detail="Expert not found")
     return expert_id
 
@@ -115,10 +120,13 @@ async def _with_version(
 async def get_status(
     expert_id: Annotated[str | None, _EXPERT_QUERY] = None,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> LearningStatus:
     """Operator view: backlog, freshness, retries, cost, and pause state."""
-    scope = await _require_scope(user_id, expert_id)
-    summary = await reviews_data.summarize_learning(user_id)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
+    summary = await reviews_data.summarize_learning(
+        user_id, owner_key=owner_key_for(scope, ctx.org_id)
+    )
     paused = False
     if scope is not None:
         expert = await experts_db.get_expert(user_id, scope, include_workflows=False)
@@ -144,10 +152,11 @@ async def list_history(
     state: Annotated[str | None, Query(max_length=32)] = None,
     limit: Annotated[int, _LIMIT_QUERY] = 50,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> LearningHistoryResponse:
     """Versions and review dispositions, newest first, for one scope."""
-    scope = await _require_scope(user_id, expert_id)
-    owner_key = owner_key_for(scope)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
+    owner_key = owner_key_for(scope, organization_id=ctx.org_id)
     versions = await versions_data.list_recent_versions(
         user_id, owner_key=owner_key, origin=origin, state=state, limit=limit
     )
@@ -172,9 +181,12 @@ async def list_history(
 @router.get("/decisions", operation_id="list_skill_learning_decisions")
 async def list_decisions(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> OpenDecisionsResponse:
     """One list of open proposals across every scope the caller owns."""
-    open_versions = await versions_data.list_open_decisions(user_id)
+    open_versions = await versions_data.list_open_decisions(
+        user_id, organization_id=ctx.org_id
+    )
     return OpenDecisionsResponse(
         items=[
             await version_summary(user_id, v, include_body=True) for v in open_versions
@@ -188,11 +200,12 @@ async def get_skill_detail(
     expert_id: Annotated[str | None, _EXPERT_QUERY] = None,
     version_id: Annotated[str | None, Query(min_length=1, max_length=128)] = None,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> SkillLearningDetail:
     """Current version, evidence, limits, sources, history, policy, and reuse."""
-    scope = await _require_scope(user_id, expert_id)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
     slug = name.strip().lower()
-    owner_key = owner_key_for(scope)
+    owner_key = owner_key_for(scope, organization_id=ctx.org_id)
     head = await versions_data.get_head(user_id, owner_key, slug)
     if head is None:
         raise HTTPException(
@@ -289,13 +302,14 @@ async def update_policy(
     body: SkillPolicyRequest,
     expert_id: Annotated[str | None, _EXPERT_QUERY] = None,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> SkillLearningPolicy:
     """Pause learning, stop using, or toggle automatic improvements — separately."""
-    scope = await _require_scope(user_id, expert_id)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
     slug = name.strip().lower()
     updated = await versions_data.update_head_policy(
         user_id,
-        owner_key_for(scope),
+        owner_key_for(scope, organization_id=ctx.org_id),
         slug,
         auto_improve=body.auto_improve,
         learning_paused=body.learning_paused,
@@ -304,7 +318,7 @@ async def update_policy(
     if updated is None:
         raise HTTPException(status_code=404, detail="Skill not found")
     if body.use_paused is not None:
-        await invalidate_skills_index_cache(user_id, scope)
+        await invalidate_skills_index_cache(user_id, scope, organization_id=ctx.org_id)
     return SkillLearningPolicy(
         auto_improve=updated.auto_improve,
         learning_paused=updated.learning_paused_at is not None,
@@ -318,6 +332,7 @@ async def edit_skill(
     body: EditSkillRequest,
     expert_id: Annotated[str | None, _EXPERT_QUERY] = None,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> LearningActionResult:
     """Apply the owner's correction now; later automated changes become
     proposals unless ``keep_auto_improve`` is set.
@@ -327,7 +342,7 @@ async def edit_skill(
     pattern class and ordinal step, so the client keeps the draft and shows
     the reason without ever echoing the blocked value.
     """
-    scope = await _require_scope(user_id, expert_id)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
     outcome = await apply_owner_edit(
         user_id=user_id,
         expert_id=scope,
@@ -338,6 +353,7 @@ async def edit_skill(
         keep_auto_improve=body.keep_auto_improve,
         allowed_pattern_classes=body.allowed_pattern_classes,
         expected_version_id=body.expected_version_id,
+        organization_id=ctx.org_id,
     )
     return await _with_version(_action_result(outcome, user_id), outcome, user_id)
 
@@ -348,15 +364,17 @@ async def restore(
     body: RestoreVersionRequest,
     expert_id: Annotated[str | None, _EXPERT_QUERY] = None,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> LearningActionResult:
     """Restore prior content as a new version. Affects future use only."""
-    scope = await _require_scope(user_id, expert_id)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
     outcome = await restore_version(
         user_id=user_id,
         expert_id=scope,
         skill_name=name.strip().lower(),
         version_id=body.version_id,
         actor_user_id=user_id,
+        organization_id=ctx.org_id,
     )
     if (
         outcome.status == "conflict"
@@ -377,9 +395,10 @@ async def decide(
     body: DecisionRequest,
     expert_id: Annotated[str | None, _EXPERT_QUERY] = None,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> LearningActionResult:
     """Keep current, apply the proposal, or apply an edited alternative."""
-    scope = await _require_scope(user_id, expert_id)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
     outcome = await decide_proposal(
         user_id=user_id,
         expert_id=scope,
@@ -388,6 +407,7 @@ async def decide(
         action=body.action,
         edited_body=body.edited_body,
         actor_user_id=user_id,
+        organization_id=ctx.org_id,
     )
     if outcome.status == "conflict" and "not found" in outcome.reason:
         raise HTTPException(status_code=404, detail=outcome.reason)
@@ -400,16 +420,17 @@ async def report_outcome(
     body: OutcomeReportRequest,
     expert_id: Annotated[str | None, _EXPERT_QUERY] = None,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> LearningActionResult:
     """Attach an explicit outcome to the exact version used (evidence for a
     later review; it does not change the skill)."""
-    scope = await _require_scope(user_id, expert_id)
+    scope = await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
     slug = name.strip().lower()
     version = await versions_data.get_version(user_id, body.version_id)
     if (
         version is None
         or version.skill_name != slug
-        or version.owner_key != owner_key_for(scope)
+        or version.owner_key != owner_key_for(scope, organization_id=ctx.org_id)
     ):
         raise HTTPException(status_code=404, detail="Version not found")
     kind = "outcome_unknown" if body.outcome == "unknown" else body.outcome
@@ -421,6 +442,7 @@ async def report_outcome(
         version_id=version.id,
         detail=body.detail,
         actor_user_id=user_id,
+        organization_id=ctx.org_id,
     )
     return LearningActionResult(
         status="recorded", status_label="Outcome recorded", reason=body.outcome
@@ -434,8 +456,10 @@ async def update_expert_policy(
     expert_id: Annotated[str, _EXPERT_PATH],
     body: ExpertLearningPolicyRequest,
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> ExpertLearningPolicy:
     """Pause or resume nightly learning for one expert (use is unaffected)."""
+    await _require_scope(user_id, expert_id, organization_id=ctx.org_id)
     expert = await experts_db.set_expert_learning_paused(
         user_id, expert_id, body.learning_paused
     )
@@ -454,6 +478,7 @@ async def exclude_source(
     source_kind: Annotated[str, Path(min_length=1, max_length=64)],
     source_ref: Annotated[str, Path(min_length=1, max_length=256)],
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> SourceExclusionResult:
     """Exclude a source from learning, including queued and published work.
 
@@ -461,7 +486,7 @@ async def exclude_source(
     is restored where one exists, otherwise the skill is paused.
     """
     record = await learning_data.get_source_by_ref(user_id, source_kind, source_ref)
-    if record is None:
+    if record is None or record.organization_id != ctx.org_id:
         raise HTTPException(status_code=404, detail="Source not found")
     excluded = await learning_data.set_source_eligibility(
         user_id, record.id, "excluded", excluded_by_user_id=user_id
@@ -479,6 +504,9 @@ async def exclude_source(
 @router.post("/run", operation_id="run_skill_learning_now")
 async def run_now(
     user_id: str = Security(autogpt_auth_lib.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> SkillLearningResult:
     """Run one learning pass for the caller now (same validation as nightly)."""
-    return await run_skill_learning_pass(user_id, trigger="admin")
+    return await run_skill_learning_pass(
+        user_id, trigger="admin", organization_id=ctx.org_id
+    )

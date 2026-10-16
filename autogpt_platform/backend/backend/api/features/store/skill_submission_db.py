@@ -31,7 +31,10 @@ _MAX_LICENSE_CHARS = 256
 
 
 async def submit_skill(
-    user_id: str, request: skill_model.SkillSubmissionRequest
+    user_id: str,
+    request: skill_model.SkillSubmissionRequest,
+    *,
+    organization_id: str | None = None,
 ) -> skill_model.SkillSubmission:
     """Create a pending version for the caller's library skill.
 
@@ -42,7 +45,9 @@ async def submit_skill(
     await _require_profile(user_id)
     # One bracketed read, after the refusals: the body and the files must be the
     # same version of the skill, and these are blob reads of up to 20 MiB.
-    skill, files = await _read_library_package(user_id, slug)
+    skill, files = await _read_library_package(
+        user_id, slug, organization_id=organization_id
+    )
 
     async with transaction() as tx:
         listing = await prisma.models.SkillListing.prisma(tx).find_unique(
@@ -50,9 +55,15 @@ async def submit_skill(
         )
         if listing is None:
             listing = await prisma.models.SkillListing.prisma(tx).create(
-                data={"slug": slug, "owningUserId": user_id}
+                data={
+                    "slug": slug,
+                    "owningUserId": user_id,
+                    "organizationId": organization_id,
+                }
             )
-        elif listing.owningUserId != user_id:
+        elif (
+            listing.owningUserId != user_id or listing.organizationId != organization_id
+        ):
             raise PreconditionFailed(
                 f"The marketplace slug '{slug}' is taken. Rename your skill "
                 "and publish it again."
@@ -79,10 +90,14 @@ async def submit_skill(
 
 
 async def list_my_skill_submissions(
-    user_id: str,
+    user_id: str, *, organization_id: str | None = None
 ) -> list[skill_model.SkillSubmission]:
     listings = await prisma.models.SkillListing.prisma().find_many(
-        where={"owningUserId": user_id, "isDeleted": False},
+        where={
+            "owningUserId": user_id,
+            "organizationId": organization_id,
+            "isDeleted": False,
+        },
         include={"Versions": True},
         order={"createdAt": "desc"},
     )
@@ -100,13 +115,17 @@ async def edit_skill_submission(
     user_id: str,
     skill_listing_version_id: str,
     request: skill_model.SkillSubmissionRequest,
+    *,
+    organization_id: str | None = None,
 ) -> skill_model.SkillSubmission:
     """Update a pending submission and re-snapshot the library skill.
 
     Only a pending version is editable — an approved one is what the
     marketplace serves, and a rejected one is a closed record.
     """
-    version, listing = await _owned_version(user_id, skill_listing_version_id)
+    version, listing = await _owned_version(
+        user_id, skill_listing_version_id, organization_id=organization_id
+    )
     if version.submissionStatus != prisma.enums.SubmissionStatus.PENDING:
         raise PreconditionFailed("Only a pending submission can be edited")
     # The slug and sourceSkillSlug were fixed at submit time, so re-pointing the
@@ -117,7 +136,9 @@ async def edit_skill_submission(
             f"This submission publishes '{listing.slug}'. Publish '{slug}' as "
             "its own listing instead."
         )
-    skill, files = await _read_library_package(user_id, slug)
+    skill, files = await _read_library_package(
+        user_id, slug, organization_id=organization_id
+    )
 
     async with transaction() as tx:
         updated = await prisma.models.SkillListingVersion.prisma(tx).update(
@@ -259,12 +280,14 @@ async def snapshot_version_files(
 
 
 async def _read_library_package(
-    user_id: str, slug: str
+    user_id: str, slug: str, *, organization_id: str | None = None
 ) -> tuple[ParsedSkill, list[SkillFile]]:
     """The creator's skill as one consistent version — its parsed ``SKILL.md``
     and the files beside it, read together so a store landing between them
     cannot publish one version's body with another's files."""
-    package = await read_user_skill_package(user_id, slug)
+    package = await read_user_skill_package(
+        user_id, slug, organization_id=organization_id
+    )
     skill = (
         parse_skill_markdown(package.skill_md, fallback_name=slug)
         if package is not None
@@ -276,7 +299,7 @@ async def _read_library_package(
 
 
 async def _owned_version(
-    user_id: str, skill_listing_version_id: str
+    user_id: str, skill_listing_version_id: str, *, organization_id: str | None = None
 ) -> tuple[prisma.models.SkillListingVersion, prisma.models.SkillListing]:
     version = await prisma.models.SkillListingVersion.prisma().find_unique(
         where={"id": skill_listing_version_id}, include={"SkillListing": True}
@@ -285,6 +308,7 @@ async def _owned_version(
         version is None
         or version.SkillListing is None
         or version.SkillListing.owningUserId != user_id
+        or version.SkillListing.organizationId != organization_id
     ):
         raise NotFoundError(f"Submission #{skill_listing_version_id} not found")
     return version, version.SkillListing

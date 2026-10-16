@@ -32,7 +32,7 @@ async def test_a_new_skill_waits_for_room_and_is_published_from_its_kept_review(
     waiting = await _run()
 
     assert waiting.dispositions == {"paused": 1}
-    at_limit.assert_awaited_with(USER, EXPERT, NAME)
+    at_limit.assert_awaited_with(USER, EXPERT, NAME, organization_id=None)
     assert await fake_store.get_head(USER, EXPERT, NAME) is None
     assert await fake_store.list_pending_publications(USER) == []
     boundaries["write"].assert_not_awaited()
@@ -88,7 +88,7 @@ async def test_an_update_that_needs_no_new_slot_applies_at_the_limit(
     outcome = await publish.publish_learned_version(request)
 
     assert outcome.status == "applied"
-    at_limit.assert_awaited_once_with(USER, EXPERT, NAME)
+    at_limit.assert_awaited_once_with(USER, EXPERT, NAME, organization_id=None)
     assert (await fake_store.get_head(USER, EXPERT, NAME)).current_version == 2
 
 

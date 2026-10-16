@@ -121,7 +121,9 @@ async def session_skill_entries(
     try:
         if not await is_skills_feature_enabled(user_id):
             return []
-        skills = await list_all_skills(user_id, session.expert_id)
+        skills = await list_all_skills(
+            user_id, session.expert_id, organization_id=session.organization_id
+        )
     except Exception:
         logger.warning("Could not load skills for capability search", exc_info=True)
         return []
@@ -137,7 +139,9 @@ async def session_expert_entries(
     try:
         if not await is_feature_enabled(Flag.HIRE_EXPERTS, user_id, default=False):
             return []
-        team = await experts_db().list_experts(user_id, with_metrics=False)
+        team = await experts_db().list_experts(
+            user_id, with_metrics=False, organization_id=session.organization_id
+        )
         templates = await _hireable_roster(user_id) if may_hire(session) else []
     except Exception:
         logger.warning("Could not load experts for capability search", exc_info=True)

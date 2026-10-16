@@ -94,7 +94,7 @@ async def build_expert_identity_suffix(
 
     db = experts_db()
     try:
-        personal_org_id, personal_team_id = await db.resolve_private_expert_tenancy(
+        saved_org_id, saved_team_id = await db.resolve_private_expert_tenancy(
             user_id, expert_id
         )
     except ExpertNotFoundError as e:
@@ -105,9 +105,9 @@ async def build_expert_identity_suffix(
     except Exception as e:
         logger.warning(f"Failed to validate expert session tenancy: {e}")
         raise ExpertSessionUnavailableError(EXPERT_SESSION_TEMPORARY_MESSAGE) from e
-    if (organization_id, team_id) != (personal_org_id, personal_team_id):
+    if (organization_id, team_id) != (saved_org_id, saved_team_id):
         raise ExpertSessionUnavailableError(
-            "This private expert session must be reopened in its personal workspace."
+            "This private expert session must be reopened in its saved workspace."
         )
     return render_expert_identity_suffix(expert)
 
@@ -516,7 +516,9 @@ async def _team_context(
     expert session's empty teammate list is just a solo roster, not a user
     without a team.
     """
-    experts = await experts_db().list_experts(user_id, with_metrics=False)
+    experts = await experts_db().list_experts(
+        user_id, with_metrics=False, organization_id=organization_id
+    )
     candidates = [e for e in experts if e.id != exclude_expert_id]
     matches = await asyncio.gather(
         *(
