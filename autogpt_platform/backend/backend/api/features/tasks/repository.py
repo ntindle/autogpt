@@ -2,8 +2,9 @@ import json
 from uuid import uuid4
 
 from prisma import Json, Prisma
+from prisma.types import WorkspaceTaskCreateInput
 
-from backend.api.features.tasks.domain import is_runnable, record
+from backend.api.features.tasks.domain import TaskConflict, is_runnable, record
 from backend.api.features.tasks.models import WorkspaceTask
 from backend.util.exceptions import NotFoundError
 
@@ -55,18 +56,61 @@ def _prepare_dispatches(tasks: list[WorkspaceTask]) -> None:
         record(task, "Auto", "Delegated work queued")
 
 
-async def _load(tx: Prisma, user_id: str) -> list[WorkspaceTask]:
+async def organization_scope(
+    tx: Prisma, user_id: str, organization_id: str | None
+) -> list[str | None]:
+    personal = await tx.organization.find_first(
+        where={"bootstrapUserId": user_id, "isPersonal": True, "deletedAt": None}
+    )
+    if organization_id is None or (personal and organization_id == personal.id):
+        return [personal.id, None] if personal else [None]
+    return [organization_id]
+
+
+async def _load(
+    tx: Prisma, user_id: str, organization_id: str | None = None
+) -> list[WorkspaceTask]:
+    scope = await organization_scope(tx, user_id, organization_id)
     rows = await tx.workspacetask.find_many(
         where={"userId": user_id}, order={"createdAt": "asc"}
     )
     return sorted(
-        (_decode(row.payload) for row in rows),
+        (
+            task
+            for row in rows
+            if (task := _decode(row.payload)).organization_id in scope
+        ),
         key=lambda task: (task.created_at, task.id),
     )
 
 
 def _decode(payload: Json) -> WorkspaceTask:
     return WorkspaceTask.model_validate_json(json.dumps(payload))
+
+
+async def session_organization(tx: Prisma, user_id: str, session_id: str) -> str | None:
+    session = await tx.chatsession.find_first(
+        where={"id": session_id, "userId": user_id}
+    )
+    row = await tx.workspacetask.find_first(
+        where={"userId": user_id, "sessionId": session_id}
+    )
+    if row:
+        task = _decode(row.payload)
+        if session and task.organization_id not in await organization_scope(
+            tx, user_id, session.organizationId
+        ):
+            raise NotFoundError("Task conversation not found")
+        return task.organization_id
+    if session:
+        return session.organizationId
+    raise TaskConflict("Conversation not found in your workspace")
+
+
+async def _load_for_session(
+    tx: Prisma, user_id: str, session_id: str
+) -> list[WorkspaceTask]:
+    return await _load(tx, user_id, await session_organization(tx, user_id, session_id))
 
 
 def _get(tasks: list[WorkspaceTask], task_id: str) -> WorkspaceTask:
@@ -83,17 +127,23 @@ async def _lock(tx: Prisma, user_id: str) -> None:
 
 
 async def _save(tx: Prisma, task: WorkspaceTask) -> None:
+    existing = await tx.workspacetask.find_unique(
+        where={"id_userId": {"id": task.id, "userId": task.user_id}}
+    )
+    if existing and _decode(existing.payload).organization_id != task.organization_id:
+        raise NotFoundError("Task not found")
     payload = Json(task.model_dump(mode="json"))
+    create = WorkspaceTaskCreateInput(
+        id=task.id,
+        userId=task.user_id,
+        payload=payload,
+        sessionId=task.session_id,
+        dispatchState=task.dispatch_state,
+    )
     await tx.workspacetask.upsert(
         where={"id_userId": {"id": task.id, "userId": task.user_id}},
         data={
-            "create": {
-                "id": task.id,
-                "userId": task.user_id,
-                "payload": payload,
-                "sessionId": task.session_id,
-                "dispatchState": task.dispatch_state,
-            },
+            "create": create,
             "update": {
                 "payload": payload,
                 "sessionId": task.session_id,

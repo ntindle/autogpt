@@ -4,6 +4,7 @@ from prisma import Prisma
 
 from backend.api.features.tasks.domain import TaskConflict
 from backend.api.features.tasks.models import TaskCommand, WorkspaceTask
+from backend.api.features.tasks.repository import organization_scope
 
 MANAGEMENT_OPERATIONS = {
     "edit",
@@ -24,11 +25,17 @@ async def authorize_task_manager(
     session_id: str,
     tasks: list[WorkspaceTask],
     command: TaskCommand,
+    organization_id: str | None = None,
 ) -> None:
     session = await tx.chatsession.find_first(
         where={"id": session_id, "userId": user_id}
     )
-    if not session or session.expertId:
+    if (
+        not session
+        or session.expertId
+        or session.organizationId
+        not in await organization_scope(tx, user_id, organization_id)
+    ):
         raise TaskConflict("Only AutoPilot can manage tasks across your workspace")
     linked_id = json.loads(json.dumps(session.metadata)).get("workspace_task_id")
     if linked_id and not any(task.session_id == session_id for task in tasks):

@@ -34,11 +34,11 @@ from backend.data.db import prisma
 
 
 async def begin_workspace_task_suggestion(
-    user_id: str, task_id: str, force: bool = False
+    user_id: str, task_id: str, force: bool = False, organization_id: str | None = None
 ) -> WorkspaceTask | None:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         task = _get(tasks, task_id)
         if task.assignee or task.status in ("done", "canceled") or task.review_of:
             return None
@@ -69,10 +69,11 @@ async def finish_workspace_task_suggestion(
     suggestion: TaskAssignee | None,
     alternatives: list[TaskAssignee],
     error: str = "",
+    organization_id: str | None = None,
 ) -> None:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         task = _get(tasks, task_id)
         if task.assignee or task.suggestion_request_id != request_id:
             return
@@ -87,11 +88,14 @@ async def finish_workspace_task_suggestion(
 
 
 async def begin_workspace_task_breakdown(
-    user_id: str, task_id: str, request: TaskBreakdownRequest
+    user_id: str,
+    task_id: str,
+    request: TaskBreakdownRequest,
+    organization_id: str | None = None,
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         task = _get(tasks, task_id)
         if task.status == "canceled" or task.review_of or task.schedule:
             raise TaskConflict("Break down an active task or a schedule occurrence")
@@ -151,10 +155,11 @@ async def finish_workspace_task_breakdown(
     preview_id: str,
     steps: list[TaskBreakdownStep],
     error: str = "",
+    organization_id: str | None = None,
 ) -> None:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         task = _get(tasks, task_id)
         automatic = bool(
             task.breakdown_refresh and task.breakdown_refresh.id == preview_id
@@ -187,11 +192,14 @@ async def finish_workspace_task_breakdown(
 
 
 async def accept_workspace_task_breakdown(
-    user_id: str, task_id: str, request: TaskBreakdownAccept
+    user_id: str,
+    task_id: str,
+    request: TaskBreakdownAccept,
+    organization_id: str | None = None,
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         task = _get(tasks, task_id)
         preview = task.breakdown
         if not preview or preview.id != request.preview_id:
@@ -309,6 +317,6 @@ def start_suggestion(task: WorkspaceTask, fingerprint: str) -> None:
 
 async def _planning_inputs(tx, task: WorkspaceTask, tasks: list[WorkspaceTask]):
     environment = await load_planning_environment(
-        tx, task.user_id, ancestors(task, tasks)
+        tx, task.user_id, ancestors(task, tasks), organization_id=task.organization_id
     )
     return task_planning_inputs(task, tasks, environment)

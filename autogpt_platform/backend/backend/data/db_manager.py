@@ -611,6 +611,8 @@ class DatabaseManager(AppService):
     )
     answer_workspace_task_from_chat = _(tasks_db.answer_workspace_task_from_chat)
     start_workspace_task_run = _(tasks_db.start_workspace_task_run)
+    workspace_task_assignees = _(tasks_db.workspace_task_assignees)
+    workspace_task_organizations = _(tasks_db.workspace_task_organizations)
     workspace_task_planning_inputs = _(tasks_db.workspace_task_planning_inputs)
     reconsider_workspace_task_plans = _(tasks_db.reconsider_workspace_task_plans)
     workspace_task_planning_users = _(tasks_db.workspace_task_planning_users)
@@ -897,6 +899,8 @@ class DatabaseManagerAsyncClient(AppServiceClient):
 
     answer_workspace_task_from_chat = d.answer_workspace_task_from_chat
     start_workspace_task_run = d.start_workspace_task_run
+    workspace_task_assignees = d.workspace_task_assignees
+    workspace_task_organizations = d.workspace_task_organizations
     workspace_task_planning_inputs = d.workspace_task_planning_inputs
     reconsider_workspace_task_plans = d.reconsider_workspace_task_plans
     workspace_task_planning_users = d.workspace_task_planning_users

@@ -8,7 +8,9 @@ async def task_context_block(
 ) -> str:
     brief = (context or {}).get("workspace_task", "")
     if not brief and session.metadata.workspace_task_id and session.user_id:
-        tasks = await tasks_db().list_workspace_tasks(session.user_id)
+        tasks = await tasks_db().list_workspace_tasks(
+            session.user_id, organization_id=session.organization_id
+        )
         task = next((t for t in tasks if t.session_id == session.session_id), None)
         brief = (
             execution_context(task, tasks)

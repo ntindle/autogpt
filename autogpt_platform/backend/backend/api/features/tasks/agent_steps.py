@@ -1,6 +1,5 @@
 from uuid import NAMESPACE_URL, uuid5
 
-from backend.api.features.experts import experts_db
 from backend.api.features.tasks.commands import apply_command
 from backend.api.features.tasks.domain import (
     TaskConflict,
@@ -9,11 +8,13 @@ from backend.api.features.tasks.domain import (
     record,
 )
 from backend.api.features.tasks.models import TaskAssignee, TaskCommand, WorkspaceTask
+from backend.api.features.tasks.planning_inputs import workspace_task_assignees
 from backend.api.features.tasks.repository import (
-    _load,
+    _load_for_session,
     _lock,
     _prepare_dispatches,
     _save,
+    session_organization,
 )
 from backend.data.db import prisma
 
@@ -28,10 +29,11 @@ async def add_workspace_task_step(
     dependencies: list[str] | None = None,
     parent_id: str | None = None,
 ) -> WorkspaceTask:
-    assignee = await _eligible_assignee(user_id, assignee)
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load_for_session(tx, user_id, session_id)
+        organization_id = await session_organization(tx, user_id, session_id)
+        assignee = await _eligible_assignee(user_id, assignee, organization_id)
         linked = next((t for t in tasks if t.session_id == session_id), None)
         root = (
             next((t for t in tasks if t.id == parent_id), None) if parent_id else linked
@@ -108,20 +110,16 @@ async def add_workspace_task_step(
 
 
 async def _eligible_assignee(
-    user_id: str, assignee: TaskAssignee | None
+    user_id: str, assignee: TaskAssignee | None, organization_id: str | None = None
 ) -> TaskAssignee | None:
     if assignee and assignee.kind == "expert":
-        expert = await experts_db.get_expert(user_id, assignee.id)
-        if not expert or expert.is_archived or expert.schedules_paused_at:
-            raise TaskConflict("Expert is not available for this work")
-        assignee = TaskAssignee(
-            kind="expert",
-            id=expert.id,
-            name=expert.name,
-            avatar_url=expert.avatar_url,
-            color=expert.color,
-            role=expert.role,
+        candidates = await workspace_task_assignees(user_id, organization_id)
+        canonical = next(
+            (c for c in candidates if c.kind == "expert" and c.id == assignee.id), None
         )
+        if canonical is None:
+            raise TaskConflict("Expert is not available for this work")
+        assignee = canonical
     if assignee and assignee.kind == "human" and assignee.id != user_id:
         raise TaskConflict("This person is not an eligible assignee")
     return assignee
@@ -130,13 +128,14 @@ async def _eligible_assignee(
 async def assign_workspace_task_step(
     user_id: str, session_id: str, task_id: str, assignee: TaskAssignee
 ) -> WorkspaceTask:
-    canonical = await _eligible_assignee(user_id, assignee)
-    if canonical is None:
-        raise TaskConflict("Choose an eligible assignee")
-    assignee = canonical
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load_for_session(tx, user_id, session_id)
+        organization_id = await session_organization(tx, user_id, session_id)
+        canonical = await _eligible_assignee(user_id, assignee, organization_id)
+        if canonical is None:
+            raise TaskConflict("Choose an eligible assignee")
+        assignee = canonical
         root = next((t for t in tasks if t.session_id == session_id), None)
         if (
             not root

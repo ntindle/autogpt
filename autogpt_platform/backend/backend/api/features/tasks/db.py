@@ -36,6 +36,12 @@ from backend.api.features.tasks.planning_db import (
     finish_workspace_task_suggestion as finish_workspace_task_suggestion,
 )
 from backend.api.features.tasks.planning_inputs import (
+    workspace_task_assignees as workspace_task_assignees,
+)
+from backend.api.features.tasks.planning_inputs import (
+    workspace_task_organizations as workspace_task_organizations,
+)
+from backend.api.features.tasks.planning_inputs import (
     workspace_task_planning_inputs as workspace_task_planning_inputs,
 )
 from backend.api.features.tasks.planning_refresh_db import (
@@ -65,8 +71,10 @@ from backend.api.features.tasks.schedule_db import (
 from backend.data.db import prisma
 
 
-async def list_workspace_tasks(user_id: str) -> list[WorkspaceTask]:
-    return await _load(prisma, user_id)
+async def list_workspace_tasks(
+    user_id: str, organization_id: str | None = None
+) -> list[WorkspaceTask]:
+    return await _load(prisma, user_id, organization_id=organization_id)
 
 
 async def create_workspace_task(
@@ -77,13 +85,23 @@ async def create_workspace_task(
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         existing = next((t for t in tasks if t.id == request.id), None)
         if existing:
             return existing
         if len(tasks) >= 1000:
             raise TaskConflict("This workspace has reached 1,000 tasks")
         parent = _get(tasks, request.parent_id) if request.parent_id else None
+        if source_session_id:
+            from backend.api.features.tasks.repository import organization_scope
+
+            source = await tx.chatsession.find_first(
+                where={"id": source_session_id, "userId": user_id}
+            )
+            if not source or source.organizationId not in await organization_scope(
+                tx, user_id, organization_id
+            ):
+                raise TaskConflict("Source conversation is not in this workspace")
         task = WorkspaceTask(
             **request.model_dump(),
             user_id=user_id,
@@ -106,16 +124,17 @@ async def command_workspace_task(
     command: TaskCommand,
     actor: str | None = None,
     manager_session_id: str | None = None,
+    organization_id: str | None = None,
 ) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         task = _get(tasks, task_id)
         if manager_session_id:
             from backend.api.features.tasks.management import authorize_task_manager
 
             await authorize_task_manager(
-                tx, user_id, manager_session_id, tasks, command
+                tx, user_id, manager_session_id, tasks, command, organization_id
             )
             actor = "AutoPilot"
         previous_session_id = task.session_id
@@ -150,11 +169,11 @@ async def command_workspace_task(
 
 
 async def claim_workspace_task_dispatch(
-    user_id: str, task_id: str
+    user_id: str, task_id: str, organization_id: str | None = None
 ) -> WorkspaceTask | None:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load(tx, user_id, organization_id=organization_id)
         task = _get(tasks, task_id)
         if task.dispatch_state != "pending" or not is_runnable(task, tasks):
             return None
@@ -173,10 +192,11 @@ async def update_workspace_task_dispatch(
     state: str,
     error: str = "",
     message: str = "",
+    organization_id: str | None = None,
 ) -> None:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        task = _get(await _load(tx, user_id), task_id)
+        task = _get(await _load(tx, user_id, organization_id=organization_id), task_id)
         if task.dispatch_id != dispatch_id or task.dispatch_state != "claimed":
             return
         if state == "sent":
@@ -197,10 +217,12 @@ async def update_workspace_task_dispatch(
         await _save(tx, task)
 
 
-async def bind_workspace_task_session(user_id: str, task_id: str) -> WorkspaceTask:
+async def bind_workspace_task_session(
+    user_id: str, task_id: str, organization_id: str | None = None
+) -> WorkspaceTask:
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        task = _get(await _load(tx, user_id), task_id)
+        task = _get(await _load(tx, user_id, organization_id=organization_id), task_id)
         if not task.session_id:
             task.session_id = str(uuid4())
             await _save(tx, task)

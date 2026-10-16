@@ -35,9 +35,11 @@ This is a recommendation only. No work is executed or assigned by this response.
 
 
 async def suggest_task_assignee(
-    user_id: str, task_id: str, force: bool = False
+    user_id: str, task_id: str, force: bool = False, organization_id: str | None = None
 ) -> None:
-    task = await tasks_db().begin_workspace_task_suggestion(user_id, task_id, force)
+    task = await tasks_db().begin_workspace_task_suggestion(
+        user_id, task_id, force, organization_id=organization_id
+    )
     if task:
         await generate_task_suggestion(user_id, task)
 
@@ -45,10 +47,17 @@ async def suggest_task_assignee(
 async def generate_task_suggestion(user_id: str, task: WorkspaceTask) -> None:
     suggestion, alternatives, error = None, [], ""
     try:
-        inputs = await tasks_db().workspace_task_planning_inputs(user_id, task.id)
+        inputs = await tasks_db().workspace_task_planning_inputs(
+            user_id, task.id, organization_id=task.organization_id
+        )
         if task.suggestion_context and inputs.fingerprint != task.suggestion_context:
             await tasks_db().finish_workspace_task_suggestion(
-                user_id, task.id, task.suggestion_request_id, None, []
+                user_id,
+                task.id,
+                task.suggestion_request_id,
+                None,
+                [],
+                organization_id=task.organization_id,
             )
             return
         candidates = inputs.candidates
@@ -72,5 +81,11 @@ async def generate_task_suggestion(user_id: str, task: WorkspaceTask) -> None:
         suggestion, alternatives = None, []
         error = "Could not get an owner suggestion from the configured model. Try again or choose an owner."
     await tasks_db().finish_workspace_task_suggestion(
-        user_id, task.id, task.suggestion_request_id, suggestion, alternatives, error
+        user_id,
+        task.id,
+        task.suggestion_request_id,
+        suggestion,
+        alternatives,
+        error,
+        organization_id=task.organization_id,
     )

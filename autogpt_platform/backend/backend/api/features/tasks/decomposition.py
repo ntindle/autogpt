@@ -62,10 +62,12 @@ async def generate_task_breakdown(user_id: str, task: WorkspaceTask) -> None:
         return
     steps, error = [], ""
     try:
-        inputs = await tasks_db().workspace_task_planning_inputs(user_id, task.id)
+        inputs = await tasks_db().workspace_task_planning_inputs(
+            user_id, task.id, organization_id=task.organization_id
+        )
         if inputs.fingerprint != preview.context:
             await tasks_db().finish_workspace_task_breakdown(
-                user_id, task.id, preview.id, []
+                user_id, task.id, preview.id, [], organization_id=task.organization_id
             )
             return
         candidates = inputs.candidates
@@ -86,7 +88,7 @@ async def generate_task_breakdown(user_id: str, task: WorkspaceTask) -> None:
         logger.warning("Task breakdown failed for %s", task.id, exc_info=True)
         error = "Could not generate steps with the configured model. Try again; your existing work is unchanged."
     await tasks_db().finish_workspace_task_breakdown(
-        user_id, task.id, preview.id, steps, error
+        user_id, task.id, preview.id, steps, error, organization_id=task.organization_id
     )
 
 
@@ -111,9 +113,12 @@ def resolve_steps(
 
 
 async def accept_task_breakdown(
-    user_id: str, task_id: str, request: TaskBreakdownAccept
+    user_id: str,
+    task_id: str,
+    request: TaskBreakdownAccept,
+    organization_id: str | None = None,
 ) -> WorkspaceTask:
-    candidates = await task_assignees(user_id)
+    candidates = await task_assignees(user_id, organization_id=organization_id)
     for step in request.steps:
         if step.assignee:
             canonical = next(
@@ -131,6 +136,8 @@ async def accept_task_breakdown(
             step.assignee = canonical.model_copy(
                 update={"reason": step.assignee.reason}
             )
-    task = await tasks_db().accept_workspace_task_breakdown(user_id, task_id, request)
-    await dispatch_user_tasks(user_id)
+    task = await tasks_db().accept_workspace_task_breakdown(
+        user_id, task_id, request, organization_id=organization_id
+    )
+    await dispatch_user_tasks(user_id, organization_id=organization_id)
     return task

@@ -24,7 +24,9 @@ async def manage_existing_task(
     try:
         if session.expert_id:
             raise TaskConflict("Only AutoPilot can manage tasks across your workspace")
-        tasks = await tasks_db().list_workspace_tasks(user_id)
+        tasks = await tasks_db().list_workspace_tasks(
+            user_id, organization_id=session.organization_id
+        )
         target = next((task for task in tasks if task.id == task_id), None)
         if not target:
             raise TaskConflict("Use list to find an existing task in your workspace")
@@ -65,7 +67,11 @@ async def manage_existing_task(
             )
         command = TaskCommand.model_validate(fields)
         updated = await execute_task_command(
-            user_id, target.id, command, manager_session_id=session.session_id
+            user_id,
+            target.id,
+            command,
+            manager_session_id=session.session_id,
+            organization_id=session.organization_id,
         )
         return WorkspaceTasksResponse(
             message=(

@@ -138,7 +138,9 @@ class AskQuestionTool(BaseTool):
         if targeted:
             from backend.api.features.tasks.service import task_assignees
 
-            roster = await task_assignees(session.user_id)
+            roster = await task_assignees(
+                session.user_id, organization_id=session.organization_id
+            )
             for q in questions:
                 if q.target_kind == "human":
                     targets.append(None)

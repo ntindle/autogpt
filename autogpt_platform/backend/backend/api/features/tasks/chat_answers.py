@@ -2,7 +2,7 @@ from backend.api.features.tasks.domain import TaskConflict, is_runnable, record
 from backend.api.features.tasks.models import WorkspaceTask
 from backend.api.features.tasks.question_routing import refresh_question_state
 from backend.api.features.tasks.question_sync import sync_task_question
-from backend.api.features.tasks.repository import _load, _lock, _save
+from backend.api.features.tasks.repository import _load_for_session, _lock, _save
 from backend.data.db import prisma
 
 
@@ -17,7 +17,7 @@ async def answer_workspace_task_from_chat(
 
     async with prisma.tx() as tx:
         await _lock(tx, user_id)
-        tasks = await _load(tx, user_id)
+        tasks = await _load_for_session(tx, user_id, session_id)
         task = next((t for t in tasks if t.session_id == session_id), None)
         if not task or task.status in ("done", "canceled"):
             raise TaskConflict(
