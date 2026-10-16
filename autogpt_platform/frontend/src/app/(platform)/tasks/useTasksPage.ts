@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import {
   useCommandWorkspaceTask,
   useListWorkspaceTasks,
@@ -16,15 +17,27 @@ import { useTaskView } from "./useTaskView";
 
 export function useTasksPage() {
   const { user } = useAuth();
+  const scope = useTaskScope();
   const query = useListWorkspaceTasks({
-    query: { select: okData, refetchInterval: 5000 },
+    request: scope.request,
+    query: {
+      select: okData,
+      refetchInterval: 5000,
+      enabled: scope.ready,
+      queryKey: scope.queryKey(["/api/tasks"]),
+    },
   });
-  const mutate = useCommandWorkspaceTask();
+  const useCommandWorkspaceTaskScope = useTaskScope();
+  const mutate = useCommandWorkspaceTask({
+    request: useCommandWorkspaceTaskScope.request,
+  });
   const cache = useQueryClient();
   const router = useRouter();
   const { toast } = useToast();
   const tasks = normalizeTasks(query.data?.tasks ?? []);
-  const view = useTaskView(user?.id ?? "signed-out");
+  const view = useTaskView(
+    `${user?.id ?? "signed-out"}:${scope.organizationId ?? "personal"}`,
+  );
 
   async function refresh() {
     await invalidateTaskSurfaces(cache);

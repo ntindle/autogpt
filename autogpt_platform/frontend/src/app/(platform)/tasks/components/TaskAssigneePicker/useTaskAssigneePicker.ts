@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import {
   useSuggestWorkspaceTaskOwner,
@@ -26,7 +27,10 @@ export function useTaskAssigneePicker({
   const savingRef = useRef(false);
   const focusAfterSave = useRef(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const suggest = useSuggestWorkspaceTaskOwner();
+  const useSuggestWorkspaceTaskOwnerScope = useTaskScope();
+  const suggest = useSuggestWorkspaceTaskOwner({
+    request: useSuggestWorkspaceTaskOwnerScope.request,
+  });
   const cache = useQueryClient();
   const identity = task.assignee ?? task.suggestion;
   const suggested = !task.assignee && Boolean(task.suggestion);

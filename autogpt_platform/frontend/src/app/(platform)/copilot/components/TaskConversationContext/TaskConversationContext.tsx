@@ -1,3 +1,4 @@
+import { useTaskScope } from "@/services/tasks/TaskScopeContext";
 import Link from "next/link";
 import { useGetWorkspaceTaskContext } from "@/app/api/__generated__/endpoints/tasks/tasks";
 import { okData } from "@/app/api/helpers";
@@ -8,8 +9,15 @@ interface Props {
 }
 
 export function TaskConversationContext({ sessionId }: Props) {
+  const scope = useTaskScope();
   const query = useGetWorkspaceTaskContext(sessionId, {
-    query: { select: okData, refetchInterval: 5000 },
+    request: scope.request,
+    query: {
+      select: okData,
+      refetchInterval: 5000,
+      enabled: scope.ready,
+      queryKey: scope.queryKey([`/api/tasks/conversation/${sessionId}`]),
+    },
   });
   if (query.isLoading)
     return (

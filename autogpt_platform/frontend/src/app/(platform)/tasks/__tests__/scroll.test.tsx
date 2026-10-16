@@ -10,7 +10,7 @@ import { Profiler } from "react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import TasksPage from "../page";
 
-const key = "autogpt.tasks.view.v1:scroll-user";
+const key = "autogpt.tasks.view.v1:scroll-user:personal";
 const initialView = {
   filter: "All",
   project: "",
