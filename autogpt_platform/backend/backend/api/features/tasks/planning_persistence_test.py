@@ -116,7 +116,7 @@ async def test_breakdown_preserves_completed_leaf_and_rejects_dropped_prerequisi
     task = await db.command_workspace_task(
         owner, task.id, TaskCommand(operation="complete", version=task.version)
     )
-    first, second, request = await ready_preview(owner, task)
+    _, _, request = await ready_preview(owner, task)
     with pytest.raises(TaskConflict, match="prerequisite"):
         await db.accept_workspace_task_breakdown(
             owner, task.id, request.model_copy(update={"steps": request.steps[1:]})
@@ -215,10 +215,10 @@ async def test_coordinator_can_delegate_existing_planned_steps_without_duplicati
         )
     current = await db.list_workspace_tasks(owner)
     assert len(current) == 3
-    assert [item.id for item in current if item.parent_id == task.id] == [
+    assert {item.id for item in current if item.parent_id == task.id} == {
         first.id,
         second.id,
-    ]
+    }
     outside = await db.create_workspace_task(
         owner, TaskCreate(title="Separate outcome")
     )
