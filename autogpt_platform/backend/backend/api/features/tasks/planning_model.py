@@ -19,7 +19,10 @@ async def planning_roster(
 ) -> tuple[list[TaskAssignee], list[dict]]:
     candidates = await task_assignees(user_id, organization_id=organization_id)
     experts = {
-        e.id: e for e in await experts_db().list_experts(user_id, with_metrics=False)
+        e.id: e
+        for e in await experts_db().list_experts(
+            user_id, with_metrics=False, organization_id=organization_id
+        )
     }
     roster = []
     for candidate in candidates:
