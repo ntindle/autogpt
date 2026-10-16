@@ -1,9 +1,9 @@
 import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import {
   useGrantExpertCredentials,
-  useListExpertCredentials,
   useRevokeExpertCredential,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+} from "@/services/experts/scoped-mutations";
+import { useListExpertCredentials } from "@/services/experts/scoped-queries";
 import { useGetV1ListCredentials } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import type { CredentialsMetaResponse } from "@/app/api/__generated__/models/credentialsMetaResponse";
 import { okData } from "@/app/api/helpers";

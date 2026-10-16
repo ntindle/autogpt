@@ -1,8 +1,8 @@
 import {
   getGetExpertQueryKey,
   getListExpertsQueryKey,
-  useUpdateExpertBudget,
 } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useUpdateExpertBudget } from "@/services/experts/scoped-mutations";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { CREDITS_PER_USD, parseUsdToCredits } from "@/lib/credits";

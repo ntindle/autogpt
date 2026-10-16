@@ -1,4 +1,4 @@
-import { useListCopilotSkills } from "@/app/api/__generated__/endpoints/skills/skills";
+import { useListCopilotSkills } from "@/services/skills/scoped-queries";
 import { okData } from "@/app/api/helpers";
 import { useState } from "react";
 

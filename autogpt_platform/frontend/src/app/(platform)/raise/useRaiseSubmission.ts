@@ -1,4 +1,4 @@
-import { useCreateRaisedExpert } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useCreateRaisedExpert } from "@/services/experts/scoped-mutations";
 import type { RaiseResult } from "@/app/api/__generated__/models/raiseResult";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { ApiError } from "@/lib/autogpt-server-api/helpers";

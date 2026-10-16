@@ -1,4 +1,4 @@
-import { useListExpertCredentials } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExpertCredentials } from "@/services/experts/scoped-queries";
 import { okData } from "@/app/api/helpers";
 
 export function useExpertIntegrations(expertId: string | null) {

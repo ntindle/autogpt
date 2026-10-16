@@ -1,7 +1,5 @@
-import {
-  useGenerateExpertAvatar,
-  useGetExpertAvatarGeneration,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { useGenerateExpertAvatar } from "@/services/experts/scoped-mutations";
+import { useGetExpertAvatarGeneration } from "@/services/experts/scoped-queries";
 import type { ExpertAvatarRequest } from "@/app/api/__generated__/models/expertAvatarRequest";
 import { useRef, useState } from "react";
 

@@ -2,10 +2,8 @@ import {
   getGetV2ListLibraryAgentsQueryKey,
   useGetV2ListLibraryAgents,
 } from "@/app/api/__generated__/endpoints/library/library";
-import {
-  getListCopilotSkillsQueryKey,
-  useListCopilotSkills,
-} from "@/app/api/__generated__/endpoints/skills/skills";
+import { getListCopilotSkillsQueryKey } from "@/app/api/__generated__/endpoints/skills/skills";
+import { useListCopilotSkills } from "@/services/skills/scoped-queries";
 import {
   getGetV2ListStoreAgentsQueryKey,
   useGetV2ListMarketplaceSkills,

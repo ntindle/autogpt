@@ -1,8 +1,8 @@
+import { getListExpertsQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
 import {
-  getListExpertsQueryKey,
   useHireExpert,
   useResumeExpertSchedules,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+} from "@/services/experts/scoped-mutations";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useQueryClient } from "@tanstack/react-query";

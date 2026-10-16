@@ -1,9 +1,9 @@
 import {
   getListExpertCredentialsQueryKey,
-  useListExpertCredentials,
   type grantExpertCredentialsResponse,
   type listExpertCredentialsResponseSuccess,
 } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExpertCredentials } from "@/services/experts/scoped-queries";
 import { okData } from "@/app/api/helpers";
 import { findSavedUserCredentialByProviderAndType } from "@/components/contextual/CredentialsInput/components/CredentialsGroupedView/helpers";
 import type { CredentialsMetaInput } from "@/lib/autogpt-server-api/types";

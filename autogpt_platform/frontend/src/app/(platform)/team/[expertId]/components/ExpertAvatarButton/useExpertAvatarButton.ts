@@ -2,8 +2,8 @@ import {
   getGetExpertQueryKey,
   getListExpertsQueryKey,
   getListExpertIdentitiesQueryKey,
-  useUpdateExpertAvatar,
 } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useUpdateExpertAvatar } from "@/services/experts/scoped-mutations";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";

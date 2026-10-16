@@ -1,8 +1,8 @@
+import { getListCopilotSkillsQueryKey } from "@/app/api/__generated__/endpoints/skills/skills";
 import {
-  getListCopilotSkillsQueryKey,
   useUploadCopilotSkill,
   useUploadCopilotSkillPackage,
-} from "@/app/api/__generated__/endpoints/skills/skills";
+} from "@/services/skills/scoped-mutations";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useRef } from "react";

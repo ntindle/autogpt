@@ -1,9 +1,9 @@
 import {
   getGetExpertQueryKey,
   getListExpertsQueryKey,
-  useInstallExpertWorkflow,
-  useListExperts,
 } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useInstallExpertWorkflow } from "@/services/experts/scoped-mutations";
+import { useListExperts } from "@/services/experts/scoped-queries";
 import {
   getGetV2ListLibraryAgentsQueryKey,
   useGetV2ListLibraryAgentsInfinite,

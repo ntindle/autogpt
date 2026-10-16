@@ -1,6 +1,6 @@
 import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 import { useGetV1ListCredentials } from "@/app/api/__generated__/endpoints/integrations/integrations";
-import { useListExpertCredentials } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExpertCredentials } from "@/services/experts/scoped-queries";
 import { connectedIntegrationsFromCredentials } from "./helpers";
 
 export function useConnectedIntegrations(expertId?: string | null) {

@@ -1,10 +1,14 @@
 import {
+  pinnedResourceRequest,
+  usePrivateResourceScope,
+} from "@/services/org-team/private-resource-scope";
+import {
   downloadCopilotSkillPackage,
   getListCopilotSkillsQueryKey,
   readCopilotSkill,
-  useDeleteCopilotSkill,
-  useReadCopilotSkill,
 } from "@/app/api/__generated__/endpoints/skills/skills";
+import { useDeleteCopilotSkill } from "@/services/skills/scoped-mutations";
+import { useReadCopilotSkill } from "@/services/skills/scoped-queries";
 import type { CopilotSkillInfo } from "@/app/api/__generated__/models/copilotSkillInfo";
 import type { CopilotSkillDetail } from "@/app/api/__generated__/models/copilotSkillDetail";
 import { useToast } from "@/components/molecules/Toast/use-toast";
@@ -22,6 +26,7 @@ interface Args {
 }
 
 export function useSkillListItem({ skill }: Args) {
+  const scope = usePrivateResourceScope();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
@@ -79,13 +84,21 @@ export function useSkillListItem({ skill }: Args) {
   async function handleDownload() {
     setIsDownloading(true);
     try {
-      const res = await readCopilotSkill(skill.name);
+      const res = await readCopilotSkill(
+        skill.name,
+        undefined,
+        pinnedResourceRequest(scope),
+      );
       if (res.status !== 200) {
         throw new Error(`Failed to download skill (HTTP ${res.status})`);
       }
       const skillDetail = res.data as CopilotSkillDetail;
       if (skillDetail.files?.length) {
-        const archive = await downloadCopilotSkillPackage(skill.name);
+        const archive = await downloadCopilotSkillPackage(
+          skill.name,
+          undefined,
+          pinnedResourceRequest(scope),
+        );
         if (archive.status !== 200) {
           throw new Error(`Failed to download skill (HTTP ${archive.status})`);
         }

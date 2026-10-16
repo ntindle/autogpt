@@ -1,6 +1,6 @@
 "use client";
 
-import { useGetExpertDetachPreview } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useGetExpertDetachPreview } from "@/services/experts/scoped-queries";
 import { useListWorkspaceFiles } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import { okData } from "@/app/api/helpers";
 import { isInternalToolOutput } from "@/app/(platform)/copilot/components/ContextPanel/components/FilesTab/helpers";

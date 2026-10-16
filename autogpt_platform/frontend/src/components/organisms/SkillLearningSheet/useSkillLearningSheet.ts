@@ -1,13 +1,13 @@
+import { getGetSkillLearningDetailQueryKey } from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
 import {
-  getGetSkillLearningDetailQueryKey,
   useDecideSkillLearningProposal,
   useEditLearnedSkill,
   useExcludeSkillLearningSource,
-  useGetSkillLearningDetail,
   useReportSkillOutcome,
   useRestoreLearnedSkillVersion,
   useUpdateSkillLearningPolicy,
-} from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
+} from "@/services/skill-learning/scoped-mutations";
+import { useGetSkillLearningDetail } from "@/services/skill-learning/scoped-queries";
 import { getListCopilotSkillsQueryKey } from "@/app/api/__generated__/endpoints/skills/skills";
 import { DecisionRequestAction } from "@/app/api/__generated__/models/decisionRequestAction";
 import { LearningActionResult } from "@/app/api/__generated__/models/learningActionResult";

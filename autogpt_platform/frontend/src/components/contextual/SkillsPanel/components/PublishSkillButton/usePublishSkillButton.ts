@@ -1,4 +1,4 @@
-import { usePostV2PublishSkillToMarketplace } from "@/app/api/__generated__/endpoints/store/store";
+import { usePostV2PublishSkillToMarketplace } from "@/services/skills/marketplace/scoped-mutations";
 import { useGetV1ListProviders } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import { formatProviderName } from "@/components/contextual/IntegrationsPanel/helpers";
 import { useToast } from "@/components/molecules/Toast/use-toast";

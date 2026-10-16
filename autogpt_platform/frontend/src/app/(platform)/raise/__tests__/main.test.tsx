@@ -273,7 +273,7 @@ test("refreshes the expert roster before opening the kickoff thread", async () =
 
   await waitFor(() =>
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=raised-1&kickoff=1",
+      "/copilot?expertId=raised-1&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     ),
   );
   expect(invalidateRosterMock).toHaveBeenCalledTimes(1);
@@ -569,7 +569,7 @@ test("drops the skills beat and raises from the marketplace step when there is n
   expect(captured).toMatchObject({ weekly_budget: 500, attachments: [] });
   await waitFor(() =>
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=raised-1&kickoff=1",
+      "/copilot?expertId=raised-1&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     ),
   );
 });

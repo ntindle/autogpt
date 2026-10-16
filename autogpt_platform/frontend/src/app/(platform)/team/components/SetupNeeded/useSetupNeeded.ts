@@ -1,7 +1,5 @@
-import {
-  useGrantExpertCredentials,
-  useListExpertSetupItems,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { useGrantExpertCredentials } from "@/services/experts/scoped-mutations";
+import { useListExpertSetupItems } from "@/services/experts/scoped-queries";
 import { useGetV1ListProviders } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import type { CredentialsMetaResponse } from "@/app/api/__generated__/models/credentialsMetaResponse";
 import type { ExpertSetupItem } from "@/app/api/__generated__/models/expertSetupItem";

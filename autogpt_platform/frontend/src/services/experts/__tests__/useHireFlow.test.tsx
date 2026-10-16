@@ -122,7 +122,7 @@ describe("useHireFlow", () => {
 
     expect(result.current.isVoicePickOpen).toBe(false);
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=expert-maria&kickoff=1",
+      "/copilot?expertId=expert-maria&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     );
   });
 
@@ -163,7 +163,7 @@ describe("useHireFlow", () => {
 
     expect(result.current.isVoicePickOpen).toBe(false);
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=expert-maria&kickoff=1",
+      "/copilot?expertId=expert-maria&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     );
   });
 
@@ -176,7 +176,7 @@ describe("useHireFlow", () => {
 
     expect(result.current.isVoicePickOpen).toBe(false);
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=expert-maria&kickoff=1",
+      "/copilot?expertId=expert-maria&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     );
   });
 
@@ -195,7 +195,7 @@ describe("useHireFlow", () => {
       stage: "voice",
     });
     expect(pushMock).toHaveBeenCalledWith(
-      "/copilot?expertId=expert-maria&kickoff=1",
+      "/copilot?expertId=expert-maria&organizationId=__personal__&teamId=__org_home__&kickoff=1",
     );
   });
 

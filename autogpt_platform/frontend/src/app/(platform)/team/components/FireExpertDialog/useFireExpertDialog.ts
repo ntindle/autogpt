@@ -1,9 +1,7 @@
 import { getGetHomeDashboardQueryKey } from "@/app/api/__generated__/endpoints/home/home";
-import {
-  getGetExpertQueryKey,
-  useArchiveExpert,
-  useGetExpertDetachPreview,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { getGetExpertQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useArchiveExpert } from "@/services/experts/scoped-mutations";
+import { useGetExpertDetachPreview } from "@/services/experts/scoped-queries";
 import { okData } from "@/app/api/helpers";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { invalidateExpertRosterQueries } from "@/services/experts/invalidate-experts";
