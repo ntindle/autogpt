@@ -29362,6 +29362,21 @@
             "anyOf": [{ "type": "number" }, { "type": "null" }],
             "title": "Elapsed Seconds"
           },
+          "organization_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Organization Id"
+          },
+          "expert_id": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "title": "Expert Id"
+          },
+          "scope_results": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/NightlyBatchResult"
+            },
+            "type": "object",
+            "title": "Scope Results"
+          },
           "dream": {
             "anyOf": [
               { "$ref": "#/components/schemas/DreamPassResult" },
