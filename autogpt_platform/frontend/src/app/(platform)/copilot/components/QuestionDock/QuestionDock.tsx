@@ -1,7 +1,21 @@
 "use client";
 
 import type { UIDataTypes, UIMessage, UITools } from "ai";
-import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import {
+  isAnswered,
+  toAnswerText,
+  toMultiAnswer,
+  type QuestionAnswer,
+} from "../../tools/clarifying-questions";
+import { QuestionMultiAnswerField } from "../ChainActionCard/QuestionMultiAnswerField";
 import { CopilotChatActionsContext } from "../CopilotChatActionsProvider/useCopilotChatActions";
 import { ChainActionsContext } from "../ToolChain/chainActions";
 import {
@@ -37,7 +51,7 @@ interface AnswerProps extends FormProps {
   isPending?: boolean;
   renderRecipient?: (question: ClarifyingQuestion) => ReactNode;
   onAnswer?: (
-    answers: Record<string, string>,
+    answers: Record<string, QuestionAnswer>,
     context: string,
   ) => Promise<void>;
 }
@@ -51,10 +65,11 @@ export function QuestionAnswerForm({
 }: AnswerProps) {
   const actions = useContext(CopilotChatActionsContext);
   const chainActions = useContext(ChainActionsContext);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<Record<string, QuestionAnswer>>({});
   const [dismissedId, setDismissedId] = useState<string | null>(null);
   const [renderedDockId, setRenderedDockId] = useState<string | null>(null);
-  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const inputRefs = useRef<Record<string, { focus: () => void } | null>>({});
+  const formId = useId();
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -70,7 +85,7 @@ export function QuestionAnswerForm({
   const allAnswered =
     !isPending &&
     humanQuestions.length > 0 &&
-    humanQuestions.every((q) => answers[q.keyword]?.trim());
+    humanQuestions.every((q) => isAnswered(answers[q.keyword]));
 
   // Inside a tool chain the Answer button is replaced by the chain's single
   // Proceed step — register readiness + message instead.
@@ -127,7 +142,9 @@ export function QuestionAnswerForm({
     if (chainActions) return;
     if (!actions) return;
     if (!allAnswered) {
-      const unanswered = questions.find((q) => !answers[q.keyword]?.trim());
+      const unanswered = humanQuestions.find(
+        (q) => !isAnswered(answers[q.keyword]),
+      );
       if (unanswered) inputRefs.current[unanswered.keyword]?.focus();
       return;
     }
@@ -167,31 +184,52 @@ export function QuestionAnswerForm({
       <div className="flex flex-col gap-2.5">
         {questions.map((q) => (
           <div key={q.keyword} className="flex flex-col gap-1">
-            <span className="text-[13px] text-zinc-700">{q.question}</span>
+            <span
+              id={`${formId}-${q.keyword}`}
+              className="text-[13px] text-zinc-700"
+            >
+              {q.question}
+            </span>
             {renderRecipient?.(q)}
             {questionNeedsHumanAnswer(q) ? (
-              <input
-                ref={(element) => {
-                  inputRefs.current[q.keyword] = element;
-                }}
-                type="text"
-                aria-label={q.question}
-                required
-                value={answers[q.keyword] ?? ""}
-                onChange={(e) =>
-                  setAnswers((prev) => ({
-                    ...prev,
-                    [q.keyword]: e.target.value,
-                  }))
-                }
-                onKeyDown={(e) => {
-                  if (isKey(e, "Enter")) handleSubmit();
-                }}
-                placeholder={
-                  q.example ? `e.g. ${q.example}` : "Type your answer"
-                }
-                className="rounded-xl bg-zinc-50 px-2.5 py-1.5 text-[13px] text-zinc-800 ring-1 ring-zinc-200/70 transition-shadow placeholder:text-zinc-400 focus:outline-none focus:ring-zinc-400"
-              />
+              q.allow_multiple && q.options?.length ? (
+                <QuestionMultiAnswerField
+                  ref={(element) => {
+                    inputRefs.current[q.keyword] = element;
+                  }}
+                  options={q.options}
+                  value={toMultiAnswer(answers[q.keyword])}
+                  labelId={`${formId}-${q.keyword}`}
+                  autoFocus={false}
+                  onChange={(value) =>
+                    setAnswers((prev) => ({ ...prev, [q.keyword]: value }))
+                  }
+                  onSubmit={handleSubmit}
+                />
+              ) : (
+                <input
+                  ref={(element) => {
+                    inputRefs.current[q.keyword] = element;
+                  }}
+                  type="text"
+                  aria-label={q.question}
+                  required
+                  value={toAnswerText(answers[q.keyword])}
+                  onChange={(e) =>
+                    setAnswers((prev) => ({
+                      ...prev,
+                      [q.keyword]: e.target.value,
+                    }))
+                  }
+                  onKeyDown={(e) => {
+                    if (isKey(e, "Enter")) handleSubmit();
+                  }}
+                  placeholder={
+                    q.example ? `e.g. ${q.example}` : "Type your answer"
+                  }
+                  className="rounded-xl bg-zinc-50 px-2.5 py-1.5 text-[13px] text-zinc-800 ring-1 ring-zinc-200/70 transition-shadow placeholder:text-zinc-400 focus:outline-none focus:ring-zinc-400"
+                />
+              )
             ) : null}
           </div>
         ))}

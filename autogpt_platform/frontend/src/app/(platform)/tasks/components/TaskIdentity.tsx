@@ -4,12 +4,10 @@ import {
   AvatarFallback,
   AvatarImage,
 } from "@/components/atoms/Avatar/Avatar";
-import { BotAvatar } from "@/components/molecules/BotAvatar/BotAvatar";
-import {
-  AUTOPILOT_AVATAR,
-  expertAvatarConfig,
-} from "@/components/molecules/BotAvatar/helpers";
-import { User } from "@phosphor-icons/react";
+import { AutopilotAvatar } from "@/components/molecules/AutopilotAvatar/AutopilotAvatar";
+import { ExpertAvatar } from "@/components/molecules/ExpertAvatar/ExpertAvatar";
+import { Icon } from "@/components/atoms/Icon/Icon";
+import { UserIcon } from "@hugeicons/core-free-icons";
 
 interface Props {
   assignee?: TaskAssignee | null;
@@ -22,23 +20,14 @@ export function TaskIdentity({ assignee }: Props) {
       title={assignee?.name ?? "Unassigned"}
     >
       {assignee?.kind === "expert" ? (
-        <BotAvatar
-          config={expertAvatarConfig({
-            name: assignee.name,
-            avatarUrl: assignee.avatar_url,
-            color: assignee.color ?? null,
-          })}
+        <ExpertAvatar
+          name={assignee.name}
+          avatarUrl={assignee.avatar_url ?? null}
+          color={assignee.color ?? null}
           size={26}
-          showBadge={false}
-          title={assignee.name}
         />
       ) : assignee?.kind === "auto" ? (
-        <BotAvatar
-          config={AUTOPILOT_AVATAR}
-          size={26}
-          showBadge={false}
-          title={assignee.name}
-        />
+        <AutopilotAvatar size={26} />
       ) : (
         <Avatar className="size-7 bg-zinc-100">
           <AvatarImage
@@ -49,7 +38,7 @@ export function TaskIdentity({ assignee }: Props) {
             {assignee ? (
               assignee.name.slice(0, 2).toUpperCase()
             ) : (
-              <User size={16} />
+              <Icon icon={UserIcon} size={16} />
             )}
           </AvatarFallback>
         </Avatar>

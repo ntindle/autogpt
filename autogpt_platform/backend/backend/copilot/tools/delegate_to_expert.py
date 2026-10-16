@@ -33,6 +33,8 @@ import time
 from typing import Any
 
 from backend.api.features.experts.models import Expert
+from backend.copilot.active_turns import spawn_limit_message
+from backend.copilot.budget_signal import build_spawn_state_note
 from backend.copilot.context import get_current_permissions
 from backend.copilot.model import (
     ChatSession,
@@ -49,6 +51,7 @@ from .expert_delegation import (
     chain_refusal,
     resolve_target_expert,
     safe_caller_name,
+    sent_from_metadata,
     unknown_target_message,
 )
 from .models import DelegatedExpertInfo, ErrorResponse, ToolResponseBase
@@ -84,7 +87,7 @@ class DelegateToExpertTool(BaseTool):
             f"work. Waits up to wait_for_result sec (max "
             f"{MAX_SUB_SESSION_WAIT_SECONDS}); if not done, returns "
             "status=running + sub_session_id — poll via "
-            "get_sub_session_result."
+            "tool:get_sub_session_result."
         )
 
     @property
@@ -99,6 +102,7 @@ class DelegateToExpertTool(BaseTool):
                         "<team_context>, or their exact name if you don't "
                         "have the id. Must not be you."
                     ),
+                    "entity": "expert_or_name",
                 },
                 "prompt": {
                     "type": "string",
@@ -107,11 +111,13 @@ class DelegateToExpertTool(BaseTool):
                         "context they need — they cannot see this "
                         "conversation."
                     ),
+                    "title": "Task",
                 },
                 "system_context": {
                     "type": "string",
                     "description": "Optional context prepended to the prompt.",
                     "default": "",
+                    "title": "Background",
                 },
                 "delegated_session_id": {
                     "type": "string",
@@ -119,6 +125,8 @@ class DelegateToExpertTool(BaseTool):
                         "Continue a prior delegation to this teammate; empty = new."
                     ),
                     "default": "",
+                    "title": "Continues",
+                    "entity": "chat_session",
                 },
                 "wait_for_result": {
                     "type": "integer",
@@ -127,6 +135,8 @@ class DelegateToExpertTool(BaseTool):
                         f"Clamped to {MAX_SUB_SESSION_WAIT_SECONDS}."
                     ),
                     "default": 60,
+                    "title": "Waits up to",
+                    "format": "seconds",
                 },
             },
             "required": ["expert_id", "prompt"],
@@ -198,6 +208,7 @@ class DelegateToExpertTool(BaseTool):
             # A teammate keeps their own teammates; depth still bounds the chain.
             spawn=SpawnRequest(may_spawn=True),
             allow_queue=False,
+            message_metadata=sent_from_metadata(session, caller),
         )
         elapsed = time.monotonic() - started_at
         discarded = (
@@ -208,7 +219,11 @@ class DelegateToExpertTool(BaseTool):
             # The thread is gone; handing back its id would send the model to
             # poll a delegation that no longer exists.
             return self._error(
-                result.refusal or f"{target.name} could not start this task.",
+                (
+                    spawn_limit_message()
+                    if outcome == "rejected_concurrent_turn_cap"
+                    else result.refusal or f"{target.name} could not start this task."
+                ),
                 session,
             )
         workspace_files = (
@@ -216,16 +231,18 @@ class DelegateToExpertTool(BaseTool):
             if outcome == "completed"
             else None
         )
+        delegated = response_from_outcome(
+            outcome=outcome,
+            result=result,
+            inner_session_id=inner_session_id,
+            parent_session_id=session.session_id,
+            elapsed=elapsed,
+            workspace_files=workspace_files,
+            actor=target.name,
+        )
+        delegated.message += await build_spawn_state_note()
         return apply_delegated_expert(
-            response_from_outcome(
-                outcome=outcome,
-                result=result,
-                inner_session_id=inner_session_id,
-                parent_session_id=session.session_id,
-                elapsed=elapsed,
-                workspace_files=workspace_files,
-                actor=target.name,
-            ),
+            delegated,
             DelegatedExpertInfo(
                 id=target.id,
                 name=target.name,
@@ -236,7 +253,9 @@ class DelegateToExpertTool(BaseTool):
         )
 
     def _error(self, message: str, session: ChatSession) -> ErrorResponse:
-        return ErrorResponse(message=message, session_id=session.session_id)
+        return ErrorResponse(
+            message=message, session_id=session.session_id
+        ).from_outside()
 
     async def _load_delegate_target(
         self, user_id: str, target_id: str, session: ChatSession

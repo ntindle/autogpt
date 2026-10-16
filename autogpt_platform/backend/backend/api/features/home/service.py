@@ -4,14 +4,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from autogpt_libs.auth.models import RequestContext
+from autogpt_libs.auth.permissions import OrgAction, check_org_permission
 from pydantic import BaseModel, ValidationError
 
-from backend.api.features.executions.activity_gate import (
-    hide_activity_summaries_if_disabled,
-)
-from backend.api.features.executions.review.model import PendingHumanReviewModel
 from backend.api.features.experts import experts_db
 from backend.api.features.experts.models import Expert
+from backend.api.features.graph_executions.activity_gate import (
+    hide_activity_summaries_if_disabled,
+)
+from backend.api.features.graph_executions.review.model import PendingHumanReviewModel
 from backend.api.features.library import db as library_db
 from backend.copilot import db as chat_db
 from backend.copilot.briefing.models import BriefingContent
@@ -30,6 +32,7 @@ from backend.data.execution_cost_summary import (
 from backend.executor.scheduler import CopilotTurnJobInfo, GraphExecutionJobInfo
 from backend.util.clients import get_scheduler_client
 from backend.util.feature_flag import Flag, is_feature_enabled
+from backend.util.settings import Settings
 from backend.util.timezone_utils import get_user_timezone_or_utc
 
 from .briefing import without_summaries
@@ -37,6 +40,7 @@ from .compose import compose_home_dashboard
 from .models import HomeDashboardResponse
 
 logger = logging.getLogger(__name__)
+settings = Settings()
 
 _EXECUTION_LIMIT = 300
 _REVIEW_LIMIT = 100
@@ -61,19 +65,19 @@ class HomeSourceData(BaseModel):
 async def build_home_dashboard(
     *,
     user_id: str,
-    organization_id: str | None = None,
+    ctx: RequestContext | None = None,
 ) -> HomeDashboardResponse:
     now = datetime.now(timezone.utc)
     week_start = now - timedelta(days=7)
     data = await _load_home_source_data(
         user_id=user_id,
-        organization_id=organization_id,
+        ctx=ctx,
         now=now,
         week_start=week_start,
     )
     graph_ids = list(
         {execution.graph_id for execution in data.executions}
-        | {review.graph_id for review in data.reviews}
+        | {review.graph_id for review in data.reviews if review.graph_id}
     )
     work_session_ids = list(
         {event.session_id for event in data.work_events if event.session_id}
@@ -155,7 +159,7 @@ async def _persisted_briefing(
 async def _load_home_source_data(
     *,
     user_id: str,
-    organization_id: str | None,
+    ctx: RequestContext | None,
     now: datetime,
     week_start: datetime,
 ) -> HomeSourceData:
@@ -180,9 +184,7 @@ async def _load_home_source_data(
         )
     )
     schedules_task = asyncio.create_task(_get_schedules(user_id=user_id))
-    credits_task = asyncio.create_task(
-        _get_credits(user_id=user_id, organization_id=organization_id)
-    )
+    credits_task = asyncio.create_task(_get_credits(user_id=user_id, ctx=ctx))
     questions_task = asyncio.create_task(_get_pending_questions(user_id=user_id))
     work_events_task = asyncio.create_task(
         _get_work_events(user_id=user_id, since=week_start)
@@ -225,8 +227,13 @@ async def _get_schedules(
     # Deliberately owner-scoped: executions, reviews and cost totals on this page
     # are all personal, so org/team schedules would surface upcoming runs whose
     # outcomes and approvals could never appear anywhere else on the dashboard.
+    # Bounded like the library's schedule badges: a slow scheduler costs the
+    # upcoming-runs rows, not the whole dashboard.
     try:
-        return await get_scheduler_client().get_execution_schedules(user_id=user_id)
+        return await asyncio.wait_for(
+            get_scheduler_client().get_execution_schedules(user_id=user_id),
+            timeout=settings.config.schedule_read_timeout_seconds,
+        )
     except Exception:
         logger.warning(
             "Home could not load schedules for user %s", user_id[:_LOG_ID_CHARS]
@@ -285,7 +292,13 @@ async def _get_session_titles(
         return {}
 
 
-async def _get_credits(*, user_id: str, organization_id: str | None) -> int | None:
+async def _get_credits(*, user_id: str, ctx: RequestContext | None) -> int | None:
+    # An org wallet is pooled and MANAGE_BILLING gates it on /credits, so a
+    # member without that permission must not read the same figure here.
+    # Personal orgs are unaffected: their membership row is always isOwner.
+    if ctx and ctx.org_id and not check_org_permission(ctx, OrgAction.MANAGE_BILLING):
+        return None
+    organization_id = ctx.org_id if ctx else None
     try:
         model = await get_credit_model(user_id, organization_id)
         return await model.get_credits(user_id, organization_id)

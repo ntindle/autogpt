@@ -11,7 +11,11 @@ import { QuestionAnswerForm } from "./QuestionDock";
 import type { PendingQuestions, TaskQuestionBinding } from "./helpers";
 import { TaskQuestionRecipient } from "../../../tasks/components/TaskQuestionRecipient";
 import { ClarificationQuestionsCard } from "../ClarificationQuestionsCard/ClarificationQuestionsCard";
-import type { ClarifyingQuestion } from "../../tools/clarifying-questions";
+import {
+  toAnswerText,
+  type ClarifyingQuestion,
+  type QuestionAnswer,
+} from "../../tools/clarifying-questions";
 import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import { invalidateTaskSurfaces } from "@/lib/taskSync";
 
@@ -58,11 +62,19 @@ export function TaskQuestionsForm({
       matching.status === "canceled")
   )
     return null;
-  async function submit(answers: Record<string, string>, context: string) {
+  async function submit(
+    answers: Record<string, QuestionAnswer>,
+    context: string,
+  ) {
     await answer(
       task?.id ?? taskBinding.taskID,
       taskBinding.questionID,
-      answers,
+      Object.fromEntries(
+        Object.entries(answers).map(([key, value]) => [
+          key,
+          toAnswerText(value),
+        ]),
+      ),
       context,
     );
   }

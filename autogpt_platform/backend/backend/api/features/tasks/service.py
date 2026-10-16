@@ -3,7 +3,6 @@ import logging
 from backend.api.features.tasks.domain import TaskConflict
 from backend.api.features.tasks.models import TaskAssignee, TaskCommand, WorkspaceTask
 from backend.copilot.active_turns import ConcurrentTurnLimitError
-from backend.copilot.builder_context import resolve_session_permissions
 from backend.copilot.config import ChatConfig
 from backend.copilot.executor.utils import enqueue_cancel_task, schedule_chat_turn
 from backend.copilot.model import (
@@ -17,6 +16,7 @@ from backend.copilot.rate_limit import (
     enforce_payment_paywall,
     get_global_rate_limits,
 )
+from backend.copilot.session_permissions import resolve_session_permissions
 from backend.copilot.transports import resolve_default_chat_route
 from backend.data.db_accessors import experts_db, tasks_db
 from backend.integrations.codex.access import enforce_codex_access_http

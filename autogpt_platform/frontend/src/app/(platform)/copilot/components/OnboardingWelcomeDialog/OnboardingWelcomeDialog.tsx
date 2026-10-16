@@ -58,7 +58,7 @@ const CARDS: CapabilityCard[] = [
   },
   {
     title: "It remembers everything.",
-    body: "Memory beyond any human brain. It even dreams. Manage it all in the Agents tab.",
+    body: "Memory beyond any human brain. It even dreams.",
     icon: BrainIcon,
   },
 ];
@@ -73,8 +73,8 @@ const TEAM_CARDS: CapabilityCard[] = [
     icon: SparklesIcon,
   },
   {
-    title: "Hire an expert, or raise your own.",
-    body: "Pick a ready-made expert for marketing, sales or ops, or describe a role and raise one from scratch.",
+    title: "Hire an expert, or create your own.",
+    body: "Pick a ready-made expert for marketing, sales or ops, or describe a role and create one from scratch.",
     icon: UserGroupIcon,
   },
   {
@@ -173,7 +173,7 @@ export function OnboardingWelcomeDialog({ isOpen, onClose }: Props) {
           data-testid="onboarding-welcome-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label="Welcome to Otto"
+          aria-label="Welcome to AutoGPT"
         >
           <motion.div
             initial={{ opacity: 0, y: 16, scale: 0.97, maxWidth: "20rem" }}

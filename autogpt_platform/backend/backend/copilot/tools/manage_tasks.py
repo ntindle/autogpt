@@ -69,6 +69,7 @@ class ManageTasksTool(BaseTool):
             "properties": {
                 "operation": {
                     "type": "string",
+                    "description": "Task operation to perform.",
                     "enum": [
                         "list",
                         "capture",
@@ -107,8 +108,14 @@ class ManageTasksTool(BaseTool):
                     "type": ["string", "null"],
                     "description": "For reparent, an existing open outcome ID in this workspace, or null to move the task to the top level. Never create a copy to move a task.",
                 },
-                "title": {"type": "string"},
-                "description": {"type": "string"},
+                "title": {
+                    "type": "string",
+                    "description": "Task title for capture, add_step, or edit.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Task requirements for capture, add_step, or edit.",
+                },
                 "evidence": {
                     "type": "string",
                     "description": "Actual result, evidence, output links, or requested changes. Link workspace files as [filename](workspace://file_id) using real returned IDs, not local paths. Never claim completion just because a run ended.",
@@ -123,6 +130,7 @@ class ManageTasksTool(BaseTool):
                 },
                 "assignee_kind": {
                     "type": "string",
+                    "description": "Owner type for assignment; unassigned removes the owner.",
                     "enum": ["human", "auto", "expert", "unassigned"],
                 },
                 "assignee_id": {

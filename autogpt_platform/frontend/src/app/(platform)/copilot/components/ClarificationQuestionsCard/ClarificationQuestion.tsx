@@ -74,7 +74,6 @@ export function ClarificationQuestion({
               labelId={labelID}
               autoFocus={false}
               onChange={onChange}
-              onPick={onChange}
               onSubmit={onSubmit}
             />
           ) : needsAnswer ? (

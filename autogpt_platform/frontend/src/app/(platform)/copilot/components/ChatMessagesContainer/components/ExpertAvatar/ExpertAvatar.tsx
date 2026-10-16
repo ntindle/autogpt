@@ -1,14 +1,5 @@
-import {
-  Avatar,
-  AvatarFallback,
-  AvatarImage,
-} from "@/components/atoms/Avatar/Avatar";
+import { ExpertAvatar as SharedExpertAvatar } from "@/components/molecules/ExpertAvatar/ExpertAvatar";
 import { AutopilotAvatar } from "@/components/molecules/AutopilotAvatar/AutopilotAvatar";
-import { BotAvatar } from "@/components/molecules/BotAvatar/BotAvatar";
-import {
-  expertAvatarConfig,
-  isUploadedAvatar,
-} from "@/components/molecules/BotAvatar/helpers";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -31,6 +22,7 @@ export function ExpertAvatar({
 }: Props) {
   const isSmall = size === "sm";
   const sizeClass = isSmall ? "h-6 w-6" : "h-9 w-9";
+  const borderClass = "rounded-full border border-[#e3e3e3]";
 
   if (isLoading) {
     return (
@@ -42,25 +34,16 @@ export function ExpertAvatar({
   }
 
   if (isAutopilot && !avatarUrl) {
-    return <AutopilotAvatar size={isSmall ? 24 : 36} />;
-  }
-
-  if (!isUploadedAvatar(avatarUrl)) {
-    return (
-      <BotAvatar
-        config={expertAvatarConfig({ name, avatarUrl, color })}
-        size={isSmall ? 24 : 36}
-        animated={!isSmall}
-        showBadge={false}
-        title={name}
-      />
-    );
+    return <AutopilotAvatar size={isSmall ? 24 : 36} className={borderClass} />;
   }
 
   return (
-    <Avatar className={cn("border border-stone-500", sizeClass)}>
-      <AvatarImage src={avatarUrl ?? undefined} alt={name} />
-      <AvatarFallback className={sizeClass}>{name}</AvatarFallback>
-    </Avatar>
+    <SharedExpertAvatar
+      name={name}
+      avatarUrl={avatarUrl}
+      color={color}
+      size={isSmall ? 24 : 36}
+      className={borderClass}
+    />
   );
 }

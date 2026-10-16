@@ -15,18 +15,21 @@ export function ExpertAccess({ name, providers }: Props) {
       title={`Services ${name} can work with`}
       description={`${name} will ask you to connect these the first time they are needed — nothing is shared until you do.`}
     >
-      <ul className="flex flex-wrap gap-2">
+      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {providers.map((provider) => (
           <li
             key={provider}
-            className="flex min-w-0 items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-sm text-zinc-700 ring-1 ring-inset ring-zinc-200/80"
+            className="flex min-w-0 items-center gap-3 rounded-2xl bg-white p-3 smooth-shadow-ring-sm"
           >
-            {/* The label beside it already names the provider; without this a
-                screen reader announces the name twice. */}
-            <span aria-hidden="true" className="flex shrink-0">
-              <IntegrationLogo provider={provider} />
+            <span
+              aria-hidden="true"
+              className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-gradient-to-b from-white to-zinc-50"
+            >
+              <IntegrationLogo provider={provider} size={22} />
             </span>
-            <span className="truncate">{formatProviderName(provider)}</span>
+            <span className="min-w-0 break-words text-sm font-medium leading-5 text-zinc-800">
+              {formatProviderName(provider)}
+            </span>
           </li>
         ))}
       </ul>

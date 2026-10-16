@@ -107,9 +107,11 @@ describe("TopUpPromptProvider daily auto-opener", () => {
 
     renderProvider();
 
-    // The dialog body copy mentions Otto, which the banner copy does not,
+    // The dialog body copy mentions experts, which the banner copy does not,
     // so it unambiguously signals the dialog auto-opened.
-    expect(await screen.findByText(/keep your agents and Otto/i)).toBeDefined();
+    expect(
+      await screen.findByText(/keep your workflows and experts/i),
+    ).toBeDefined();
   });
 
   test("does not auto-open when the modal was already shown today", async () => {
@@ -125,7 +127,7 @@ describe("TopUpPromptProvider daily auto-opener", () => {
     // credit fetch resolved before we assert the dialog is absent.
     await screen.findByText(/out of automation credits/i);
 
-    expect(screen.queryByText(/keep your agents and Otto/i)).toBeNull();
+    expect(screen.queryByText(/keep your workflows and experts/i)).toBeNull();
   });
 });
 
@@ -217,6 +219,7 @@ describe("TopUpPromptProvider out-of-credits suppression", () => {
 
     const banner = await screen.findByRole("alert");
     expect(banner.textContent).toMatch(/out of automation credits/i);
+    expect(banner.textContent).toMatch(/keep your workflows running/i);
     expect(creditRequests).toBe(1);
     fireEvent.click(screen.getByText("page state 0"));
 
@@ -250,7 +253,7 @@ describe("TopUpPromptProvider out-of-credits suppression", () => {
     await waitForCreditsFetch();
 
     expect(screen.queryByText(/out of automation credits/i)).toBeNull();
-    expect(screen.queryByText(/keep your agents and Otto/i)).toBeNull();
+    expect(screen.queryByText(/keep your workflows and experts/i)).toBeNull();
   });
 
   test("renders nothing when the billing flag is off", async () => {
@@ -271,7 +274,7 @@ describe("TopUpPromptProvider out-of-credits suppression", () => {
     await waitForCreditsFetch();
 
     expect(screen.queryByText(/out of automation credits/i)).toBeNull();
-    expect(screen.queryByText(/keep your agents and Otto/i)).toBeNull();
+    expect(screen.queryByText(/keep your workflows and experts/i)).toBeNull();
   });
 
   test("renders nothing when the user still has a positive balance", async () => {
@@ -287,7 +290,7 @@ describe("TopUpPromptProvider out-of-credits suppression", () => {
     await waitForCreditsFetch();
 
     expect(screen.queryByText(/out of automation credits/i)).toBeNull();
-    expect(screen.queryByText(/keep your agents and Otto/i)).toBeNull();
+    expect(screen.queryByText(/keep your workflows and experts/i)).toBeNull();
   });
 
   test("suppresses the prompt when the credits fetch fails", async () => {
@@ -312,6 +315,6 @@ describe("TopUpPromptProvider out-of-credits suppression", () => {
     await waitFor(() => expect(autoTopUpRequested).toBe(true));
 
     expect(screen.queryByText(/out of automation credits/i)).toBeNull();
-    expect(screen.queryByText(/keep your agents and Otto/i)).toBeNull();
+    expect(screen.queryByText(/keep your workflows and experts/i)).toBeNull();
   });
 });

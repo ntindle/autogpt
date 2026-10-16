@@ -88,7 +88,10 @@ describe("OnboardingWelcomeDialog — deck", () => {
   it("renders the first card with no way back", async () => {
     render(<OnboardingWelcomeDialog isOpen onClose={vi.fn()} />);
 
-    expect(await screen.findByText("Meet Otto.")).toBeDefined();
+    expect(
+      (await screen.findByRole("dialog", { name: "Welcome to AutoGPT" }))
+        .textContent,
+    ).toContain("Meet Otto.");
     expect(
       screen.getByText(
         "It does the work. Ask once, or put it on a schedule. It delivers while you do something else.",
@@ -297,7 +300,7 @@ describe("OnboardingWelcomeDialog — the team deck", () => {
 
     const user = await advanceToCard(1);
     expect(
-      await screen.findByText("Hire an expert, or raise your own."),
+      await screen.findByText("Hire an expert, or create your own."),
     ).toBeDefined();
 
     await user.click(screen.getByRole("button", { name: "Next" }));

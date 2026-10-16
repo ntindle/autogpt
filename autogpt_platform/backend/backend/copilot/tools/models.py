@@ -2,9 +2,9 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from backend.copilot.tools.execution_utils import NodeFailureSummary
 from backend.data.graph import BaseGraph, GraphTriggerInfo
@@ -46,10 +46,24 @@ class ResponseType(str, Enum):
     BLOCK_DETAILS = "block_details"
     BLOCK_OUTPUT = "block_output"
     REVIEW_REQUIRED = "review_required"
+    APPROVAL_REQUIRED = "approval_required"
+
+    # Capability registry (find/describe/run_capability)
+    CAPABILITY_LIST = "capability_list"
+    CAPABILITY_DETAILS = "capability_details"
 
     # Schedules
     SCHEDULE_LIST = "schedule_list"
     SCHEDULE_DELETED = "schedule_deleted"
+    SCHEDULE_TOGGLED = "schedule_toggled"
+    # Expert resources (installed workflows, credential grants)
+    EXPERT_WORKFLOW = "expert_workflow"
+    EXPERT_WORKFLOWS = "expert_workflows"
+    EXPERT_CREDENTIALS = "expert_credentials"
+    # Standing work: the routines an expert offers, and one switched on or off.
+    ROUTINES = "routines"
+    ROUTINE = "routine"
+    CREDENTIAL_GRANT_REQUESTED = "credential_grant_requested"
     SCHEDULE_CREATED = "schedule_created"
 
     # Agent triggers
@@ -93,6 +107,7 @@ class ResponseType(str, Enum):
 
     # Code execution
     BASH_EXEC = "bash_exec"
+    DESKTOP_STREAM = "desktop_stream"
 
     # Web
     WEB_FETCH = "web_fetch"
@@ -114,9 +129,10 @@ class ResponseType(str, Enum):
     # Platform info
     PLATFORM_INFO = "platform_info"
 
-    # Chat-platform proactive output (post message / create thread)
+    # Chat-platform proactive output (post message / create thread / edit)
     CHAT_PLATFORM_CHANNEL_LIST = "chat_platform_channel_list"
     CHAT_PLATFORM_POSTED = "chat_platform_posted"
+    CHAT_PLATFORM_EDITED = "chat_platform_edited"
 
     # Skills (self-distilled procedure registry)
     SKILL_STORED = "skill_stored"
@@ -132,6 +148,9 @@ class ResponseType(str, Enum):
     EXPERT_CHAT_LIST = "expert_chat_list"
     EXPERT_CHAT_TRANSCRIPT = "expert_chat_transcript"
     EXPERT_ONBOARDING = "expert_onboarding"
+    TEAM_CONSULT = "team_consult"
+    SESSION_LIST = "session_list"
+    SESSION_MESSAGE = "session_message"
 
 
 # Base response model
@@ -141,6 +160,21 @@ class ToolResponseBase(BaseModel):
     type: ResponseType
     message: str
     session_id: str | None = None
+    # None until the producer declares it, and the content judge then reads the
+    # whole response.
+    _outside: tuple[Any, ...] | None = PrivateAttr(default=None)
+
+    def from_outside(self, *parts: Any) -> Self:
+        """Declare the values in this response that came from outside AutoGPT,
+        exactly as placed in it; with none, the response is wholly ours. The
+        content judge reads only these, and every image. An agent's name,
+        description and schema count as ours: discovery returns them unjudged."""
+        self._outside = (*(self._outside or ()), *parts)
+        return self
+
+    @property
+    def outside(self) -> tuple[Any, ...] | None:
+        return self._outside
 
 
 # Agent discovery models
@@ -203,7 +237,7 @@ class AgentsFoundResponse(ToolResponseBase):
     """Response for find_agent tool."""
 
     type: ResponseType = ResponseType.AGENTS_FOUND
-    title: str = "Available Agents"
+    title: str = "Available Workflows"
     agents: list[AgentInfo]
     count: int
     name: str = "agents_found"
@@ -349,7 +383,7 @@ class ErrorResponse(ToolResponseBase):
 
 
 class SubSessionProgressSnapshot(BaseModel):
-    """Mid-flight snapshot of a running sub-Otto.
+    """Mid-flight snapshot of a running child session.
 
     Returned under ``progress`` on :class:`SubSessionStatusResponse` when the
     caller passes ``include_progress=true`` while the sub is still running.
@@ -372,7 +406,7 @@ class WorkspaceFileInfoData(BaseModel):
 
     Shared by ``list_workspace_files`` and the ``sub_workspace_files`` manifest
     on :class:`SubSessionStatusResponse` (SECRT-2377). When it describes a file a
-    sub-Otto wrote, ``path`` is already session-qualified
+    child session wrote, ``path`` is already session-qualified
     (``/sessions/<sub_id>/...``) and can be passed straight to
     ``read_workspace_file(path=...)`` for cross-session retrieval.
     """
@@ -384,12 +418,25 @@ class WorkspaceFileInfoData(BaseModel):
     size_bytes: int
 
 
+class WorkspaceFolderInfoData(BaseModel):
+    """A workspace folder as ``list_workspace_files`` reports it.
+
+    ``file_count`` counts the files directly inside; a subfolder's own files
+    are counted on that subfolder.
+    """
+
+    folder_id: str
+    name: str
+    parent_id: str | None = None
+    file_count: int
+
+
 class DelegatedExpertInfo(BaseModel):
     """Identity of the expert a delegated sub-session runs as.
 
     Set only by ``delegate_to_expert`` (and by polls of a delegated sub), so
     both the model and the ToolChain card can name who is doing the work
-    instead of rendering a generic "Sub-Otto".
+    instead of rendering a generic "Subtask".
     """
 
     id: str
@@ -400,7 +447,7 @@ class DelegatedExpertInfo(BaseModel):
 
 
 class SubSessionStatusResponse(ToolResponseBase):
-    """Status / result of a sub-Otto run started by ``run_sub_session``.
+    """Status / result of a child session started by ``run_sub_session``.
 
     Returned by both ``run_sub_session`` (synchronously when the sub finishes
     within ``wait_for_result``, else with ``status='running'``) and
@@ -412,7 +459,7 @@ class SubSessionStatusResponse(ToolResponseBase):
         "running", "completed", "cancelled", "error", "queued", "transferred"
     ] = Field(
         description=(
-            "Current state of the sub-Otto run.  ``queued`` means the "
+            "Current state of the child session.  ``queued`` means the "
             "target session already had a turn in flight, so the message was "
             "pushed onto its pending buffer and will be picked up by the "
             "existing turn on its next drain.  ``transferred`` is terminal "
@@ -434,7 +481,7 @@ class SubSessionStatusResponse(ToolResponseBase):
     sub_autopilot_session_id: str | None = Field(
         default=None,
         description=(
-            "The session_id of the sub-Otto conversation. Use with "
+            "The session_id of the child session. Use with "
             "``run_sub_session(..., sub_autopilot_session_id=<this>)`` "
             "to continue it."
         ),
@@ -442,8 +489,8 @@ class SubSessionStatusResponse(ToolResponseBase):
     sub_autopilot_session_link: str | None = Field(
         default=None,
         description=(
-            "Relative URL the user can click to open the sub-Otto "
-            "conversation in the CoPilot UI. Always set when "
+            "Relative URL the user can click to open the child session "
+            "in the CoPilot UI. Always set when "
             "``sub_autopilot_session_id`` is set."
         ),
     )
@@ -451,7 +498,7 @@ class SubSessionStatusResponse(ToolResponseBase):
         default=None,
         description=(
             "Teammate the work was delegated to. Set only for "
-            "``delegate_to_expert`` runs; None for same-scope sub-AutoPilots."
+            "``delegate_to_expert`` runs; None for same-scope child sessions."
         ),
     )
     sub_tool_call_count: int | None = Field(
@@ -478,7 +525,7 @@ class SubSessionStatusResponse(ToolResponseBase):
     )
     elapsed_seconds: float | None = Field(
         default=None,
-        description="How long the sub-Otto has been running (or took).",
+        description="How long the child session has been running (or took).",
     )
     progress: SubSessionProgressSnapshot | None = Field(
         default=None,
@@ -579,6 +626,7 @@ class ExpertChangePreview(BaseModel):
     kind: ExpertChangeKind
     name: str
     role: str = ""
+    job_title: str = ""
     tagline: str = ""
     about: str = ""
     boundaries: str = ""
@@ -614,6 +662,9 @@ class TeamExpertInfo(BaseModel):
     color: str = ""
     avatar_url: str | None = None
     is_paused: bool = False
+    workflow_count: int = 0
+    # None for an expert session: a teammate's grant count is the owner's view.
+    credential_count: int | None = None
 
 
 class TeamRosterResponse(ToolResponseBase):
@@ -673,6 +724,67 @@ class ExpertChatTranscriptResponse(ToolResponseBase):
     next_before_sequence: int | None = None
 
 
+class ConsultingExpertInfo(BaseModel):
+    """Identity of the teammate who gave a verdict, for the ToolChain card."""
+
+    id: str
+    name: str
+    role: str
+    avatar_url: str | None = None
+    color: str = ""
+
+
+class ConsultVerdictResponse(ToolResponseBase):
+    """One teammate's ruling on another's work, from ``consult_teammate``.
+
+    ``verdict`` is the machine-readable half of ``message`` and the two never
+    disagree: the card reads this field, the model reads the fenced prose.
+    """
+
+    type: ResponseType = ResponseType.TEAM_CONSULT
+    verdict: Literal["pass", "block", "insufficient"]
+    reason: str = ""
+    quotes: list[str] = Field(default_factory=list)
+    reviewer: ConsultingExpertInfo
+
+
+class SessionSummary(BaseModel):
+    """One row of ``find_session`` — enough to decide who to message."""
+
+    session_id: str
+    # The id, not the name: resolving names here would import the experts
+    # package back into ``copilot.tools`` and close an import cycle. The
+    # roster in <team_context> already maps id to name for the model.
+    expert_id: str | None = None
+    title: str | None = None
+    purpose: str | None = None
+    # "idle" | "queued" | "running": a running session takes a message into
+    # its current turn, an idle one has to be woken.
+    status: str
+    updated_at: datetime
+
+
+class SessionListResponse(ToolResponseBase):
+    """The caller's own live sessions, from ``find_session``."""
+
+    type: ResponseType = ResponseType.SESSION_LIST
+    sessions: list[SessionSummary] = Field(default_factory=list)
+
+
+class SessionMessageResponse(ToolResponseBase):
+    """What ``message_session`` did with the message.
+
+    ``delivery`` is the half the model must read: "injected" reached a turn
+    already running and costs nothing extra, "queued" rode a turn already
+    waiting, "woke" started one and costs a turn. There is no reply here —
+    an answer arrives as its own message.
+    """
+
+    type: ResponseType = ResponseType.SESSION_MESSAGE
+    delivery: Literal["injected", "queued", "woke"]
+    target_session_id: str
+
+
 class ExpertChangeProposedResponse(ToolResponseBase):
     """Preview returned by ``hire_expert`` / ``raise_expert`` — never a write.
 
@@ -707,6 +819,9 @@ class ClarifyingQuestion(BaseModel):
     target_kind: Literal["human", "auto", "expert"] = "human"
     target_id: str | None = None
     purpose: Literal["clarification", "approval", "account_setup"] = "clarification"
+    # Several of `options` may be picked. Only ever set alongside options:
+    # there is nothing to multi-select in a free-text question.
+    allow_multiple: bool = False
 
 
 class AgentPreviewResponse(ToolResponseBase):
@@ -850,16 +965,39 @@ class BlockInfoSummary(BaseModel):
 
 
 class BlockListResponse(ToolResponseBase):
-    """Response for find_block tool."""
+    """Response for a block search (find_capability / legacy find_block)."""
 
     type: ResponseType = ResponseType.BLOCK_LIST
     blocks: list[BlockInfoSummary]
     count: int
     query: str
     usage_hint: str = Field(
-        default="To execute a block, call run_block with block_id set to the block's "
-        "'id' field and input_data containing the fields listed in required_inputs."
+        default="To execute a block, call run_capability with id set to the block's "
+        "'id' field and input containing the fields listed in required_inputs."
     )
+
+
+class CapabilityListResponse(ToolResponseBase):
+    """Ranked capabilities for a ``find_capability`` query.  Each entry is a
+    compact listing (id, name, purpose, kind, class, connected)."""
+
+    type: ResponseType = ResponseType.CAPABILITY_LIST
+    query: str
+    capabilities: list[dict[str, Any]]
+    count: int
+    # Generic primitives offered when the query named a service.
+    fallback: list[dict[str, Any]] = Field(default_factory=list)
+    service: str | None = None
+
+
+class CapabilityDetailsResponse(ToolResponseBase):
+    """Schema for one capability whose implementation is a platform tool.
+    Blocks and MCP servers describe themselves with their existing
+    ``block_details`` / ``mcp_tools_discovered`` responses."""
+
+    type: ResponseType = ResponseType.CAPABILITY_DETAILS
+    capability: dict[str, Any]
+    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class BlockDetails(BaseModel):
@@ -874,7 +1012,7 @@ class BlockDetails(BaseModel):
 
 
 class BlockDetailsResponse(ToolResponseBase):
-    """Response for block details (first run_block attempt)."""
+    """Response for block details (describe_capability / first run attempt)."""
 
     type: ResponseType = ResponseType.BLOCK_DETAILS
     block: BlockDetails
@@ -882,7 +1020,7 @@ class BlockDetailsResponse(ToolResponseBase):
 
 
 class BlockOutputResponse(ToolResponseBase):
-    """Response for run_block tool."""
+    """Response for a block run via run_capability."""
 
     type: ResponseType = ResponseType.BLOCK_OUTPUT
     block_id: str
@@ -902,12 +1040,22 @@ class ReviewRequiredResponse(ToolResponseBase):
     block_id: str
     block_name: str
     review_id: str = Field(description="The review ID for tracking approval status")
-    graph_exec_id: str = Field(
-        description="The graph execution ID for fetching review status"
-    )
     input_data: dict[str, Any] = Field(
         description="The input data that requires review"
     )
+
+
+class ApprovalRequiredResponse(ToolResponseBase):
+    """An action the auto-mode gate parked for the user to approve; with a
+    ``review_id`` it mounts the chat's approval card."""
+
+    type: ResponseType = ResponseType.APPROVAL_REQUIRED
+    tool_name: str
+    reason: str
+    review_id: str | None = None
+    # The chain row's label, from the same table as the card's headline.
+    ask: str | None = None
+    object: str | None = None
 
 
 class WebFetchResponse(ToolResponseBase):
@@ -927,12 +1075,12 @@ class WebFetchResponse(ToolResponseBase):
 
 
 class WebSearchResult(BaseModel):
-    """One entry in a web_search tool response."""
+    """One source in a web_search tool response.  ``n`` is the number the
+    answer cites it by, as ``[n]``."""
 
+    n: int
     title: str
     url: str
-    snippet: str = ""
-    page_age: str | None = None
 
 
 class WebSearchResponse(ToolResponseBase):
@@ -960,6 +1108,20 @@ class BashExecResponse(ToolResponseBase):
     stderr: str
     exit_code: int
     timed_out: bool = False
+
+
+class DesktopStreamToolResponse(ToolResponseBase):
+    """Response for start_desktop: an embeddable live desktop stream.
+
+    ``desktop_stream`` carries the same shape the desktop blocks emit
+    (kind/url/provider/sandbox_id/requires_auth). The copilot chat renders it
+    through DesktopStreamRenderer via ToolResult's ``start_desktop`` card, and
+    every surface that consults the output-renderer registry (block outputs,
+    attachments) embeds it the same way.
+    """
+
+    type: ResponseType = ResponseType.DESKTOP_STREAM
+    desktop_stream: dict
 
 
 # Feature request models
@@ -1337,3 +1499,12 @@ class ChatPlatformPostedResponse(ToolResponseBase):
     channel_id: str
     ref_id: str | None = None
     url: str | None = None
+
+
+class ChatPlatformEditedResponse(ToolResponseBase):
+    """Response after the bot edits a message it previously posted."""
+
+    type: ResponseType = ResponseType.CHAT_PLATFORM_EDITED
+    platform: str
+    channel_id: str
+    ref_id: str

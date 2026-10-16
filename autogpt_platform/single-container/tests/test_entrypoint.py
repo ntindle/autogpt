@@ -19,6 +19,31 @@ BACKEND_SERVICE_PATH = ASSET_DIR.parent / "backend" / "backend" / "util" / "serv
 
 
 class InternalServiceTopologyTest(unittest.TestCase):
+    def test_prepares_marketplace_media_for_unprivileged_backend(self) -> None:
+        result = subprocess.run(
+            [
+                "bash",
+                "-Eeuo",
+                "pipefail",
+                "-c",
+                'source "$1"; install() { printf "%s\\n" "$*"; }; prepare_directories',
+                "bash",
+                str(ENTRYPOINT_PATH),
+            ],
+            check=False,
+            capture_output=True,
+            encoding="utf-8",
+            env={
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "AUTOGPT_ASSET_DIR": str(ASSET_DIR),
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "-d -m 0750 -o autogpt -g autogpt /data/store-media",
+            result.stdout.splitlines(),
+        )
+
     def test_rpc_health_path_matches_backend(self) -> None:
         module = ast.parse(BACKEND_SERVICE_PATH.read_text(encoding="utf-8"))
         route_paths = {
@@ -116,6 +141,13 @@ class AccountRegistrationTest(unittest.TestCase):
 
 
 class EnvironmentPolicyTest(unittest.TestCase):
+    def test_image_preserves_background_embedding_backfill_at_startup(
+        self,
+    ) -> None:
+        dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8")
+
+        self.assertNotIn("SCHEDULER_STARTUP_EMBEDDING_BACKFILL=false", dockerfile)
+
     def test_rejects_required_email_verification(self) -> None:
         result = self._configure(AUTH_REQUIRE_EMAIL_VERIFICATION="true")
 
