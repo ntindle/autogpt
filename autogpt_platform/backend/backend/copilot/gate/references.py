@@ -281,7 +281,10 @@ async def _chat_session(session_id: str, call: _Call) -> _Found | None:
 
 async def _expert(expert_id: str, call: _Call) -> _Found | None:
     expert = await experts_db().get_expert(
-        call.user_id, expert_id, include_workflows=False
+        call.user_id,
+        expert_id,
+        include_workflows=False,
+        organization_id=call.session.organization_id,
     )
     return _teammate(expert) if expert else None
 
@@ -290,7 +293,7 @@ async def _expert_or_name(reference: str, call: _Call) -> _Found | None:
     # Lazy: the tools package imports the gate.
     from backend.copilot.tools.expert_delegation import resolve_target_expert
 
-    expert = await resolve_target_expert(call.user_id, reference)
+    expert = await resolve_target_expert(call.user_id, reference, call.session)
     return _teammate(expert) if expert else None
 
 
