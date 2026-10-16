@@ -10,7 +10,10 @@ vi.mock("@/app/(platform)/marketplace/components/HeroSection/helpers", () => ({
 }));
 
 vi.mock("@/services/environment", () => ({
-  environment: { areFeatureFlagsEnabled: () => false },
+  environment: {
+    isServerSide: () => false,
+    areFeatureFlagsEnabled: () => false,
+  },
 }));
 
 const ENV_KEY = "NEXT_PUBLIC_FORCE_FLAG_CHAT_MODE_OPTION";
