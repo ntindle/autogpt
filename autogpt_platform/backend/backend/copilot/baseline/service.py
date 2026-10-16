@@ -2109,7 +2109,9 @@ async def stream_chat_completion_baseline(
         skills_ctx = ""
         try:
             skills_ctx = await build_skills_context(
-                user_id, expert_id=session.expert_id
+                user_id,
+                expert_id=session.expert_id,
+                organization_id=session.organization_id,
             )
         except Exception:
             logger.exception(
@@ -2239,6 +2241,7 @@ async def stream_chat_completion_baseline(
                 prior_contents=[
                     m.content or "" for m in session.messages if m.role == "user"
                 ],
+                organization_id=organization_id,
             )
         except Exception:
             logger.exception("[skills] failed to build skills update notice")

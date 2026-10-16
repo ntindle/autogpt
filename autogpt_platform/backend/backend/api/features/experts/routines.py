@@ -45,6 +45,13 @@ from backend.api.features.experts.routine_jobs import (
     delete_routine_schedules,
     spread_cron,
 )
+from backend.api.features.experts.routine_scope import (
+    RoutineNotFoundError,
+    personal_owner_where,
+    personal_routine_scope,
+    saved_personal_org,
+    validate_personal_session,
+)
 from backend.copilot.credential_selection import CredentialPin, CredentialPins
 from backend.data.user import get_user_by_id
 from backend.util.clients import get_scheduler_client
@@ -53,8 +60,15 @@ from backend.util.timezone_utils import get_user_timezone_or_utc
 logger = logging.getLogger(__name__)
 
 
-def to_model(row: prisma.models.ExpertRoutine) -> ExpertRoutine:
+async def to_model(row: prisma.models.ExpertRoutine) -> ExpertRoutine:
+    org_id = await saved_personal_org(row)
+    team_id = None
+    if org_id is not None and row.userId is not None:
+        _, team_id = await personal_routine_scope(row.userId, org_id)
     return ExpertRoutine(
+        user_id=row.userId,
+        organization_id=org_id,
+        team_id=team_id,
         id=row.id,
         expert_id=row.expertId,
         key=row.key,
@@ -107,22 +121,24 @@ def _credential_pins(raw: object) -> CredentialPins:
     return pins
 
 
-async def get_routine(routine_id: str) -> ExpertRoutine | None:
-    """Load one routine by id, for the fire path.
-
-    Unscoped by owner on purpose: the caller is the scheduler dispatching a job
-    it already persisted, and the job's own ``user_id`` is what every ownership
-    check downstream runs against. Every user-facing path goes through
-    ``_owned_routine`` instead.
-    """
-    row = await prisma.models.ExpertRoutine.prisma().find_unique(
-        where={"id": routine_id}
-    )
-    return to_model(row) if row is not None else None
-
-
-class RoutineNotFoundError(Exception):
-    """No such routine on this owner."""
+async def get_routine(
+    routine_id: str,
+    *,
+    user_id: str | None = None,
+    expert_id: str | None = None,
+    organization_id: str | None = None,
+) -> ExpertRoutine | None:
+    """Load trusted worker provenance, or an explicitly scoped owner's record."""
+    if user_id is not None:
+        try:
+            row = await _owned_routine(user_id, expert_id, routine_id, organization_id)
+        except RoutineNotFoundError:
+            return None
+    else:
+        row = await prisma.models.ExpertRoutine.prisma().find_unique(
+            where={"id": routine_id}
+        )
+    return await to_model(row) if row is not None else None
 
 
 class RoutineUnansweredAsksError(Exception):
@@ -172,15 +188,15 @@ async def install_routines(
 
 
 async def list_routines(
-    user_id: str, expert_id: str | None = None
+    user_id: str, expert_id: str | None = None, *, organization_id: str | None = None
 ) -> list[ExpertRoutine]:
     """One owner's routines: an expert's, or the account's own when *expert_id*
     is None."""
     rows = await prisma.models.ExpertRoutine.prisma().find_many(
-        where=_owner_where(user_id, expert_id),
+        where=await _owner_where(user_id, expert_id, organization_id),
         order=[{"createdAt": "asc"}, {"id": "asc"}],
     )
-    return [to_model(row) for row in rows]
+    return [await to_model(row) for row in rows]
 
 
 async def enable_routine(
@@ -195,6 +211,7 @@ async def enable_routine(
     pinned_session_id: str | None = None,
     grants_credentials: bool | None = None,
     credential_pins: CredentialPins | None = None,
+    organization_id: str | None = None,
 ) -> ExpertRoutine:
     """Switch a routine on, resolving the proposal into what actually runs.
 
@@ -212,7 +229,7 @@ async def enable_routine(
     partial failure leaves nothing behind: a routine that fires at 08:30 but
     not at 13:00 is a quieter lie than one that does not fire at all.
     """
-    row = await _owned_routine(user_id, expert_id, routine_id)
+    row = await _owned_routine(user_id, expert_id, routine_id, organization_id)
     resolved_prompt = prompt or row.prompt
     customized = prompt is not None or crons is not None or run_at is not None
     # ``customizedAt``, not just this call: the asks are answered once, and the
@@ -273,6 +290,10 @@ async def enable_routine(
         # without this the row would say PINNED and behave like FRESH. The tool
         # always supplies one; this closes the RPC path, which does not.
         raise ValueError("A PINNED routine needs the chat it should fire into.")
+    saved_org = await saved_personal_org(row)
+    if saved_org is not None:
+        await personal_routine_scope(user_id, saved_org, "create")
+        await validate_personal_session(user_id, saved_org, pinned)
     schedule_ids = await create_routine_schedules(
         user_id=user_id,
         expert_id=expert_id,
@@ -325,7 +346,7 @@ async def enable_routine(
     # names the new ones: a failure here leaves an extra run to explain, while
     # clearing first would leave a routine that says it is running and is not.
     await delete_routine_schedules(user_id, row)
-    return to_model(updated)
+    return await to_model(updated)
 
 
 def _pins_json(pins: CredentialPins) -> prisma.Json:
@@ -358,6 +379,7 @@ async def create_routine(
     session_id: str | None = None,
     grants_credentials: bool = True,
     credential_pins: CredentialPins | None = None,
+    organization_id: str | None = None,
 ) -> ExpertRoutine:
     """Record standing work worked out with the owner in conversation.
 
@@ -375,6 +397,9 @@ async def create_routine(
     so an owner who wants a routine that only reads and drafts can say so.
     """
     await _owned_owner(user_id, expert_id)
+    saved_org = None
+    if expert_id is None:
+        saved_org, _ = await personal_routine_scope(user_id, organization_id, "create")
     if not title.strip() or not prompt.strip():
         raise ValueError("A routine needs a title and a prompt.")
     if bool(crons) == (run_at is not None):
@@ -402,21 +427,31 @@ async def create_routine(
         data["credentialPins"] = _pins_json(credential_pins)
     if expert_id is None:
         data["userId"] = user_id
+        data["organizationId"] = saved_org
+        if saved_org is not None:
+            await validate_personal_session(user_id, saved_org, data["sessionId"])
     else:
         data["expertId"] = expert_id
     created = await prisma.models.ExpertRoutine.prisma().create(data=data)
-    return to_model(created)
+    return await to_model(created)
 
 
 async def disable_routine(
-    user_id: str, expert_id: str | None, routine_id: str
+    user_id: str,
+    expert_id: str | None,
+    routine_id: str,
+    *,
+    organization_id: str | None = None,
 ) -> ExpertRoutine:
     """Switch a routine off, deleting its jobs but keeping the row.
 
     The resolved prompt and cadence survive, so switching it back on later
     restores what the owner set up rather than reverting to the proposal.
     """
-    row = await _owned_routine(user_id, expert_id, routine_id)
+    row = await _owned_routine(user_id, expert_id, routine_id, organization_id)
+    saved_org = await saved_personal_org(row)
+    if saved_org is not None:
+        await personal_routine_scope(user_id, saved_org, "create")
     await delete_routine_schedules(user_id, row)
     updated = await prisma.models.ExpertRoutine.prisma().update(
         where={"id": row.id},
@@ -428,7 +463,7 @@ async def disable_routine(
     )
     if updated is None:
         raise RoutineNotFoundError(routine_id)
-    return to_model(updated)
+    return await to_model(updated)
 
 
 async def _drop_schedules(user_id: str, schedule_ids: list[str]) -> None:
@@ -444,8 +479,23 @@ async def _drop_schedules(user_id: str, schedule_ids: list[str]) -> None:
             )
 
 
-def _owner_where(
-    user_id: str, expert_id: str | None
+async def delete_routine(
+    user_id: str,
+    expert_id: str | None,
+    routine_id: str,
+    *,
+    organization_id: str | None = None,
+) -> None:
+    row = await _owned_routine(user_id, expert_id, routine_id, organization_id)
+    saved_org = await saved_personal_org(row)
+    if saved_org is not None:
+        await personal_routine_scope(user_id, saved_org, "delete")
+    await prisma.models.ExpertRoutine.prisma().delete(where={"id": row.id})
+    await delete_routine_schedules(user_id, row)
+
+
+async def _owner_where(
+    user_id: str, expert_id: str | None, organization_id: str | None = None
 ) -> prisma.types.ExpertRoutineWhereInput:
     """The one place that says what "yours" means for a routine.
 
@@ -455,7 +505,7 @@ def _owner_where(
     would also match every routine belonging to every expert the user owns.
     """
     if expert_id is None:
-        return {"userId": user_id, "expertId": None}
+        return await personal_owner_where(user_id, organization_id)
     return {
         "expertId": expert_id,
         "Expert": {
@@ -489,13 +539,19 @@ async def _owned_owner(user_id: str, expert_id: str | None) -> None:
 
 
 async def _owned_routine(
-    user_id: str, expert_id: str | None, routine_id: str
+    user_id: str,
+    expert_id: str | None,
+    routine_id: str,
+    organization_id: str | None = None,
 ) -> prisma.models.ExpertRoutine:
     row = await prisma.models.ExpertRoutine.prisma().find_first(
         # Scoped rather than trusting the caller's ids: this is the only
         # ownership check between a routine id and somebody else's standing
         # work.
-        where={"id": routine_id, **_owner_where(user_id, expert_id)}
+        where={
+            "id": routine_id,
+            **await _owner_where(user_id, expert_id, organization_id),
+        }
     )
     if row is None:
         raise RoutineNotFoundError(routine_id)

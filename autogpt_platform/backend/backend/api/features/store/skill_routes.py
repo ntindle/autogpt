@@ -2,6 +2,7 @@
 
 import autogpt_libs.auth
 import fastapi
+from autogpt_libs.auth import RequestContext, get_request_context
 from fastapi import Depends, Path, Query, Security
 
 from backend.api.features.experts import experts_db
@@ -69,9 +70,12 @@ async def list_marketplace_skills(
 async def submit_skill(
     request: skill_model.SkillSubmissionRequest,
     user_id: str = Security(autogpt_libs.auth.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> skill_model.SkillSubmission:
     """Submit one of the caller's own library skills for marketplace review."""
-    return await skill_submission_db.submit_skill(user_id, request)
+    return await skill_submission_db.submit_skill(
+        user_id, request, organization_id=ctx.org_id
+    )
 
 
 @router.get(
@@ -82,9 +86,12 @@ async def submit_skill(
 )
 async def list_my_skill_submissions(
     user_id: str = Security(autogpt_libs.auth.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[skill_model.SkillSubmission]:
     """Every version the caller has submitted, newest first per listing."""
-    return await skill_submission_db.list_my_skill_submissions(user_id)
+    return await skill_submission_db.list_my_skill_submissions(
+        user_id, organization_id=ctx.org_id
+    )
 
 
 @router.put(
@@ -101,10 +108,11 @@ async def edit_skill_submission(
     request: skill_model.SkillSubmissionRequest,
     skill_listing_version_id: str = Path(...),
     user_id: str = Security(autogpt_libs.auth.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> skill_model.SkillSubmission:
     """Update a pending submission and re-snapshot the library skill."""
     return await skill_submission_db.edit_skill_submission(
-        user_id, skill_listing_version_id, request
+        user_id, skill_listing_version_id, request, organization_id=ctx.org_id
     )
 
 
@@ -245,12 +253,13 @@ async def install_marketplace_skill(
         description="Install into this expert's skills instead of the caller's own.",
     ),
     user_id: str = Security(autogpt_libs.auth.get_user_id),
+    ctx: RequestContext = Security(get_request_context),
 ) -> skill_model.InstalledSkill:
     """Copy the listing's skill into an expert's skills, or the caller's own."""
-    await _require_install_target(user_id, expert_id)
+    await _require_install_target(user_id, expert_id, organization_id=ctx.org_id)
     try:
         return await skill_db.install_marketplace_skill(
-            user_id, slug, expert_id=expert_id
+            user_id, slug, expert_id=expert_id, organization_id=ctx.org_id
         )
     except (SkillLimitError, SkillOwnedError) as exc:
         raise fastapi.HTTPException(status_code=409, detail=str(exc))
@@ -258,12 +267,16 @@ async def install_marketplace_skill(
         raise fastapi.HTTPException(status_code=400, detail=str(exc))
 
 
-async def _require_install_target(user_id: str, expert_id: str | None) -> None:
+async def _require_install_target(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> None:
     """An expert named by the client must be one of the caller's own active
     hires; someone else's answers 404, which a 403 would confirm exists."""
     if expert_id is None:
         return
-    if not await experts_db.owns_private_active_expert(user_id, expert_id):
+    if not await experts_db.owns_private_active_expert(
+        user_id, expert_id, organization_id=organization_id
+    ):
         raise fastapi.HTTPException(
             status_code=404, detail=f"Expert '{expert_id}' not found"
         )

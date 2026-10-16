@@ -43,6 +43,7 @@ async def record_registry_write(
     files: list[SkillVersionFile] | None = None,
     content_approvals: list[SkillContentApproval] | None = None,
     only_if_head_at: int | None = None,
+    organization_id: str | None = None,
 ) -> SkillVersionRecord | None:
     """Append the version for a workspace write that already succeeded.
 
@@ -58,7 +59,9 @@ async def record_registry_write(
     """
     try:
         versions = skill_versions_db()
-        head = await versions.ensure_head(user_id, expert_id, skill_name)
+        head = await versions.ensure_head(
+            user_id, expert_id, skill_name, organization_id=organization_id
+        )
         if only_if_head_at is not None and head.current_version != only_if_head_at:
             return None
         if head.content_hash == content_hash(rendered) and head.current_version_id:
@@ -101,7 +104,9 @@ async def record_registry_write(
                 )
                 return result.version
             refreshed = await versions.get_head(
-                user_id, owner_key_for(expert_id), skill_name
+                user_id,
+                owner_key_for(expert_id, organization_id=organization_id),
+                skill_name,
             )
             if refreshed is None:
                 return None
@@ -125,8 +130,12 @@ def _auto_improve_after(origin: str, keep_auto_improve: bool | None) -> bool | N
 
 
 async def head_for(
-    user_id: str, expert_id: str | None, skill_name: str
+    user_id: str,
+    expert_id: str | None,
+    skill_name: str,
+    *,
+    organization_id: str | None = None,
 ) -> SkillHeadRecord | None:
     return await skill_versions_db().get_head(
-        user_id, owner_key_for(expert_id), skill_name
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
     )

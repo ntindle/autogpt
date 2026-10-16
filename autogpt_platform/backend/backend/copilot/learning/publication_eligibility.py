@@ -24,7 +24,8 @@ async def require_fresh_eligibility(
     scope = LearningScope(
         user_id=request.user_id,
         expert_id=request.expert_id,
-        owner_key=owner_key_for(request.expert_id),
+        owner_key=owner_key_for(request.expert_id, request.organization_id),
+        organization_id=request.organization_id,
     )
     for snapshot in request.sources:
         outcome = await _check_snapshot(snapshot, scope, retry_changed_source)

@@ -50,6 +50,7 @@ class LearningReviewRecord(BaseModel):
     user_id: str
     expert_id: str | None
     owner_key: str
+    organization_id: str | None = None
     source_id: str
     source_revision: str
     policy_version: int
@@ -77,6 +78,7 @@ class LearningReviewRecord(BaseModel):
             user_id=row.userId,
             expert_id=row.expertId,
             owner_key=row.ownerKey,
+            organization_id=row.organizationId,
             source_id=row.sourceId,
             source_revision=row.sourceRevision,
             policy_version=row.policyVersion,
@@ -187,6 +189,7 @@ async def upsert_review_in(
             data={
                 "userId": user_id,
                 "expertId": source.expert_id,
+                "organizationId": source.organization_id,
                 "ownerKey": source.owner_key,
                 "sourceId": source.id,
                 "sourceRevision": rev,
@@ -313,10 +316,12 @@ class LearningRunSummary(BaseModel):
     cost_microdollars_30d: int
 
 
-async def summarize_learning(user_id: str) -> LearningRunSummary:
+async def summarize_learning(
+    user_id: str, *, owner_key: str | None = None
+) -> LearningRunSummary:
     """Operator-facing status: backlog, freshness, retries, and recent cost."""
-    pending = await list_pending_sources(user_id, limit=500)
-    reviews = await list_reviews(user_id, limit=500)
+    pending = await list_pending_sources(user_id, limit=500, owner_key=owner_key)
+    reviews = await list_reviews(user_id, limit=500, owner_key=owner_key)
     since = datetime.now(timezone.utc).timestamp() - 30 * 86400
     return LearningRunSummary(
         pending_sources=len(pending),
@@ -387,6 +392,7 @@ async def reserve_model_review(
                 data={
                     "userId": user_id,
                     "expertId": source.expert_id,
+                    "organizationId": source.organization_id,
                     "ownerKey": source.owner_key,
                     "sourceId": source_id,
                     "sourceRevision": rev,

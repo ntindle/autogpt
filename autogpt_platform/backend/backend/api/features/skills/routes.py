@@ -1,7 +1,12 @@
 import logging
 from typing import Annotated
 
-from autogpt_libs.auth import get_user_id, requires_user
+from autogpt_libs.auth import (
+    RequestContext,
+    get_request_context,
+    get_user_id,
+    requires_user,
+)
 from fastapi import (
     APIRouter,
     HTTPException,
@@ -52,12 +57,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter(dependencies=[Security(requires_user)])
 
 
-async def _require_skill_owner(user_id: str, expert_id: str | None) -> None:
+async def _require_skill_owner(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> None:
     """A skill owner named on a REST call must be one of the caller's active
     experts; personal Otto (``None``) needs no check."""
     if expert_id is None:
         return
-    if not await experts_db.owns_private_active_expert(user_id, expert_id):
+    if not await experts_db.owns_private_active_expert(
+        user_id, expert_id, organization_id=organization_id
+    ):
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND, detail=f"Expert '{expert_id}' not found"
         )
@@ -74,6 +83,7 @@ async def list_copilot_skills(
         default=None,
         description="List this expert's own skills instead of personal Otto's.",
     ),
+    ctx: RequestContext = Security(get_request_context),
 ) -> list[CopilotSkillInfo]:
     """Return the skills owned by personal Otto, or by one expert.
 
@@ -82,8 +92,8 @@ async def list_copilot_skills(
     block surfaces, minus the built-in defaults (which are read-only and
     handled separately by the copilot runtime).
     """
-    await _require_skill_owner(user_id, expert_id)
-    skills = await list_user_skills(user_id, expert_id)
+    await _require_skill_owner(user_id, expert_id, organization_id=ctx.org_id)
+    skills = await list_user_skills(user_id, expert_id, organization_id=ctx.org_id)
     return [
         CopilotSkillInfo(
             name=s.name,
@@ -112,6 +122,7 @@ async def upload_copilot_skill(
     expert_id: str | None = Query(
         default=None, description="Store the skill as this expert's own."
     ),
+    ctx: RequestContext = Security(get_request_context),
 ) -> CopilotSkillInfo:
     """Create a user-distilled skill from an uploaded ``SKILL.md`` file.
 
@@ -121,7 +132,7 @@ async def upload_copilot_skill(
     via ``store_skill``.  Malformed files return 400, the per-expert cap returns
     409, and an existing slug is overwritten (upsert).
     """
-    await _require_skill_owner(user_id, expert_id)
+    await _require_skill_owner(user_id, expert_id, organization_id=ctx.org_id)
     parsed = parse_skill_markdown(body.content)
     if parsed is None:
         raise HTTPException(
@@ -131,7 +142,9 @@ async def upload_copilot_skill(
                 "'name' and 'description' followed by a markdown body."
             ),
         )
-    stored = await _store_uploaded_skill(user_id, parsed, expert_id=expert_id)
+    stored = await _store_uploaded_skill(
+        user_id, parsed, expert_id=expert_id, organization_id=ctx.org_id
+    )
     return CopilotSkillInfo(
         name=stored.name,
         description=stored.description,
@@ -156,6 +169,7 @@ async def upload_copilot_skill_package(
     expert_id: str | None = Query(
         default=None, description="Store the skill as this expert's own."
     ),
+    ctx: RequestContext = Security(get_request_context),
 ) -> CopilotSkillInfo:
     """Create a skill from a zipped package — a root ``SKILL.md`` plus the
     files beside it.
@@ -164,7 +178,7 @@ async def upload_copilot_skill_package(
     folder, so the model reaches ``scripts/`` and ``references/`` by path
     exactly as it does for a package copied from another skill.
     """
-    await _require_skill_owner(user_id, expert_id)
+    await _require_skill_owner(user_id, expert_id, organization_id=ctx.org_id)
     data = await _read_upload(file, MAX_ZIP_BYTES)
     try:
         package = await run_in_threadpool(package_from_zip, data)
@@ -181,7 +195,11 @@ async def upload_copilot_skill_package(
             ),
         )
     stored = await _store_uploaded_skill(
-        user_id, parsed, expert_id=expert_id, files=package.files
+        user_id,
+        parsed,
+        expert_id=expert_id,
+        files=package.files,
+        organization_id=ctx.org_id,
     )
     return CopilotSkillInfo(
         name=stored.name,
@@ -196,6 +214,7 @@ async def _store_uploaded_skill(
     *,
     expert_id: str | None,
     files: list[SkillFile] | None = None,
+    organization_id: str | None = None,
 ) -> ParsedSkill:
     """Persist a parsed upload, mapping each refusal to its status: 409 at the
     per-expert cap, 413 over a package limit, 400 for anything malformed."""
@@ -213,6 +232,7 @@ async def _store_uploaded_skill(
             version_origin="imported",
             actor_user_id=user_id,
             summary="Uploaded by owner",
+            organization_id=organization_id,
         )
     except SkillLimitError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -255,6 +275,7 @@ async def read_copilot_skill(
     expert_id: str | None = Query(
         default=None, description="Read this expert's own copy of the skill."
     ),
+    ctx: RequestContext = Security(get_request_context),
 ) -> CopilotSkillDetail:
     """Return full SKILL.md content (name, description, triggers, body)
     for the library UI's expand-to-view dialog.
@@ -281,8 +302,10 @@ async def read_copilot_skill(
             is_default=True,
         )
 
-    await _require_skill_owner(user_id, expert_id)
-    parsed = await read_user_skill_with_body(user_id, slug, expert_id=expert_id)
+    await _require_skill_owner(user_id, expert_id, organization_id=ctx.org_id)
+    parsed = await read_user_skill_with_body(
+        user_id, slug, expert_id=expert_id, organization_id=ctx.org_id
+    )
     if parsed is None:
         raise HTTPException(
             status_code=HTTP_404_NOT_FOUND, detail=f"Skill '{slug}' not found"
@@ -301,7 +324,9 @@ async def read_copilot_skill(
                 size_bytes=f.size_bytes,
                 is_executable=f.is_executable,
             )
-            for f in await list_user_skill_files(user_id, slug, expert_id=expert_id)
+            for f in await list_user_skill_files(
+                user_id, slug, expert_id=expert_id, organization_id=ctx.org_id
+            )
         ],
     )
 
@@ -327,6 +352,7 @@ async def download_copilot_skill_package(
     expert_id: str | None = Query(
         default=None, description="Download this expert's own copy of the skill."
     ),
+    ctx: RequestContext = Security(get_request_context),
 ) -> Response:
     """Return the skill's whole folder as a zip — ``SKILL.md`` at the root,
     siblings at their relative paths, executable bits preserved — so a
@@ -335,10 +361,12 @@ async def download_copilot_skill_package(
     Built-in defaults are single on-disk files and are not downloadable here;
     GET ``/skills/{name}`` serves their body.
     """
-    await _require_skill_owner(user_id, expert_id)
+    await _require_skill_owner(user_id, expert_id, organization_id=ctx.org_id)
     slug = name.strip().lower()
     try:
-        package = await read_user_skill_package(user_id, slug, expert_id=expert_id)
+        package = await read_user_skill_package(
+            user_id, slug, expert_id=expert_id, organization_id=ctx.org_id
+        )
     except SkillPackageError as exc:
         raise HTTPException(status_code=413 if exc.over_limit else 400, detail=str(exc))
     if package is None:
@@ -363,6 +391,7 @@ async def delete_copilot_skill(
     expert_id: str | None = Query(
         default=None, description="Delete this expert's own copy of the skill."
     ),
+    ctx: RequestContext = Security(get_request_context),
 ) -> dict[str, str]:
     """Delete a user-distilled skill by slug.
 
@@ -371,9 +400,11 @@ async def delete_copilot_skill(
     stale list.  409 means the delete could not be ordered with another
     change to the owner's skills; nothing was deleted, so try again.
     """
-    await _require_skill_owner(user_id, expert_id)
+    await _require_skill_owner(user_id, expert_id, organization_id=ctx.org_id)
     try:
-        slug = await delete_user_skill(user_id, name, expert_id=expert_id)
+        slug = await delete_user_skill(
+            user_id, name, expert_id=expert_id, organization_id=ctx.org_id
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except BuiltInSkillError as exc:

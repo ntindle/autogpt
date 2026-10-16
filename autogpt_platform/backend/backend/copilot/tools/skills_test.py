@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -83,6 +84,18 @@ from backend.util.exceptions import ConflictError
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def registry_scope_boundary(monkeypatch):
+    monkeypatch.setattr(
+        "backend.copilot.tools.skills.skill_learning_db",
+        lambda: MagicMock(
+            resolve_skill_registry_scope=AsyncMock(
+                return_value=SimpleNamespace(organization_id=None, team_id=None)
+            )
+        ),
+    )
 
 
 def test_max_skills_per_expert_cap_constant():
@@ -406,6 +419,14 @@ class _patch_skills_path:
         self.skill_db.find_version_by_hash = AsyncMock(return_value=None)
         self.workdir = tempfile.mkdtemp(prefix="copilot-skills-test-")
         self._patches = [
+            patch(
+                "backend.copilot.tools.skills.skill_learning_db",
+                return_value=MagicMock(
+                    resolve_skill_registry_scope=AsyncMock(
+                        return_value=SimpleNamespace(organization_id=None, team_id=None)
+                    )
+                ),
+            ),
             patch(
                 "backend.copilot.learning.publish.reconcile_skill_for_read", AsyncMock()
             ),
@@ -750,9 +771,11 @@ async def test_the_saved_skill_limit_asks_the_workspace_about_the_root(
 
     assert await saved_skill_limit_reached("user-1", expert_id, "new-skill")
     workspaces.get_workspace_file_by_path.assert_awaited_once_with(
-        "workspace-1", path, user_global_config=True
+        "workspace-1", path, organization_id=None, team_id=None
     )
-    room.assert_awaited_once_with("workspace-1", path, origin, user_global_config=True)
+    room.assert_awaited_once_with(
+        "workspace-1", path, origin, organization_id=None, team_id=None
+    )
 
 
 @pytest.mark.asyncio

@@ -47,7 +47,9 @@ class IndexEntry(BaseModel):
     version: str | None
 
 
-async def paused_skill_names(user_id: str, expert_id: str | None) -> set[str] | None:
+async def paused_skill_names(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> set[str] | None:
     """Skills the owner asked to stop using.
 
     Returns ``None`` when the registry cannot be read. Callers must treat
@@ -57,7 +59,7 @@ async def paused_skill_names(user_id: str, expert_id: str | None) -> set[str] | 
     """
     try:
         names = await skill_versions_db().list_use_paused_skill_names(
-            user_id, owner_key_for(expert_id)
+            user_id, owner_key_for(expert_id, organization_id=organization_id)
         )
         return set(names)
     except Exception:
@@ -71,11 +73,15 @@ async def paused_skill_names(user_id: str, expert_id: str | None) -> set[str] | 
 
 
 async def resolve_current_version(
-    user_id: str, expert_id: str | None, skill_name: str
+    user_id: str,
+    expert_id: str | None,
+    skill_name: str,
+    *,
+    organization_id: str | None = None,
 ) -> tuple[SkillHeadRecord, SkillVersionRecord | None] | None:
     """Head + current version record for a learned skill, or ``None``."""
     head = await skill_versions_db().get_head(
-        user_id, owner_key_for(expert_id), skill_name
+        user_id, owner_key_for(expert_id, organization_id=organization_id), skill_name
     )
     if head is None:
         return None
@@ -94,6 +100,7 @@ async def record_skill_loaded(
     *,
     version_id: str | None,
     session_id: str | None,
+    organization_id: str | None = None,
 ) -> None:
     """A load event only. Never raises; never counts as success."""
     try:
@@ -104,6 +111,7 @@ async def record_skill_loaded(
             kind="loaded",
             version_id=version_id,
             session_id=session_id,
+            organization_id=organization_id,
         )
     except Exception:
         logger.debug("skill load event not recorded", exc_info=True)

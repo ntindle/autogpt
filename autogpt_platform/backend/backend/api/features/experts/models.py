@@ -228,6 +228,9 @@ _DAY_ONE_ITEMS: TypeAdapter[list[ExpertDayOneItem]] = TypeAdapter(
 
 
 class ExpertRoutine(BaseModel):
+    user_id: str | None = None
+    organization_id: str | None = None
+    team_id: str | None = None
     """Standing work done unattended, as the API and the fire path see it.
 
     A template's row is a proposal; a hire's row is that proposal until

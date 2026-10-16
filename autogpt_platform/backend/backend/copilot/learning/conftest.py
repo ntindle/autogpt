@@ -70,4 +70,5 @@ def fake_store(monkeypatch):
                 lambda: store,
                 raising=False,
             )
+    monkeypatch.setattr("backend.copilot.tools.skills.skill_learning_db", lambda: store)
     return store

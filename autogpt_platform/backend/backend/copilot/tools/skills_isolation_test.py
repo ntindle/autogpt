@@ -57,7 +57,9 @@ def world():
     experts = MagicMock()
     experts.get_expert = AsyncMock(
         side_effect=lambda user_id, expert_id, **_: (
-            MagicMock(id=expert_id) if expert_id in {"expert-a", "expert-b"} else None
+            MagicMock(id=expert_id, organization_id=None)
+            if expert_id in {"expert-a", "expert-b"}
+            else None
         )
     )
     experts.add_expert_skill_name = AsyncMock()
@@ -305,9 +307,9 @@ def _counting_slug_lookup():
     scans: list[list[str]] = []
     original = skills.find_user_skill_slugs
 
-    async def counted(user_id, names):
+    async def counted(user_id, names, *, organization_id=None):
         scans.append(list(names))
-        return await original(user_id, names)
+        return await original(user_id, names, organization_id=organization_id)
 
     return scans, counted
 

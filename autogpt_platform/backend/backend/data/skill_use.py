@@ -72,13 +72,15 @@ async def add_suppression(
     evidence_fingerprints: list[str],
     actor_user_id: str | None,
     reason: str,
+    organization_id: str | None = None,
 ) -> SkillSuppressionRecord:
-    owner_key = owner_key_for(expert_id)
+    owner_key = owner_key_for(expert_id, organization_id=organization_id)
     try:
         row = await prisma.models.SkillSuppression.prisma().create(
             data={
                 "userId": user_id,
                 "expertId": expert_id,
+                "organizationId": organization_id,
                 "ownerKey": owner_key,
                 "skillName": skill_name,
                 "behaviorFingerprint": behavior_fingerprint,
@@ -131,12 +133,14 @@ async def record_use_event(
     session_id: str | None = None,
     detail: str = "",
     actor_user_id: str | None = None,
+    organization_id: str | None = None,
 ) -> SkillUseEventRecord:
     row = await prisma.models.SkillUseEvent.prisma().create(
         data={
             "userId": user_id,
             "expertId": expert_id,
-            "ownerKey": owner_key_for(expert_id),
+            "organizationId": organization_id,
+            "ownerKey": owner_key_for(expert_id, organization_id=organization_id),
             "skillName": skill_name,
             "versionId": version_id,
             "sessionId": session_id,

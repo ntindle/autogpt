@@ -47,6 +47,7 @@ class SourceSnapshot(BaseModel):
 
 
 class PublishRequest(BaseModel):
+    organization_id: str | None = None
     user_id: str
     expert_id: str | None
     skill_name: str

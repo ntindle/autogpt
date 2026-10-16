@@ -378,7 +378,11 @@ async def get_live_skills(
 
 
 async def install_marketplace_skill(
-    user_id: str, slug: str, *, expert_id: str | None = None
+    user_id: str,
+    slug: str,
+    *,
+    expert_id: str | None = None,
+    organization_id: str | None = None,
 ) -> skill_model.InstalledSkill:
     """Copy a listing's whole package into *expert_id*'s skill folder, or the
     caller's own library when ``None``.
@@ -387,14 +391,20 @@ async def install_marketplace_skill(
     idempotent and a re-install picks up a newer approved version. The whole
     package is passed, so a file the new version dropped is removed too.
     """
-    [outcome] = await install_marketplace_skills(user_id, [slug], expert_id=expert_id)
+    [outcome] = await install_marketplace_skills(
+        user_id, [slug], expert_id=expert_id, organization_id=organization_id
+    )
     if isinstance(outcome, Exception):
         raise outcome
     return outcome
 
 
 async def install_marketplace_skills(
-    user_id: str, slugs: list[str], *, expert_id: str | None = None
+    user_id: str,
+    slugs: list[str],
+    *,
+    expert_id: str | None = None,
+    organization_id: str | None = None,
 ) -> list[skill_model.InstalledSkill | Exception]:
     """:func:`install_marketplace_skill` for several listings: one listing
     query, one file query and one locked write, with each slug's outcome
@@ -450,6 +460,7 @@ async def install_marketplace_skills(
                     writes,
                     expert_id=expert_id,
                     origin=SKILL_ORIGIN_MARKETPLACE,
+                    organization_id=organization_id,
                 ),
             )
         )

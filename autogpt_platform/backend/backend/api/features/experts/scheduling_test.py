@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,6 +8,31 @@ from prisma.enums import ResourceVisibility
 
 from backend.api.features.experts import scheduling
 from backend.util.exceptions import ExpertRunPausedError
+
+
+@pytest.fixture(autouse=True)
+def attachment_boundary(mocker):
+    @asynccontextmanager
+    async def barrier(_graph_id):
+        yield
+
+    mocker.patch.object(scheduling, "agent_graph_attachment_barrier", barrier)
+
+
+@pytest.mark.asyncio
+async def test_workflow_credentials_use_saved_expert_org(mocker) -> None:
+    data = mocker.MagicMock()
+    data.resolve_private_expert_tenancy = AsyncMock(return_value=("denton", "home"))
+    mocker.patch.object(scheduling, "expert_data", return_value=data)
+    match = mocker.patch(
+        "backend.copilot.tools.utils.match_user_credentials_to_graph",
+        AsyncMock(return_value=({}, [])),
+    )
+    graph = mocker.MagicMock()
+    assert (
+        await scheduling._resolve_workflow_credentials("owner", "expert", graph) == {}
+    )
+    match.assert_awaited_once_with("owner", graph, "expert", organization_id="denton")
 
 
 @pytest.mark.asyncio

@@ -751,6 +751,7 @@ class DatabaseManager(AppService):
     list_routines = _(experts_db.list_routines)
     enable_routine = _(experts_db.enable_routine)
     disable_routine = _(experts_db.disable_routine)
+    delete_routine = _(experts_db.delete_routine)
     get_routine = _(experts_db.get_routine)
     record_routine_thread = _(experts_routine_jobs.record_routine_thread)
     record_routine_fired = _(experts_routine_jobs.record_routine_fired)
@@ -777,6 +778,7 @@ class DatabaseManager(AppService):
     # Exposed so the Prisma-less copilot executor + scheduler can capture
     # sources, keep the review ledger, and read/write skill versions via
     # db_accessors.skill_learning_db() / skill_versions_db().
+    resolve_skill_registry_scope = _(skill_learning_data.resolve_skill_registry_scope)
     upsert_source_revision = _(skill_learning_data.upsert_source_revision)
     get_source = _(skill_learning_data.get_source)
     get_source_by_ref = _(skill_learning_data.get_source_by_ref)
@@ -1377,6 +1379,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     list_routines = d.list_routines
     enable_routine = d.enable_routine
     disable_routine = d.disable_routine
+    delete_routine = d.delete_routine
     enforce_expert_run_budget = d.enforce_expert_run_budget
     spend_approval_required = d.spend_approval_required
     park_execution_for_spend_approval = d.park_execution_for_spend_approval
@@ -1394,6 +1397,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     set_expert_learning_paused = d.set_expert_learning_paused
 
     # ============ Skill learning ============ #
+    resolve_skill_registry_scope = d.resolve_skill_registry_scope
     upsert_source_revision = d.upsert_source_revision
     get_source = d.get_source
     get_source_by_ref = d.get_source_by_ref

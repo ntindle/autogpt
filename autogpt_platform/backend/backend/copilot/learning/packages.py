@@ -40,7 +40,11 @@ class ReviewedPackage(BaseModel):
 
 
 async def load_reviewed_packages(
-    user_id: str, expert_id: str | None, skills: list[ParsedSkill]
+    user_id: str,
+    expert_id: str | None,
+    skills: list[ParsedSkill],
+    *,
+    organization_id: str | None = None,
 ) -> dict[str, ReviewedPackage]:
     packages: dict[str, ReviewedPackage] = {}
     remaining = MAX_REVIEW_FILES_CHARS
@@ -49,7 +53,10 @@ async def load_reviewed_packages(
             continue
         try:
             package = await read_user_skill_package(
-                user_id, skill.name, expert_id=expert_id
+                user_id,
+                skill.name,
+                expert_id=expert_id,
+                organization_id=organization_id,
             )
         except Exception:
             continue
@@ -63,7 +70,7 @@ async def load_reviewed_packages(
             package.skill_md, package.files, min(remaining, MAX_REVIEW_PACKAGE_CHARS)
         )
         reviewed.content_approvals = await current_content_approvals(
-            user_id, expert_id, skill.name
+            user_id, expert_id, skill.name, organization_id=organization_id
         )
         packages[skill.name] = reviewed
         remaining -= sum(len(f.content) for f in reviewed.files)

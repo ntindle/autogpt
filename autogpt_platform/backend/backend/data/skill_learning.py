@@ -21,6 +21,9 @@ import prisma.types
 from pydantic import BaseModel, Field
 
 from backend.data.db import execute_raw_with_schema, query_raw_with_schema, transaction
+from backend.data.skill_scope import (
+    resolve_skill_registry_scope as resolve_skill_registry_scope,
+)
 from backend.util.json import SafeJson
 
 PERSONAL_OWNER_KEY = "personal"
@@ -33,9 +36,10 @@ class LearningAccessError(PermissionError):
     """The caller does not own the learning row it tried to change."""
 
 
-def owner_key_for(expert_id: str | None) -> str:
+def owner_key_for(expert_id: str | None, organization_id: str | None = None) -> str:
     """Owner half of the learning unique keys: the expert id or ``personal``."""
-    return PERSONAL_OWNER_KEY if expert_id is None else expert_id
+    owner = PERSONAL_OWNER_KEY if expert_id is None else expert_id
+    return f"org:{organization_id}:{owner}" if organization_id else owner
 
 
 def canonical_revision(revision: str) -> str:
@@ -63,6 +67,7 @@ class LearningSourceRecord(BaseModel):
     user_id: str
     expert_id: str | None
     owner_key: str
+    organization_id: str | None = None
     source_kind: str
     source_id: str
     revision: str
@@ -87,6 +92,7 @@ class LearningSourceRecord(BaseModel):
             user_id=row.userId,
             expert_id=row.expertId,
             owner_key=row.ownerKey,
+            organization_id=row.organizationId,
             source_kind=row.sourceKind,
             source_id=row.sourceId,
             revision=row.revision,
@@ -152,6 +158,7 @@ async def upsert_source_revision(
     evidence_refs: list[dict[str, Any]],
     outcome_signals: list[dict[str, Any]],
     origin: str = "ordinary",
+    organization_id: str | None = None,
 ) -> LearningSourceRecord:
     """Record a revision of a source, merging bounded evidence under a row lock.
 
@@ -163,13 +170,16 @@ async def upsert_source_revision(
       inaccessible (epoch bumped) rather than silently re-owned.
     * Exclusion is never undone here.
     """
-    owner_key = owner_key_for(expert_id)
+    registry = await resolve_skill_registry_scope(user_id, expert_id, organization_id)
+    organization_id = registry.organization_id
+    owner_key = owner_key_for(expert_id, organization_id)
     rev = canonical_revision(revision)
     try:
         row = await prisma.models.SkillLearningSource.prisma().create(
             data={
                 "userId": user_id,
                 "expertId": expert_id,
+                "organizationId": organization_id,
                 "ownerKey": owner_key,
                 "sourceKind": source_kind,
                 "sourceId": source_id,

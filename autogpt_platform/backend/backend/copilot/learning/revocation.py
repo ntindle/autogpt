@@ -33,11 +33,14 @@ async def invalidate_versions_for_source(
             # Conditional: a deletion (or a newer version) landing since the
             # head was read must not inherit this pause.
             await versions.pause_use_if_current(user_id, head.id, replaced)
-            await invalidate_skills_index_cache(user_id, expert_id)
+            await invalidate_skills_index_cache(
+                user_id, expert_id, organization_id=head.organization_id
+            )
             continue
         await restore_version(
             user_id=user_id,
             expert_id=expert_id,
+            organization_id=head.organization_id,
             skill_name=skill_name,
             version_id=fallback,
             actor_user_id=user_id,
@@ -45,5 +48,7 @@ async def invalidate_versions_for_source(
             suppress_behavior=False,
             replacing_version_id=replaced,
         )
-        await invalidate_skills_index_cache(user_id, expert_id)
+        await invalidate_skills_index_cache(
+            user_id, expert_id, organization_id=head.organization_id
+        )
     return [v.id for v in affected]

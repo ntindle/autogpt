@@ -70,7 +70,9 @@ async def test_an_expert_lists_its_own_standing_work(experts):
     result = await ListRoutinesTool()._execute("user-1", _session("expert-a"))
     assert isinstance(result, RoutinesResponse)
     assert [r.key for r in result.routines] == ["queue-sweep"]
-    experts.list_routines.assert_awaited_once_with("user-1", "expert-a")
+    experts.list_routines.assert_awaited_once_with(
+        "user-1", "expert-a", organization_id=None
+    )
 
 
 async def test_autopilot_naming_nobody_lists_the_accounts_own_routines(experts):
@@ -80,12 +82,14 @@ async def test_autopilot_naming_nobody_lists_the_accounts_own_routines(experts):
     result = await ListRoutinesTool()._execute("user-1", _session(None))
     assert isinstance(result, RoutinesResponse)
     assert result.expert_id is None
-    experts.list_routines.assert_awaited_once_with("user-1", None)
+    experts.list_routines.assert_awaited_once_with("user-1", None, organization_id=None)
 
 
 async def test_autopilot_may_still_name_one_of_its_experts(experts):
     await ListRoutinesTool()._execute("user-1", _session(None), expert_id="expert-b")
-    experts.list_routines.assert_awaited_once_with("user-1", "expert-b")
+    experts.list_routines.assert_awaited_once_with(
+        "user-1", "expert-b", organization_id=None
+    )
 
 
 async def test_switching_one_on_passes_the_owners_answers_through(experts):
@@ -142,7 +146,7 @@ async def test_pinning_defaults_to_the_chat_the_routine_was_set_up_in(experts):
 async def test_pinning_can_name_another_chat_the_owner_holds(experts):
     """The one thing ``schedule_followup`` could do that a routine could not:
     land in a conversation other than the one being had now."""
-    target = MagicMock(expert_id="expert-a")
+    target = MagicMock(expert_id="expert-a", organization_id=None)
     with patch(f"{_PATH}.get_chat_session", AsyncMock(return_value=target)):
         await ScheduleRoutineTool()._execute(
             "user-1",
@@ -212,7 +216,9 @@ async def test_switching_one_off_keeps_the_row(experts):
     )
     assert isinstance(result, RoutineResponse)
     assert result.routine.enabled is False
-    experts.disable_routine.assert_awaited_once_with("user-1", "expert-a", "routine-1")
+    experts.disable_routine.assert_awaited_once_with(
+        "user-1", "expert-a", "routine-1", organization_id=None
+    )
     experts.enable_routine.assert_not_awaited()
 
 
@@ -433,7 +439,7 @@ async def test_autopilot_pinning_an_experts_routine_must_name_that_experts_chat(
 async def test_autopilot_may_pin_an_experts_routine_to_that_experts_chat(experts):
     with patch(
         f"{_PATH}.get_chat_session",
-        AsyncMock(return_value=MagicMock(expert_id="expert-a")),
+        AsyncMock(return_value=MagicMock(expert_id="expert-a", organization_id=None)),
     ):
         await ScheduleRoutineTool()._execute(
             "user-1",

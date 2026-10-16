@@ -336,7 +336,9 @@ async def _credential(credential_id: str, call: _Call) -> _Found | None:
 async def _routine(routine_id: str, call: _Call) -> _Found | None:
     # get_routine is unscoped, so the owner's own listing is the lookup.
     expert_id = call.args.get("expert_id") or call.session.expert_id
-    routines = await experts_db().list_routines(call.user_id, expert_id)
+    routines = await experts_db().list_routines(
+        call.user_id, expert_id, organization_id=call.session.organization_id
+    )
     routine = next((r for r in routines if r.id == routine_id), None)
     if routine is None:
         return None

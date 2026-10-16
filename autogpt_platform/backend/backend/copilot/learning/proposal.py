@@ -141,6 +141,7 @@ def build_publish_request(
     return PublishRequest(
         user_id=user_id,
         expert_id=source.scope.expert_id,
+        organization_id=source.scope.organization_id,
         skill_name=proposal.skill_name,
         create_only=proposal.decision == "create",
         description=proposal.description,

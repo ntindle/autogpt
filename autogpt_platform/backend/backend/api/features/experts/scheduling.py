@@ -19,6 +19,7 @@ from backend.api.features.experts import routine_jobs
 from backend.api.features.experts.errors import ExpertScheduleCleanupError
 from backend.api.features.experts.models import ExpertDetachPreview
 from backend.copilot import db as chat_db
+from backend.data.db_accessors import experts_db as expert_data
 from backend.data.expert_spend import get_weekly_spend, reset_weekly_spend
 from backend.data.model import CredentialsMetaInput
 from backend.data.tenancy import agent_graph_attachment_barrier
@@ -189,7 +190,12 @@ async def _resolve_workflow_credentials(
     # package at module load.
     from backend.copilot.tools.utils import match_user_credentials_to_graph
 
-    matched, _missing = await match_user_credentials_to_graph(user_id, graph, expert_id)
+    organization_id, _team_id = await expert_data().resolve_private_expert_tenancy(
+        user_id, expert_id
+    )
+    matched, _missing = await match_user_credentials_to_graph(
+        user_id, graph, expert_id, organization_id=organization_id
+    )
     return matched
 
 
@@ -577,6 +583,8 @@ async def _post_budget_message(
     """Post the warning/pause message into the expert's thread. Deduped to
     once per expert per week per kind via the deterministic message id.
     Never raises — a failed post must not affect the run decision."""
+    if expert.organizationId is None:
+        return
     year, week, _ = datetime.now(timezone.utc).isocalendar()
     kind = "pause" if breached else "warn"
     message_id = str(

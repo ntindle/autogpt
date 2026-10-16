@@ -457,10 +457,8 @@ async def schedule_turn(
 async def _routine_for_turn(args: "CopilotTurnJobArgs") -> ExpertRoutine | None:
     """Load the routine behind this job, if it is one.
 
-    A failed lookup returns ``None``, which is the cautious side of both
-    decisions it feeds: the turn lands in a fresh chat rather than one it
-    cannot confirm belongs to this routine, and it runs muted rather than
-    assuming an owner granted it anything.
+    A failed lookup returns ``None`` and the routine turn is skipped. It must
+    never fall back to an account-wide chat without its durable provenance.
     """
     if args.routine_id is None:
         return None
@@ -469,7 +467,7 @@ async def _routine_for_turn(args: "CopilotTurnJobArgs") -> ExpertRoutine | None:
     except Exception:
         logger.warning(
             "Could not load routine %s for scheduled turn %s; "
-            "firing into a fresh chat with nothing granted",
+            "skipping the turn without its saved ownership",
             args.routine_id[:12],
             args.schedule_id,
             exc_info=True,
@@ -508,6 +506,30 @@ async def _execute_copilot_turn(**kwargs):
         await _execute_at_reset_turn(args, args.purpose)
         return
     routine = await _routine_for_turn(args)
+    if args.routine_id is not None and routine is None:
+        return
+    if routine is not None and routine.expert_id is None:
+        if (
+            routine.user_id != args.user_id
+            or not routine.organization_id
+            or (
+                args.organization_id is not None
+                and args.organization_id != routine.organization_id
+            )
+            or (args.team_id is not None and args.team_id != routine.team_id)
+            or args.expert_id is not None
+        ):
+            logger.warning("Skipping routine schedule with mismatched saved ownership")
+            return
+        args = args.model_copy(
+            update={
+                "organization_id": routine.organization_id,
+                "team_id": routine.team_id,
+            }
+        )
+        organization_scope_was_persisted = True
+        team_scope_was_persisted = True
+        expert_scope_was_persisted = True
     if routine is not None and not routine.enabled:
         # Deleting a routine's jobs is best effort — the scheduler can refuse,
         # and a spent one-shot's row outlives its job either way. So "off" has
@@ -562,7 +584,7 @@ async def _execute_copilot_turn(**kwargs):
                     await _skip_inactive_expert_scope(args, expert_status)
                     return
             llm_auth_provider, llm_credential_id = await resolve_default_chat_route(
-                args.user_id
+                args.user_id, organization_id=args.organization_id
             )
             if await _refuse_if_turn_may_not_start(args, llm_auth_provider):
                 return

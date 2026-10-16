@@ -32,6 +32,7 @@ class LearningScope(BaseModel):
     user_id: str
     expert_id: str | None = None
     owner_key: str
+    organization_id: str | None = None
 
 
 class EvidenceRef(BaseModel):

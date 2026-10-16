@@ -65,6 +65,7 @@ async def record_skill_deletion(
     expected_current_version_id: str | None,
     behaviors: list[DeletedBehavior],
     actor_user_id: str | None,
+    organization_id: str | None = None,
 ) -> SkillDeletion:
     """End *skill_name*'s history and suppress *behaviors*, or change nothing.
 
@@ -87,6 +88,7 @@ async def record_skill_deletion(
                 expected_current_version_id=expected_current_version_id,
                 behaviors=behaviors,
                 actor_user_id=actor_user_id,
+                organization_id=organization_id,
             )
     except (_HeadChanged, prisma.errors.UniqueViolationError):
         return SkillDeletion(committed=False)
@@ -101,8 +103,9 @@ async def _record(
     expected_current_version_id: str | None,
     behaviors: list[DeletedBehavior],
     actor_user_id: str | None,
+    organization_id: str | None = None,
 ) -> SkillDeletion:
-    owner_key = owner_key_for(expert_id)
+    owner_key = owner_key_for(expert_id, organization_id=organization_id)
     head = await tx.skillhead.find_unique(
         where={
             "userId_ownerKey_skillName": {
@@ -116,7 +119,15 @@ async def _record(
     if current_id != expected_current_version_id:
         raise _HeadChanged()
     if behaviors:
-        await _suppress(tx, user_id, expert_id, skill_name, behaviors, actor_user_id)
+        await _suppress(
+            tx,
+            user_id,
+            expert_id,
+            skill_name,
+            behaviors,
+            actor_user_id,
+            organization_id=organization_id,
+        )
     if head is None:
         # A skill saved before version history has no head. It gets one, so
         # the deletion is on record and a learning run that read the package
@@ -125,6 +136,7 @@ async def _record(
             data={
                 "userId": user_id,
                 "expertId": expert_id,
+                "organizationId": organization_id,
                 "ownerKey": owner_key,
                 "skillName": skill_name,
             }
@@ -178,13 +190,16 @@ async def _suppress(
     skill_name: str,
     behaviors: list[DeletedBehavior],
     actor_user_id: str | None,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     await tx.skillsuppression.create_many(
         data=[
             {
                 "userId": user_id,
                 "expertId": expert_id,
-                "ownerKey": owner_key_for(expert_id),
+                "organizationId": organization_id,
+                "ownerKey": owner_key_for(expert_id, organization_id=organization_id),
                 "skillName": skill_name,
                 "behaviorFingerprint": behavior.behavior_fingerprint,
                 "behaviorTokens": list(behavior.behavior_tokens),
@@ -207,6 +222,7 @@ async def _append_marker(
         data={
             "userId": head.userId,
             "expertId": head.expertId,
+            "organizationId": head.organizationId,
             "ownerKey": head.ownerKey,
             "skillName": head.skillName,
             "headId": head.id,

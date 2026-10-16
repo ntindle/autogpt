@@ -14,6 +14,10 @@ from datetime import datetime, timezone
 import prisma.models
 import prisma.types
 
+from backend.api.features.experts.routine_scope import (
+    personal_routine_scope,
+    saved_personal_org,
+)
 from backend.util.clients import get_scheduler_client
 
 logger = logging.getLogger(__name__)
@@ -188,6 +192,10 @@ async def create_routine_schedules(
     session_id: str | None,
     user_timezone: str,
 ) -> list[str]:
+    organization_id = await saved_personal_org(row)
+    team_id = None
+    if organization_id is not None:
+        _, team_id = await personal_routine_scope(user_id, organization_id, "execute")
     scheduler = get_scheduler_client()
     created: list[str] = []
     # A one-shot is one job with no cron; a cadence is one job per cron. Both
@@ -208,6 +216,8 @@ async def create_routine_schedules(
                 user_timezone=user_timezone,
                 expert_id=expert_id,
                 routine_id=row.id,
+                organization_id=organization_id,
+                team_id=team_id,
             )
             created.append(info.id)
     except Exception:

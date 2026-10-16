@@ -110,7 +110,9 @@ class ListRoutinesTool(BaseTool):
         owner = await resolve_routine_owner(user_id, session, expert_id)
         if isinstance(owner, ErrorResponse):
             return owner
-        routines = await experts_db().list_routines(user_id, owner.expert_id)
+        routines = await experts_db().list_routines(
+            user_id, owner.expert_id, organization_id=session.organization_id
+        )
         return RoutinesResponse(
             message=(
                 f"{len(routines)} routine(s); "
@@ -294,7 +296,14 @@ class ScheduleRoutineTool(BaseTool):
             return credential_pins
         try:
             routine = await self._apply(
-                user_id, owner, routine_id, enabled, pinned, credential_pins, kwargs
+                user_id,
+                owner,
+                routine_id,
+                enabled,
+                pinned,
+                credential_pins,
+                kwargs,
+                session.organization_id,
             )
         except RoutineUnansweredAsksError as e:
             return ErrorResponse(
@@ -355,7 +364,11 @@ class ScheduleRoutineTool(BaseTool):
             if requested == current and in_owner_scope:
                 return requested
             target = await get_chat_session(requested, user_id)
-            if target is None or target.expert_id != owner.expert_id:
+            if (
+                target is None
+                or target.expert_id != owner.expert_id
+                or target.organization_id != session.organization_id
+            ):
                 return ErrorResponse(
                     message=(
                         f"Session {requested} not found, not owned by the "
@@ -407,7 +420,12 @@ class ScheduleRoutineTool(BaseTool):
         existing = None
         grant = kwargs.get("grants_credentials")
         if routine_id:
-            current = await experts_db().get_routine(routine_id)
+            current = await experts_db().get_routine(
+                routine_id,
+                user_id=user_id,
+                expert_id=owner.expert_id,
+                organization_id=session.organization_id,
+            )
             if current is not None and current.expert_id == owner.expert_id:
                 existing = current.credential_pins
                 if grant is None:
@@ -431,6 +449,7 @@ class ScheduleRoutineTool(BaseTool):
         pinned_session_id: str | None,
         credential_pins: CredentialPins | None,
         kwargs: dict[str, Any],
+        organization_id: str | None,
     ) -> ExpertRoutine:
         run_at = _run_at(kwargs.get("delay_seconds"))
         crons = kwargs.get("crons")
@@ -439,6 +458,7 @@ class ScheduleRoutineTool(BaseTool):
             created = await experts_db().create_routine(
                 user_id,
                 owner.expert_id,
+                organization_id=organization_id,
                 title=kwargs.get("title") or "",
                 prompt=kwargs.get("prompt") or "",
                 crons=crons,
@@ -461,12 +481,13 @@ class ScheduleRoutineTool(BaseTool):
             crons, run_at = None, None
         if not enabled:
             return await experts_db().disable_routine(
-                user_id, owner.expert_id, routine_id
+                user_id, owner.expert_id, routine_id, organization_id=organization_id
             )
         return await experts_db().enable_routine(
             user_id,
             owner.expert_id,
             routine_id,
+            organization_id=organization_id,
             prompt=kwargs.get("prompt"),
             crons=crons,
             run_at=run_at,

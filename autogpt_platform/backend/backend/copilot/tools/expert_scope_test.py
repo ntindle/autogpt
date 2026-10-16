@@ -36,6 +36,7 @@ def experts():
     db.install_workflow = AsyncMock()
     db.expert_allowed_credential_ids = AsyncMock(return_value=["granted-cred"])
     db.settle_credential_seed = AsyncMock()
+    db.resolve_private_expert_tenancy = AsyncMock(return_value=("saved-org", "home"))
     with patch(f"{_PATH}.experts_db", return_value=db):
         yield db
 
@@ -163,6 +164,7 @@ def test_provider_slug_uses_the_wire_value_of_enums():
 
 async def test_hint_lists_owned_but_ungranted_credentials(experts):
     store = MagicMock()
+    store.scoped.return_value = store
     store.get_all_creds = AsyncMock(
         return_value=[
             MagicMock(id="granted-cred", provider="github", title="GH granted"),
@@ -193,6 +195,7 @@ async def test_missing_credentials_are_annotated_with_expert_grants(experts):
         return MagicMock(id=id, provider="github", title=id, type=type, scopes=scopes)
 
     store = MagicMock()
+    store.scoped.return_value = store
     store.get_all_creds = AsyncMock(
         return_value=[
             cred("granted-cred", "oauth2", ["repo"]),
@@ -237,6 +240,7 @@ async def test_grant_candidates_must_match_the_requested_mcp_server(experts):
         )
 
     store = MagicMock()
+    store.scoped.return_value = store
     store.get_all_creds = AsyncMock(
         return_value=[
             mcp_cred("right-server", "https://mcp.example.com/sse"),

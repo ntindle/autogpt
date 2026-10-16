@@ -94,7 +94,7 @@ async def build_expert_identity_suffix(
 
     db = experts_db()
     try:
-        personal_org_id, personal_team_id = await db.resolve_private_expert_tenancy(
+        saved_org_id, saved_team_id = await db.resolve_private_expert_tenancy(
             user_id, expert_id
         )
     except ExpertNotFoundError as e:
@@ -105,9 +105,9 @@ async def build_expert_identity_suffix(
     except Exception as e:
         logger.warning(f"Failed to validate expert session tenancy: {e}")
         raise ExpertSessionUnavailableError(EXPERT_SESSION_TEMPORARY_MESSAGE) from e
-    if (organization_id, team_id) != (personal_org_id, personal_team_id):
+    if (organization_id, team_id) != (saved_org_id, saved_team_id):
         raise ExpertSessionUnavailableError(
-            "This private expert session must be reopened in its personal workspace."
+            "This private expert session must be reopened in its saved workspace."
         )
     return render_expert_identity_suffix(expert)
 
@@ -269,7 +269,7 @@ async def build_expert_context(
         return (
             team
             + render_account_standing_work_block()
-            + await _routines_block(user_id, None)
+            + await _routines_block(user_id, None, organization_id=organization_id)
         )
     except Exception as e:
         logger.warning(f"Failed to build expert context: {e}")
@@ -316,7 +316,7 @@ async def _expert_session_context(
         return ""
     return (
         render_expert_workflows_block(expert)
-        + await _routines_block(user_id, expert_id)
+        + await _routines_block(user_id, expert_id, organization_id=organization_id)
         + render_expert_computer_block()
         + teammates
     )
@@ -345,7 +345,9 @@ def render_account_standing_work_block() -> str:
     )
 
 
-async def _routines_block(user_id: str, expert_id: str | None) -> str:
+async def _routines_block(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> str:
     """The standing work this expert offers, and what is actually running.
 
     Without this the model has no idea its own routines exist, so it never
@@ -354,7 +356,9 @@ async def _routines_block(user_id: str, expert_id: str | None) -> str:
     to mention a routine is worse than one that cannot answer at all.
     """
     try:
-        routines = await experts_db().list_routines(user_id, expert_id)
+        routines = await experts_db().list_routines(
+            user_id, expert_id, organization_id=organization_id
+        )
     except Exception as e:
         logger.warning(f"Failed to load routines for expert context: {e}")
         return ""
@@ -516,7 +520,9 @@ async def _team_context(
     expert session's empty teammate list is just a solo roster, not a user
     without a team.
     """
-    experts = await experts_db().list_experts(user_id, with_metrics=False)
+    experts = await experts_db().list_experts(
+        user_id, with_metrics=False, organization_id=organization_id
+    )
     candidates = [e for e in experts if e.id != exclude_expert_id]
     matches = await asyncio.gather(
         *(

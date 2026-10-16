@@ -86,6 +86,7 @@ async def run_skill_learning_pass(
     source_ids: list[str] | None = None,
     trigger: Trigger = "nightly",
     config: ChatConfig | None = None,
+    organization_id: str | None = None,
 ) -> SkillLearningResult:
     """Never raises; every failure lands in ``SkillLearningResult``."""
     result = SkillLearningResult(
@@ -102,7 +103,12 @@ async def run_skill_learning_pass(
             return finish(result, skip_reason="lease_held")
         try:
             await _run_under_lease(
-                user_id, result, source_ids, config or ChatConfig(), lock
+                user_id,
+                result,
+                source_ids,
+                config or ChatConfig(),
+                lock,
+                organization_id=organization_id,
             )
         finally:
             await _release_lease(lock)
@@ -118,9 +124,15 @@ async def _run_under_lease(
     source_ids: list[str] | None,
     config: ChatConfig,
     lock: AsyncClusterLock,
+    *,
+    organization_id: str | None = None,
 ) -> None:
-    result.reconciled_writes = await reconcile_pending(user_id)
-    pending = await _select_sources(user_id, source_ids)
+    result.reconciled_writes = await reconcile_pending(
+        user_id, organization_id=organization_id
+    )
+    pending = await _select_sources(
+        user_id, source_ids, organization_id=organization_id
+    )
     if not pending:
         result.skipped = True
         result.skip_reason = "no_eligible_work"
@@ -169,7 +181,7 @@ async def _run_under_lease(
 
 
 async def _select_sources(
-    user_id: str, source_ids: list[str] | None
+    user_id: str, source_ids: list[str] | None, *, organization_id: str | None = None
 ) -> list[LearningSourceRecord]:
     """Bounded and fair: a per-owner page first, then round-robin.
 
@@ -181,9 +193,19 @@ async def _select_sources(
     learning = skill_learning_db()
     if source_ids:
         found = [await learning.get_source(user_id, sid) for sid in source_ids]
-        return [s for s in found if s is not None and s.has_unprocessed_revision]
+        return [
+            s
+            for s in found
+            if s is not None
+            and s.has_unprocessed_revision
+            and (organization_id is None or s.organization_id == organization_id)
+        ]
     queues: dict[str, list[LearningSourceRecord]] = {}
     for owner_key in await learning.list_pending_owner_keys(user_id):
+        if organization_id is not None and not owner_key.startswith(
+            f"org:{organization_id}:"
+        ):
+            continue
         queues[owner_key] = await learning.list_pending_sources(
             user_id, limit=MAX_REVIEWS_PER_OWNER, owner_key=owner_key
         )
@@ -285,8 +307,15 @@ async def _process_source(
             budget_skip or "insufficient_credits",
             advance=False,
         )
-    existing = await _existing_skills(user_id, source.scope.expert_id)
-    packages = await load_reviewed_packages(user_id, source.scope.expert_id, existing)
+    existing = await _existing_skills(
+        user_id, source.scope.expert_id, organization_id=source.scope.organization_id
+    )
+    packages = await load_reviewed_packages(
+        user_id,
+        source.scope.expert_id,
+        existing,
+        organization_id=source.scope.organization_id,
+    )
     reviews = skill_reviews_db()
     claim = await reviews.reserve_model_review(
         user_id,
@@ -444,11 +473,17 @@ async def _record_post_review_failure(
     )
 
 
-async def _existing_skills(user_id: str, expert_id: str | None) -> list[ParsedSkill]:
-    skills = await list_user_skills(user_id, expert_id, heal_missing=False)
+async def _existing_skills(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> list[ParsedSkill]:
+    skills = await list_user_skills(
+        user_id, expert_id, heal_missing=False, organization_id=organization_id
+    )
     out: list[ParsedSkill] = []
     for skill in skills[:MAX_EXISTING_SKILL_BODIES]:
-        full = await read_user_skill_with_body(user_id, skill.name, expert_id=expert_id)
+        full = await read_user_skill_with_body(
+            user_id, skill.name, expert_id=expert_id, organization_id=organization_id
+        )
         out.append(full or skill)
     return [*out, *skills[MAX_EXISTING_SKILL_BODIES:]]
 

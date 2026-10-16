@@ -63,6 +63,7 @@ from backend.data.db_accessors import (
     experts_db,
     skill_db,
     skill_deletion_db,
+    skill_learning_db,
     skill_versions_db,
     workspace_db,
     workspace_skill_db,
@@ -181,14 +182,16 @@ def skill_folder(expert_id: str | None) -> str:
 SKILLS_INDEX_CACHE_TTL_S = 60
 # Versioned: an entry cached before origins were recorded would count every
 # installed skill as the owner's for a TTL after deploy.
-SKILLS_INDEX_CACHE_KEY = "copilot:skills_index:v2:{user_id}"
+SKILLS_INDEX_CACHE_KEY = "copilot:skills_index:v3:{user_id}:{organization_id}"
 
 # A skill name on an expert's row that resolves to no folder in Otto's
 # library — a marketplace attachment, or a skill deleted after assignment —
 # can never be copied, so the heal below remembers it and stops re-scanning.
 # The TTL bounds how long a name that becomes copyable waits for its backfill.
 SKILLS_HEAL_BACKOFF_TTL_S = 600
-SKILLS_HEAL_BACKOFF_KEY = "copilot:skills_heal_backoff:{user_id}:expert:{expert_id}"
+SKILLS_HEAL_BACKOFF_KEY = (
+    "copilot:skills_heal_backoff:v2:{user_id}:{organization_id}:expert:{expert_id}"
+)
 
 # WorkspaceFile.metadata keys for the skill index fast path — avoids the
 # storage read when the metadata was written at store time (anything
@@ -222,7 +225,7 @@ UPDATE_RETIRED = "retired"
 
 # Slugs a reconcile rewrote since the owner's last turn, so the next turn can
 # tell the model the bodies it may have read are stale.
-SKILLS_UPDATED_KEY = "copilot:skills_updated:{user_id}:{owner}"
+SKILLS_UPDATED_KEY = "copilot:skills_updated:v2:{user_id}:{organization_id}:{owner}"
 SKILLS_UPDATED_TTL_S = 7 * 24 * 3600
 # Names one notice carries; the rest wait for the next. More than the
 # owner's skill cap, so in practice one pop takes them all.
@@ -233,7 +236,9 @@ _RECONCILE_WRITE_BUDGET = 5
 # Copies that could not take the version they were last tried against, so a
 # cold turn does not fetch the same package and fail on it again: slug → the
 # version id it failed to take. A newer publish retries at once.
-SKILLS_UPDATE_BACKOFF_KEY = "copilot:skills_update_backoff:{user_id}:{owner}"
+SKILLS_UPDATE_BACKOFF_KEY = (
+    "copilot:skills_update_backoff:v2:{user_id}:{organization_id}:{owner}"
+)
 SKILLS_UPDATE_BACKOFF_TTL_S = 6 * 3600
 
 
@@ -507,20 +512,27 @@ def validate_skill_content(
 
 
 async def _get_user_skill_manager(
-    user_id: str, scope: WorkspaceScope | None = None
+    user_id: str,
+    scope: WorkspaceScope | None = None,
+    *,
+    organization_id: str | None = None,
 ) -> WorkspaceManager:
+    registry = await skill_learning_db().resolve_skill_registry_scope(
+        user_id, scope.expert_id if scope else None, organization_id
+    )
     workspace = await workspace_db().get_or_create_workspace(user_id)
     return WorkspaceManager(
         user_id,
         workspace.id,
         session_id=None,
-        user_global_config=True,
+        organization_id=registry.organization_id,
+        team_id=registry.team_id,
         scope=scope,
     )
 
 
 async def resolve_skill_scope(
-    user_id: str | None, expert_id: str | None
+    user_id: str | None, expert_id: str | None, *, organization_id: str | None = None
 ) -> WorkspaceScope | None:
     """Workspace grants for an expert session's skill folder.
 
@@ -542,7 +554,11 @@ class SkillOwner(BaseModel):
 
 
 async def resolve_skill_owner(
-    user_id: str, session: ChatSession, requested_expert_id: str | None
+    user_id: str,
+    session: ChatSession,
+    requested_expert_id: str | None,
+    *,
+    organization_id: str | None = None,
 ) -> SkillOwner | str:
     """Decide the skill owner for a tool call, or return a denial message.
 
@@ -551,19 +567,24 @@ async def resolve_skill_owner(
     default and may name one of the owner's active experts to manage that
     expert's skills.
     """
+    registry = await skill_learning_db().resolve_skill_registry_scope(
+        user_id, session.expert_id, session.organization_id
+    )
     if session.expert_id is not None:
         if requested_expert_id and requested_expert_id != session.expert_id:
             return EXPERT_SKILL_SCOPE_DENIED
         return SkillOwner(
             expert_id=session.expert_id,
-            scope=await resolve_skill_scope(user_id, session.expert_id),
+            scope=await resolve_skill_scope(
+                user_id, session.expert_id, organization_id=session.organization_id
+            ),
         )
     if not requested_expert_id:
         return SkillOwner(expert_id=None, scope=None)
     expert = await experts_db().get_expert(
         user_id, requested_expert_id, include_workflows=False
     )
-    if expert is None:
+    if expert is None or expert.organization_id != registry.organization_id:
         return f"Expert '{requested_expert_id}' was not found on this account."
     return SkillOwner(expert_id=expert.id, scope=None)
 
@@ -744,6 +765,7 @@ async def delete_user_skill(
     *,
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
+    organization_id: str | None = None,
 ) -> str:
     """Delete a user-distilled skill folder by slug from *expert_id*'s folder
     (personal Otto's when ``None``).
@@ -764,24 +786,38 @@ async def delete_user_skill(
     SKILL.md removal is what makes the skill disappear from
     ``<available_skills>``).
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     slug = name.strip().lower()
     if not slug:
         raise ValueError("name is required")
     if slug in _DEFAULT_SKILLS_BY_NAME:
         raise BuiltInSkillError(f"'{slug}' is a built-in skill and cannot be deleted")
 
-    manager = await _get_user_skill_manager(user_id, scope)
-    lock = await _acquire_skill_write_lock(user_id, expert_id)
+    manager = await _get_user_skill_manager(
+        user_id, scope, organization_id=organization_id
+    )
+    lock = await _acquire_skill_write_lock(
+        user_id, expert_id, organization_id=organization_id
+    )
     if lock is None:
         raise SkillWriteLockError(
             "could not order the delete with other changes to these skills; "
             "try again"
         )
     try:
-        await _delete_skill_files(user_id, slug, expert_id, manager, lock)
+        await _delete_skill_files(
+            user_id, slug, expert_id, manager, lock, organization_id=organization_id
+        )
     finally:
         await _release_skill_write_lock(lock, user_id)
-    await invalidate_skills_index_cache(user_id, expert_id)
+    await invalidate_skills_index_cache(
+        user_id, expert_id, organization_id=organization_id
+    )
     if expert_id is not None:
         await experts_db().remove_expert_skill_name(user_id, expert_id, slug)
     return slug
@@ -793,6 +829,8 @@ async def _delete_skill_files(
     expert_id: str | None,
     manager: WorkspaceManager,
     lock: AsyncClusterLock,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     """The delete itself; the caller holds the write lock."""
     info = await manager.get_file_info_by_path(_skill_md_path(slug, expert_id))
@@ -819,6 +857,7 @@ async def _delete_skill_files(
         expert_id,
         slug,
         await _package_behavior(manager, expert_id, slug, parsed),
+        organization_id=organization_id,
     )
 
     await manager.delete_file(info.id)
@@ -875,6 +914,8 @@ async def _record_deletion(
     expert_id: str | None,
     slug: str,
     deleted: DeletedBehavior | None,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     """End *slug*'s version history and suppress what is being deleted.
 
@@ -888,7 +929,9 @@ async def _record_deletion(
     versions = skill_versions_db()
     current_id: str | None = None
     for _ in range(3):
-        head = await versions.get_head(user_id, owner_key_for(expert_id), slug)
+        head = await versions.get_head(
+            user_id, owner_key_for(expert_id, organization_id=organization_id), slug
+        )
         current_id = head.current_version_id if head is not None else None
         current = (
             await versions.get_version(user_id, current_id) if current_id else None
@@ -905,6 +948,7 @@ async def _record_deletion(
             expected_current_version_id=current_id,
             behaviors=list(behaviors.values()),
             actor_user_id=user_id,
+            organization_id=organization_id,
         )
         if result.committed:
             return
@@ -1062,6 +1106,7 @@ async def store_user_skill(
     content_approvals: list[SkillContentApproval] | None = None,
     seeded_secret_values: list[str] | None = None,
     expected_head: ExpectedHead | None = None,
+    organization_id: str | None = None,
 ) -> ParsedSkill:
     """Validate + persist a user-distilled skill, returning the stored skill.
 
@@ -1085,6 +1130,12 @@ async def store_user_skill(
     model's own ``store_skill`` from wiping a package it only rewrote the
     body of.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     [outcome] = await store_user_skills(
         user_id,
         [
@@ -1113,6 +1164,7 @@ async def store_user_skill(
         expert_id=expert_id,
         scope=scope,
         origin=origin,
+        organization_id=organization_id,
     )
     if isinstance(outcome, Exception):
         raise outcome
@@ -1158,10 +1210,17 @@ async def store_user_skills(
     scope: WorkspaceScope | None = None,
     origin: str = SKILL_ORIGIN_USER,
     notify_updates: bool = True,
+    organization_id: str | None = None,
 ) -> list[StoredSkill | Exception]:
     """:func:`store_user_skill` for several skills under one write lock and
     one listing of the owner's folder; returns each write's outcome in order,
     so one bad skill fails alone."""
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     outcomes: list[StoredSkill | Exception | None] = []
     prepared: list[tuple[int, _PreparedSkill]] = []
     for write in writes:
@@ -1175,11 +1234,17 @@ async def store_user_skills(
 
     # Coordinate ordinary package writes; the database owns the hard cap.
     # Without the lock they fall back to a best-effort unlocked write.
-    lock = await _acquire_skill_write_lock(user_id, expert_id)
+    lock = await _acquire_skill_write_lock(
+        user_id, expert_id, organization_id=organization_id
+    )
     lock_held = lock is not None
     try:
-        manager = await _get_user_skill_manager(user_id, scope)
-        existing = await _list_user_skills_from_workspace(user_id, expert_id, scope)
+        manager = await _get_user_skill_manager(
+            user_id, scope, organization_id=organization_id
+        )
+        existing = await _list_user_skills_from_workspace(
+            user_id, expert_id, scope, organization_id=organization_id
+        )
         same_origin = {s.name for s in existing if budget_origin(s) == origin}
         owners = {s.name for s in existing if s.origin == SKILL_ORIGIN_USER}
         copies = {s.name: s for s in existing if _keeps_install(s.origin, s.baseline)}
@@ -1206,10 +1271,16 @@ async def store_user_skills(
                         expert_id,
                         skill.parsed.name,
                         skill.learning.expected_head,
+                        organization_id=organization_id,
                     )
                 if origin == SKILL_ORIGIN_USER:
                     approvals = await _check_prepared_content(
-                        user_id, expert_id, scope, manager, skill
+                        user_id,
+                        expert_id,
+                        scope,
+                        manager,
+                        skill,
+                        organization_id=organization_id,
                     )
                     skill = skill._replace(
                         learning=skill.learning.model_copy(
@@ -1225,16 +1296,26 @@ async def store_user_skills(
                 continue
             if skill.learning.version_origin is not None:
                 await _record_package_history(
-                    user_id, expert_id, manager, skill, origin
+                    user_id,
+                    expert_id,
+                    manager,
+                    skill,
+                    origin,
+                    organization_id=organization_id,
                 )
             same_origin.add(skill.parsed.name)
             stored.append((index, skill.parsed.name))
             outcomes[index] = StoredSkill(skill.parsed, is_new, checksums)
         if stored:
-            await invalidate_skills_index_cache(user_id, expert_id)
+            await invalidate_skills_index_cache(
+                user_id, expert_id, organization_id=organization_id
+            )
             if notify_updates:
                 await _remember_updated(
-                    user_id, expert_id, [name for _, name in stored]
+                    user_id,
+                    expert_id,
+                    [name for _, name in stored],
+                    organization_id=organization_id,
                 )
         if expert_id is not None and stored:
             await _record_skill_names(user_id, expert_id, stored, outcomes)
@@ -1245,14 +1326,14 @@ async def store_user_skills(
 
 
 async def _acquire_skill_write_lock(
-    user_id: str, expert_id: str | None
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
 ) -> AsyncClusterLock | None:
     """Take the owner's skill write lock, or ``None`` when it stays held
     elsewhere for about a second or Redis cannot be reached."""
     try:
         lock = AsyncClusterLock(
             redis=await get_redis_async(),
-            key=f"{_SKILL_WRITE_LOCK_KEY_PREFIX}{user_id}:{expert_id or 'autopilot'}",
+            key=f"{_SKILL_WRITE_LOCK_KEY_PREFIX}{user_id}:{organization_id}:{expert_id or 'autopilot'}",
             owner_id=uuid.uuid4().hex,
             timeout=_SKILL_WRITE_LOCK_TTL_SECONDS,
         )
@@ -1281,12 +1362,19 @@ async def _release_skill_write_lock(lock: AsyncClusterLock, user_id: str) -> Non
 
 
 async def _require_current_head(
-    user_id: str, expert_id: str | None, name: str, expected: ExpectedHead
+    user_id: str,
+    expert_id: str | None,
+    name: str,
+    expected: ExpectedHead,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     """The version check of a versioned write. Runs with the write lock held
     so no other registry write (which records its version inside the same
     lock) can land between this read and the file write."""
-    head = await skill_versions_db().get_head(user_id, owner_key_for(expert_id), name)
+    head = await skill_versions_db().get_head(
+        user_id, owner_key_for(expert_id, organization_id=organization_id), name
+    )
     actual = head.current_version_id if head is not None else None
     if actual != expected.version_id:
         raise SkillVersionConflictError(expected.version_id, actual)
@@ -1343,6 +1431,8 @@ async def _record_package_history(
     manager: WorkspaceManager,
     skill: _PreparedSkill,
     origin: str,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     try:
         files = await _read_package_files(
@@ -1381,6 +1471,7 @@ async def _record_package_history(
                 )
                 for f in files
             ],
+            organization_id=organization_id,
         )
     except Exception:
         logger.warning("[skills] package history could not be recorded", exc_info=True)
@@ -1472,6 +1563,8 @@ async def _check_prepared_content(
     scope: WorkspaceScope | None,
     manager: WorkspaceManager,
     skill: _PreparedSkill,
+    *,
+    organization_id: str | None = None,
 ) -> list[SkillContentApproval]:
     bundle = (
         await read_skill_bundle_files(
@@ -1480,6 +1573,7 @@ async def _check_prepared_content(
             expert_id=expert_id,
             scope=scope,
             manager=manager,
+            organization_id=organization_id,
         )
         if skill.files is None
         else {}
@@ -1499,7 +1593,7 @@ async def _check_prepared_content(
     )
     if failure is not None and not approvals:
         approvals = await current_content_approvals(
-            user_id, expert_id, skill.parsed.name
+            user_id, expert_id, skill.parsed.name, organization_id=organization_id
         )
         failure = check_skill_bundle(
             bundle,
@@ -1724,6 +1818,8 @@ async def _list_user_skills_from_workspace(
     user_id: str,
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
+    *,
+    organization_id: str | None = None,
 ) -> list[ParsedSkill]:
     """Workspace-side listing — no caching.  Body fields are always empty
     because the index never needs them; :func:`read_user_skill_with_body`
@@ -1738,7 +1834,9 @@ async def _list_user_skills_from_workspace(
     is ordered newest-first and capped, so filtering client-side let one
     package's files push older skills out of the index entirely.
     """
-    manager = await _get_user_skill_manager(user_id, scope)
+    manager = await _get_user_skill_manager(
+        user_id, scope, organization_id=organization_id
+    )
     folder = skill_folder(expert_id)
 
     skills: list[ParsedSkill] = []
@@ -1777,17 +1875,23 @@ async def _list_user_skills_from_workspace(
     return skills
 
 
-def _skills_cache_key(user_id: str, expert_id: str | None = None) -> str:
-    base = SKILLS_INDEX_CACHE_KEY.format(user_id=user_id)
+def _skills_cache_key(
+    user_id: str, expert_id: str | None = None, *, organization_id: str | None = None
+) -> str:
+    base = SKILLS_INDEX_CACHE_KEY.format(
+        user_id=user_id, organization_id=organization_id
+    )
     return base if expert_id is None else f"{base}:expert:{expert_id}"
 
 
 async def _read_skills_cache(
-    user_id: str, expert_id: str | None = None
+    user_id: str, expert_id: str | None = None, *, organization_id: str | None = None
 ) -> list[ParsedSkill] | None:
     try:
         redis = await get_redis_async()
-        raw = await redis.get(_skills_cache_key(user_id, expert_id))
+        raw = await redis.get(
+            _skills_cache_key(user_id, expert_id, organization_id=organization_id)
+        )
     except Exception:
         # Cache is best-effort — a redis blip must not break the turn.
         return None
@@ -1817,7 +1921,11 @@ async def _read_skills_cache(
 
 
 async def _write_skills_cache(
-    user_id: str, skills: list[ParsedSkill], expert_id: str | None = None
+    user_id: str,
+    skills: list[ParsedSkill],
+    expert_id: str | None = None,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     try:
         redis = await get_redis_async()
@@ -1838,7 +1946,7 @@ async def _write_skills_cache(
             ]
         )
         await redis.set(
-            _skills_cache_key(user_id, expert_id),
+            _skills_cache_key(user_id, expert_id, organization_id=organization_id),
             payload,
             ex=SKILLS_INDEX_CACHE_TTL_S,
         )
@@ -1848,7 +1956,7 @@ async def _write_skills_cache(
 
 
 async def invalidate_skills_index_cache(
-    user_id: str, expert_id: str | None = None
+    user_id: str, expert_id: str | None = None, *, organization_id: str | None = None
 ) -> None:
     """Drop the cached per-user skill index so the next turn rebuilds it.
     Called by ``store_skill`` / ``delete_user_skill`` so an edit shows up
@@ -1857,9 +1965,17 @@ async def invalidate_skills_index_cache(
     Also drops the expert's heal backoff: the folder just changed, so a name
     that resolved to nothing before may resolve now.
     """
-    keys = [_skills_cache_key(user_id, expert_id)]
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
+    keys = [_skills_cache_key(user_id, expert_id, organization_id=organization_id)]
     if expert_id is not None:
-        keys.append(_heal_backoff_key(user_id, expert_id))
+        keys.append(
+            _heal_backoff_key(user_id, expert_id, organization_id=organization_id)
+        )
     try:
         redis = await get_redis_async()
         await redis.delete(*keys)
@@ -1870,17 +1986,33 @@ async def invalidate_skills_index_cache(
 
 
 async def saved_skill_limit_reached(
-    user_id: str, expert_id: str | None, name: str
+    user_id: str,
+    expert_id: str | None,
+    name: str,
+    *,
+    organization_id: str | None = None,
 ) -> bool:
     """Whether saving ``name`` as the owner's skill would need a saved-skill
     slot the owner no longer has, by the same count of live roots the
     workspace enforces. A marketplace copy that records its install stays
     installed when edited (:func:`_keeps_install`) and needs no saved slot;
     any other root moves into, or already fills, the saved budget."""
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     workspace = await workspace_db().get_or_create_workspace(user_id)
+    registry = await skill_learning_db().resolve_skill_registry_scope(
+        user_id, expert_id, organization_id
+    )
     path = _skill_md_path(name, expert_id)
     root = await workspace_db().get_workspace_file_by_path(
-        workspace.id, path, user_global_config=True
+        workspace.id,
+        path,
+        organization_id=registry.organization_id,
+        team_id=registry.team_id,
     )
     meta = root.metadata if root is not None and root.metadata else {}
     origin = (
@@ -1889,7 +2021,11 @@ async def saved_skill_limit_reached(
         else SKILL_ORIGIN_USER
     )
     return not await workspace_skill_db().skill_root_has_room(
-        workspace.id, path, origin, user_global_config=True
+        workspace.id,
+        path,
+        origin,
+        organization_id=registry.organization_id,
+        team_id=registry.team_id,
     )
 
 
@@ -1899,6 +2035,7 @@ async def list_user_skills(
     scope: WorkspaceScope | None = None,
     *,
     heal_missing: bool = True,
+    organization_id: str | None = None,
 ) -> list[ParsedSkill]:
     """Return the skills owned by *expert_id* (personal Otto when ``None``).
 
@@ -1909,23 +2046,45 @@ async def list_user_skills(
     parse as valid SKILL.md so a stray file in ``/skills/`` cannot break
     the index.
     """
-    cached = await _read_skills_cache(user_id, expert_id)
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
+    cached = await _read_skills_cache(
+        user_id, expert_id, organization_id=organization_id
+    )
     if cached is not None:
         return cached
-    skills = await _list_user_skills_from_workspace(user_id, expert_id, scope)
+    skills = await _list_user_skills_from_workspace(
+        user_id, expert_id, scope, organization_id=organization_id
+    )
     if (
         heal_missing
         and expert_id is not None
-        and await _copy_assigned_skills_not_yet_owned(user_id, expert_id, skills)
+        and await _copy_assigned_skills_not_yet_owned(
+            user_id, expert_id, skills, organization_id=organization_id
+        )
     ):
-        skills = await _list_user_skills_from_workspace(user_id, expert_id, scope)
-    skills = await _reconcile_marketplace_copies(user_id, expert_id, skills, scope)
-    await _write_skills_cache(user_id, skills, expert_id)
+        skills = await _list_user_skills_from_workspace(
+            user_id, expert_id, scope, organization_id=organization_id
+        )
+    skills = await _reconcile_marketplace_copies(
+        user_id, expert_id, skills, scope, organization_id=organization_id
+    )
+    await _write_skills_cache(
+        user_id, skills, expert_id, organization_id=organization_id
+    )
     return skills
 
 
 async def _copy_assigned_skills_not_yet_owned(
-    user_id: str, expert_id: str, owned: list[ParsedSkill]
+    user_id: str,
+    expert_id: str,
+    owned: list[ParsedSkill],
+    *,
+    organization_id: str | None = None,
 ) -> bool:
     """Give the expert a copy of every skill its row lists but its folder
     lacks, and report whether anything landed.
@@ -1949,9 +2108,13 @@ async def _copy_assigned_skills_not_yet_owned(
         and skill_name_key(name) not in have
         and name.strip().lower() not in _DEFAULT_SKILLS_BY_NAME
     ]
-    if not missing or await _heal_backoff_covers(user_id, expert_id, missing):
+    if not missing or await _heal_backoff_covers(
+        user_id, expert_id, missing, organization_id=organization_id
+    ):
         return False
-    folders = await find_user_skill_slugs(user_id, missing)
+    folders = await find_user_skill_slugs(
+        user_id, missing, organization_id=organization_id
+    )
     copied = False
     unresolved: list[str] = []
     for name in missing:
@@ -1960,7 +2123,9 @@ async def _copy_assigned_skills_not_yet_owned(
             unresolved.append(name.strip().lower())
             continue
         try:
-            if await copy_skill_to_expert(user_id, expert_id, folder):
+            if await copy_skill_to_expert(
+                user_id, expert_id, folder, organization_id=organization_id
+            ):
                 copied = True
         except Exception:
             logger.exception(
@@ -1969,23 +2134,35 @@ async def _copy_assigned_skills_not_yet_owned(
                 expert_id,
             )
     # After the copies, so a copy's own cache invalidation cannot drop it.
-    await _set_heal_backoff(user_id, expert_id, unresolved)
+    await _set_heal_backoff(
+        user_id, expert_id, unresolved, organization_id=organization_id
+    )
     return copied
 
 
-def _heal_backoff_key(user_id: str, expert_id: str) -> str:
-    return SKILLS_HEAL_BACKOFF_KEY.format(user_id=user_id, expert_id=expert_id)
+def _heal_backoff_key(
+    user_id: str, expert_id: str, *, organization_id: str | None = None
+) -> str:
+    return SKILLS_HEAL_BACKOFF_KEY.format(
+        user_id=user_id, expert_id=expert_id, organization_id=organization_id
+    )
 
 
 async def _heal_backoff_covers(
-    user_id: str, expert_id: str, missing: list[str]
+    user_id: str,
+    expert_id: str,
+    missing: list[str],
+    *,
+    organization_id: str | None = None,
 ) -> bool:
     """True when every still-missing name was already proved uncopyable, so
     the scan can be skipped. A name outside the marker retries immediately —
     including one whose copy failed transiently."""
     try:
         redis = await get_redis_async()
-        raw = await redis.get(_heal_backoff_key(user_id, expert_id))
+        raw = await redis.get(
+            _heal_backoff_key(user_id, expert_id, organization_id=organization_id)
+        )
         known = set(json.loads(raw)) if raw else set()
     except Exception:
         # Losing the marker costs one repeat scan, never correctness.
@@ -1993,10 +2170,16 @@ async def _heal_backoff_covers(
     return all(name.strip().lower() in known for name in missing)
 
 
-async def _set_heal_backoff(user_id: str, expert_id: str, names: list[str]) -> None:
+async def _set_heal_backoff(
+    user_id: str,
+    expert_id: str,
+    names: list[str],
+    *,
+    organization_id: str | None = None,
+) -> None:
     """Record the names that resolved to nothing, or clear the marker when
     none did."""
-    key = _heal_backoff_key(user_id, expert_id)
+    key = _heal_backoff_key(user_id, expert_id, organization_id=organization_id)
     try:
         redis = await get_redis_async()
         if not names:
@@ -2019,6 +2202,8 @@ async def _reconcile_marketplace_copies(
     expert_id: str | None,
     skills: list[ParsedSkill],
     scope: WorkspaceScope | None,
+    *,
+    organization_id: str | None = None,
 ) -> list[ParsedSkill]:
     """Bring the owner's marketplace copies up to the listings' active
     versions, and flag the ones that could not be brought up.
@@ -2039,8 +2224,12 @@ async def _reconcile_marketplace_copies(
             "[skills] could not read active marketplace versions", exc_info=True
         )
         return skills
-    manager = await _get_user_skill_manager(user_id, scope)
-    backoff = await _read_update_backoff(user_id, expert_id)
+    manager = await _get_user_skill_manager(
+        user_id, scope, organization_id=organization_id
+    )
+    backoff = await _read_update_backoff(
+        user_id, expert_id, organization_id=organization_id
+    )
     flags: dict[str, str] = {}
     rewritten: list[str] = []
     failed: dict[str, str] = {}
@@ -2069,7 +2258,13 @@ async def _reconcile_marketplace_copies(
         budget -= 1
         try:
             outcome = await _update_copy(
-                manager, user_id, expert_id, scope, skill, current
+                manager,
+                user_id,
+                expert_id,
+                scope,
+                skill,
+                current,
+                organization_id=organization_id,
             )
         except SkillChangedError:
             # Written under the update; the next cold turn compares again.
@@ -2089,11 +2284,17 @@ async def _reconcile_marketplace_copies(
         if outcome == UPDATE_MERGED:
             flags[skill.name] = UPDATE_MERGED
     if failed:
-        await _set_update_backoff(user_id, expert_id, {**backoff, **failed})
+        await _set_update_backoff(
+            user_id, expert_id, {**backoff, **failed}, organization_id=organization_id
+        )
     if rewritten:
-        await _remember_updated(user_id, expert_id, rewritten)
+        await _remember_updated(
+            user_id, expert_id, rewritten, organization_id=organization_id
+        )
     if relist:
-        skills = await _list_user_skills_from_workspace(user_id, expert_id, scope)
+        skills = await _list_user_skills_from_workspace(
+            user_id, expert_id, scope, organization_id=organization_id
+        )
     return [replace(s, update=flags[s.name]) if s.name in flags else s for s in skills]
 
 
@@ -2108,6 +2309,8 @@ async def _update_copy(
     scope: WorkspaceScope | None,
     skill: ParsedSkill,
     current: "ActiveSkillVersion",
+    *,
+    organization_id: str | None = None,
 ) -> str | None:
     """Move one copy to the listing's active version. Returns what happened,
     or None when the copy has to be left alone: edited with no version to
@@ -2137,7 +2340,14 @@ async def _update_copy(
         if baseline.version_id == current.version_id:
             ours = await _read_working_package(manager, folder, skill.name)
             await _write_copy(
-                user_id, expert_id, scope, skill.name, ours, baseline, working_hash
+                user_id,
+                expert_id,
+                scope,
+                skill.name,
+                ours,
+                baseline,
+                working_hash,
+                organization_id=organization_id,
             )
             return _STAMPED
     wanted = [current.version_id]
@@ -2160,6 +2370,7 @@ async def _update_copy(
             fresh,
             working_hash,
             target.scanned_checksums,
+            organization_id=organization_id,
         )
         return _FAST_FORWARDED
     base = packages.get(baseline.version_id)
@@ -2181,6 +2392,7 @@ async def _update_copy(
         stamped,
         working_hash,
         target.scanned_checksums,
+        organization_id=organization_id,
     )
     return UPDATE_MERGED
 
@@ -2281,6 +2493,8 @@ async def _write_copy(
     baseline: SkillBaseline,
     expected_package_sha256: str,
     scanned_checksums: list[str] | None = None,
+    *,
+    organization_id: str | None = None,
 ) -> None:
     """Write a whole package over the copy through the ordinary install path,
     so it is validated, capped, locked and delta-written like any install,
@@ -2312,22 +2526,31 @@ async def _write_copy(
         scope=scope,
         origin=SKILL_ORIGIN_MARKETPLACE,
         notify_updates=False,
+        organization_id=organization_id,
     )
     if isinstance(outcome, Exception):
         raise outcome
 
 
-def _updated_key(user_id: str, expert_id: str | None) -> str:
-    return SKILLS_UPDATED_KEY.format(user_id=user_id, owner=expert_id or "autopilot")
+def _updated_key(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> str:
+    return SKILLS_UPDATED_KEY.format(
+        user_id=user_id, owner=expert_id or "autopilot", organization_id=organization_id
+    )
 
 
 async def _remember_updated(
-    user_id: str, expert_id: str | None, names: list[str]
+    user_id: str,
+    expert_id: str | None,
+    names: list[str],
+    *,
+    organization_id: str | None = None,
 ) -> None:
     """Note the copies a reconcile rewrote, for the next turn's notice."""
     try:
         redis = await get_redis_async()
-        key = _updated_key(user_id, expert_id)
+        key = _updated_key(user_id, expert_id, organization_id=organization_id)
         await redis.sadd(key, *names)
         await redis.expire(key, SKILLS_UPDATED_TTL_S)
     except Exception:
@@ -2335,10 +2558,12 @@ async def _remember_updated(
         pass
 
 
-async def _consume_updated(user_id: str, expert_id: str | None) -> list[str]:
+async def _consume_updated(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> list[str]:
     try:
         redis = await get_redis_async()
-        key = _updated_key(user_id, expert_id)
+        key = _updated_key(user_id, expert_id, organization_id=organization_id)
         # One atomic pop, so a name noted between a read and a delete is
         # never lost; anything past the count is picked up next turn.
         names = await redis.spop(key, _UPDATED_NOTICE_MAX) or []
@@ -2349,18 +2574,24 @@ async def _consume_updated(user_id: str, expert_id: str | None) -> list[str]:
         return []
 
 
-def _update_backoff_key(user_id: str, expert_id: str | None) -> str:
+def _update_backoff_key(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> str:
     return SKILLS_UPDATE_BACKOFF_KEY.format(
-        user_id=user_id, owner=expert_id or "autopilot"
+        user_id=user_id, owner=expert_id or "autopilot", organization_id=organization_id
     )
 
 
-async def _read_update_backoff(user_id: str, expert_id: str | None) -> dict[str, str]:
+async def _read_update_backoff(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> dict[str, str]:
     """Copies that could not take the version they were last tried against,
     slug → version id. Empty when Redis is away: the cost is a retry."""
     try:
         redis = await get_redis_async()
-        raw = await redis.get(_update_backoff_key(user_id, expert_id))
+        raw = await redis.get(
+            _update_backoff_key(user_id, expert_id, organization_id=organization_id)
+        )
         loaded = json.loads(raw) if raw else {}
     except Exception:
         return {}
@@ -2374,12 +2605,16 @@ async def _read_update_backoff(user_id: str, expert_id: str | None) -> dict[str,
 
 
 async def _set_update_backoff(
-    user_id: str, expert_id: str | None, entries: dict[str, str]
+    user_id: str,
+    expert_id: str | None,
+    entries: dict[str, str],
+    *,
+    organization_id: str | None = None,
 ) -> None:
     try:
         redis = await get_redis_async()
         await redis.set(
-            _update_backoff_key(user_id, expert_id),
+            _update_backoff_key(user_id, expert_id, organization_id=organization_id),
             json.dumps(entries),
             ex=SKILLS_UPDATE_BACKOFF_TTL_S,
         )
@@ -2393,6 +2628,7 @@ async def read_user_skill_with_body(
     *,
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
+    organization_id: str | None = None,
 ) -> ParsedSkill | None:
     """Return a single skill owned by *expert_id* (personal Otto when
     ``None``) with its body populated.
@@ -2402,10 +2638,18 @@ async def read_user_skill_with_body(
     ``None`` when no SKILL.md exists at the slug — callers translate that
     into a 404 / structured error response.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     slug = name.strip().lower()
     if not slug:
         return None
-    manager = await _get_user_skill_manager(user_id, scope)
+    manager = await _get_user_skill_manager(
+        user_id, scope, organization_id=organization_id
+    )
     return await _parse_skill_from_workspace(manager, _skill_md_path(slug, expert_id))
 
 
@@ -2416,12 +2660,21 @@ async def read_user_skill_markdown(
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
     strict: bool = False,
+    organization_id: str | None = None,
 ) -> str | None:
     """Raw ``SKILL.md`` text as stored — the bytes a version hash refers to."""
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     slug = name.strip().lower()
     if not slug:
         return None
-    manager = await _get_user_skill_manager(user_id, scope)
+    manager = await _get_user_skill_manager(
+        user_id, scope, organization_id=organization_id
+    )
     try:
         raw = await manager.read_file(_skill_md_path(slug, expert_id))
         return raw.decode("utf-8")
@@ -2439,6 +2692,7 @@ async def read_user_skill_package(
     *,
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
+    organization_id: str | None = None,
 ) -> SkillPackage | None:
     """The whole stored skill — the ``SKILL.md`` exactly as stored plus every
     sibling — or ``None`` when the slug has no ``SKILL.md``.
@@ -2456,10 +2710,18 @@ async def read_user_skill_package(
     ``SKILL.md`` with another's files. Exhausting the attempts raises rather
     than serving a package that may be mixed.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     slug = name.strip().lower()
     if not slug:
         return None
-    manager = await _get_user_skill_manager(user_id, scope)
+    manager = await _get_user_skill_manager(
+        user_id, scope, organization_id=organization_id
+    )
     folder = skill_folder(expert_id)
     root_path = _skill_md_path(slug, expert_id)
     for _ in range(_PACKAGE_READ_ATTEMPTS):
@@ -2503,6 +2765,7 @@ async def list_user_skill_files(
     *,
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
+    organization_id: str | None = None,
 ) -> list[SkillFileInfo]:
     """Every file beside a stored skill's ``SKILL.md`` — ``references/``,
     ``scripts/``, ``assets/``, or anything the model stashed there — with the
@@ -2511,11 +2774,19 @@ async def list_user_skill_files(
     Returns ``[]`` on any error: listing decorates the read it accompanies and
     must not fail it.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     slug = name.strip().lower()
     if not slug:
         return []
     try:
-        manager = await _get_user_skill_manager(user_id, scope)
+        manager = await _get_user_skill_manager(
+            user_id, scope, organization_id=organization_id
+        )
         return await _list_package_files(manager, skill_folder(expert_id), slug)
     except Exception:
         logger.warning(
@@ -2534,8 +2805,17 @@ async def read_user_skill_files(
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
     manager: WorkspaceManager | None = None,
+    organization_id: str | None = None,
 ) -> list[SkillFile]:
-    manager = manager or await _get_user_skill_manager(user_id, scope)
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
+    manager = manager or await _get_user_skill_manager(
+        user_id, scope, organization_id=organization_id
+    )
     return await _read_package_files(
         manager, skill_folder(expert_id), name, complete=True
     )
@@ -2548,6 +2828,7 @@ async def read_skill_bundle_files(
     expert_id: str | None = None,
     scope: WorkspaceScope | None = None,
     manager: WorkspaceManager | None = None,
+    organization_id: str | None = None,
 ) -> dict[str, str]:
     """Text of every sibling file in a skill folder, keyed by relative path.
 
@@ -2555,11 +2836,19 @@ async def read_skill_bundle_files(
     with the main body. Binary or oversized files are skipped; a listing
     failure yields ``{}`` (the SKILL.md itself is always checked).
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     slug = name.strip().lower()
     if not slug:
         return {}
     try:
-        manager = manager or await _get_user_skill_manager(user_id, scope)
+        manager = manager or await _get_user_skill_manager(
+            user_id, scope, organization_id=organization_id
+        )
         files = await _list_package_files(
             manager, skill_folder(expert_id), slug, cap=None
         )
@@ -2579,12 +2868,24 @@ async def read_skill_bundle_files(
     return out
 
 
-async def find_user_skill_slug(user_id: str, name: str) -> str | None:
+async def find_user_skill_slug(
+    user_id: str, name: str, *, organization_id: str | None = None
+) -> str | None:
     """Folder slug of personal Otto's skill called *name*."""
-    return (await find_user_skill_slugs(user_id, [name])).get(name.strip().lower())
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, None, organization_id
+            )
+        ).organization_id
+    return (
+        await find_user_skill_slugs(user_id, [name], organization_id=organization_id)
+    ).get(name.strip().lower())
 
 
-async def find_user_skill_slugs(user_id: str, names: list[str]) -> dict[str, str]:
+async def find_user_skill_slugs(
+    user_id: str, names: list[str], *, organization_id: str | None = None
+) -> dict[str, str]:
     """Folder slug per requested name, keyed by the lowercased name.
 
     Matches the folder first, then the frontmatter name — a skill written by
@@ -2592,10 +2893,16 @@ async def find_user_skill_slugs(user_id: str, names: list[str]) -> dict[str, str
     covers the whole batch, and a folder carrying store-time metadata is
     matched without reading it, so only hand-written skills cost a fetch.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, None, organization_id
+            )
+        ).organization_id
     wanted = {n.strip().lower() for n in names if n.strip()}
     if not wanted:
         return {}
-    manager = await _get_user_skill_manager(user_id)
+    manager = await _get_user_skill_manager(user_id, organization_id=organization_id)
     found: dict[str, str] = {}
     unnamed: list[Any] = []
     for f, slug in await _list_skill_roots(manager, SKILL_FOLDER):
@@ -2620,7 +2927,9 @@ async def find_user_skill_slugs(user_id: str, names: list[str]) -> dict[str, str
     return found
 
 
-async def copy_skill_to_expert(user_id: str, expert_id: str, name: str) -> str | None:
+async def copy_skill_to_expert(
+    user_id: str, expert_id: str, name: str, *, organization_id: str | None = None
+) -> str | None:
     """Give *expert_id* its own copy of one of personal Otto's skills.
 
     Returns the stored slug, or ``None`` when Otto has no such skill, and
@@ -2630,15 +2939,23 @@ async def copy_skill_to_expert(user_id: str, expert_id: str, name: str) -> str |
     whole package goes through :func:`store_user_skill`, so the copy is
     validated, capped and written siblings-first exactly like any other.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     slug = name.strip().lower()
     if not slug:
         return None
-    manager = await _get_user_skill_manager(user_id)
+    manager = await _get_user_skill_manager(user_id, organization_id=organization_id)
     if await manager.get_file_info_by_path(_skill_md_path(slug, expert_id)):
         # Reconcile a copy whose row update failed earlier; idempotent.
         await experts_db().add_expert_skill_name(user_id, expert_id, slug)
         return slug
-    source = await read_user_skill_with_body(user_id, slug)
+    source = await read_user_skill_with_body(
+        user_id, slug, organization_id=organization_id
+    )
     if source is None:
         return None
     # The origin lives on the row, not in the file the parse above read; a
@@ -2666,6 +2983,7 @@ async def copy_skill_to_expert(user_id: str, expert_id: str, name: str) -> str |
         version_origin="imported",
         actor_user_id=user_id,
         summary="Copied from the personal skill library",
+        organization_id=organization_id,
     )
     return stored.name
 
@@ -2781,6 +3099,7 @@ async def list_all_skills(
     scope: WorkspaceScope | None = None,
     *,
     require_complete: bool = False,
+    organization_id: str | None = None,
 ) -> list[ParsedSkill]:
     """Default seeded skills first, then the owner's own skills.
 
@@ -2796,10 +3115,20 @@ async def list_all_skills(
     ``require_complete`` rejects an unavailable registry so callers cannot
     mistake a partial index for a confirmed removal of owner skills.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     skills = get_default_skills_for_index()
     if user_id:
-        owned = await list_user_skills(user_id, expert_id, scope)
-        paused = await paused_skill_names(user_id, expert_id)
+        owned = await list_user_skills(
+            user_id, expert_id, scope, organization_id=organization_id
+        )
+        paused = await paused_skill_names(
+            user_id, expert_id, organization_id=organization_id
+        )
         if paused is None and require_complete:
             raise RuntimeError("Skill registry availability could not be verified")
         if paused is not None:
@@ -2856,7 +3185,10 @@ async def is_skills_feature_enabled(user_id: str | None) -> bool:
 
 
 async def build_skills_context(
-    user_id: str | None, expert_id: str | None = None
+    user_id: str | None,
+    expert_id: str | None = None,
+    *,
+    organization_id: str | None = None,
 ) -> str:
     """Build the body of the ``<available_skills>`` block injected into
     the first user message.  Returns ``""`` if there are no skills to
@@ -2870,9 +3202,15 @@ async def build_skills_context(
     ``expert_id`` is the session's persisted expert attribution; the index
     then holds platform defaults plus that expert's own skills.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     if not await is_skills_feature_enabled(user_id):
         return ""
-    skills = await list_all_skills(user_id, expert_id)
+    skills = await list_all_skills(user_id, expert_id, organization_id=organization_id)
     index = render_skills_index(skills)
     if not index:
         return ""
@@ -2921,6 +3259,7 @@ async def build_skills_update_notice(
     prior_contents: Iterable[str] = (),
     *,
     session_id: str | None = None,
+    organization_id: str | None = None,
 ) -> str:
     """Per-turn ``<skills_update>`` notice, or ``""`` when nothing drifted.
 
@@ -2935,12 +3274,20 @@ async def build_skills_update_notice(
     Never raises: a registry or flag lookup failure degrades to ``""`` so
     a skills hiccup can't block the turn.
     """
+    if user_id:
+        organization_id = (
+            await skill_learning_db().resolve_skill_registry_scope(
+                user_id, expert_id, organization_id
+            )
+        ).organization_id
     if not user_id:
         return ""
     try:
         if not await is_skills_feature_enabled(user_id):
             return ""
-        current = await list_all_skills(user_id, expert_id, require_complete=True)
+        current = await list_all_skills(
+            user_id, expert_id, require_complete=True, organization_id=organization_id
+        )
     except Exception:
         logger.exception("[skills] failed to diff skills for update notice")
         return ""
@@ -2950,13 +3297,15 @@ async def build_skills_update_notice(
     removed = sorted(slug for slug in seen if slug not in current_slugs)
     updated = [
         slug
-        for slug in await _consume_updated(user_id, expert_id)
+        for slug in await _consume_updated(
+            user_id, expert_id, organization_id=organization_id
+        )
         if slug in current_slugs and slug not in added
     ]
     if session_id:
         try:
             heads = await skill_versions_db().list_heads(
-                user_id, owner_key_for(expert_id)
+                user_id, owner_key_for(expert_id, organization_id=organization_id)
             )
             current_versions = {
                 h.skill_name: h.current_version_id
@@ -3149,7 +3498,9 @@ class StoreSkillTool(BaseTool):
             return ErrorResponse(
                 message="Authentication required", session_id=session_id
             )
-        owner = await resolve_skill_owner(user_id, session, expert_id)
+        owner = await resolve_skill_owner(
+            user_id, session, expert_id, organization_id=session.organization_id
+        )
         if isinstance(owner, str):
             return ErrorResponse(
                 message=owner, error="access_denied", session_id=session_id
@@ -3175,6 +3526,7 @@ class StoreSkillTool(BaseTool):
                 triggers=triggers,
                 expert_id=owner.expert_id,
                 scope=owner.scope,
+                organization_id=session.organization_id,
             )
         except (VirusDetectedError, VirusScanError) as exc:
             logger.warning("[skills] virus scan failed for %s: %s", name, exc)
@@ -3236,6 +3588,7 @@ async def resolve_loaded_skill_version(
     text: str,
     *,
     manager: WorkspaceManager | None = None,
+    organization_id: str | None = None,
 ) -> LoadedSkillVersion:
     """Pin the loaded content to its exact version, refusing paused skills.
 
@@ -3244,7 +3597,9 @@ async def resolve_loaded_skill_version(
     hash differs from the head's ready version (a write that bypassed
     version tracking) is reported unversioned. Unsettled versions are refused.
     """
-    resolved = await resolve_current_version(user_id, expert_id, name)
+    resolved = await resolve_current_version(
+        user_id, expert_id, name, organization_id=organization_id
+    )
     if resolved is None:
         return LoadedSkillVersion()
     head, current = resolved
@@ -3257,7 +3612,9 @@ async def resolve_loaded_skill_version(
     if current is None or current.content_hash != content_hash(text):
         return LoadedSkillVersion()
     if current.files is not None:
-        manager = manager or await _get_user_skill_manager(user_id)
+        manager = manager or await _get_user_skill_manager(
+            user_id, organization_id=organization_id
+        )
         listed = await _list_package_files(manager, skill_folder(expert_id), name)
         if not _matches_version_files(
             listed, current.files, f"{skill_folder(expert_id)}/{name}/"
@@ -3351,7 +3708,9 @@ class ReadSkillTool(BaseTool):
                 session_id=session_id,
             )
 
-        owner = await resolve_skill_owner(user_id, session, expert_id)
+        owner = await resolve_skill_owner(
+            user_id, session, expert_id, organization_id=session.organization_id
+        )
         if isinstance(owner, str):
             return ErrorResponse(
                 message=owner, error="access_denied", session_id=session_id
@@ -3360,8 +3719,12 @@ class ReadSkillTool(BaseTool):
         try:
             from backend.copilot.learning.publish import reconcile_skill_for_read
 
-            manager = await _get_user_skill_manager(user_id, owner.scope)
-            await reconcile_skill_for_read(user_id, owner.expert_id, name)
+            manager = await _get_user_skill_manager(
+                user_id, owner.scope, organization_id=session.organization_id
+            )
+            await reconcile_skill_for_read(
+                user_id, owner.expert_id, name, organization_id=session.organization_id
+            )
             raw = await manager.read_file(_skill_md_path(name, owner.expert_id))
         except WorkspaceAccessDeniedError:
             return ErrorResponse(
@@ -3407,7 +3770,12 @@ class ReadSkillTool(BaseTool):
 
         try:
             loaded = await resolve_loaded_skill_version(
-                user_id, owner.expert_id, name, text, manager=manager
+                user_id,
+                owner.expert_id,
+                name,
+                text,
+                manager=manager,
+                organization_id=session.organization_id,
             )
         except SkillUsePausedError:
             return ErrorResponse(
@@ -3491,6 +3859,7 @@ class ReadSkillTool(BaseTool):
             name,
             version_id=loaded.version_id,
             session_id=session_id,
+            organization_id=session.organization_id,
         )
         return ReadSkillResponse(
             name=parsed.name,
@@ -3550,7 +3919,9 @@ class DeleteSkillTool(BaseTool):
             return ErrorResponse(
                 message="Authentication required", session_id=session_id
             )
-        owner = await resolve_skill_owner(user_id, session, expert_id)
+        owner = await resolve_skill_owner(
+            user_id, session, expert_id, organization_id=session.organization_id
+        )
         if isinstance(owner, str):
             return ErrorResponse(
                 message=owner, error="access_denied", session_id=session_id
@@ -3563,7 +3934,11 @@ class DeleteSkillTool(BaseTool):
             )
         try:
             slug = await delete_user_skill(
-                user_id, name, expert_id=owner.expert_id, scope=owner.scope
+                user_id,
+                name,
+                expert_id=owner.expert_id,
+                scope=owner.scope,
+                organization_id=session.organization_id,
             )
         except WorkspaceAccessDeniedError:
             return ErrorResponse(
@@ -3636,14 +4011,18 @@ class ListSkillsTool(BaseTool):
         owner_id: str | None = None
         owner_scope: WorkspaceScope | None = None
         if user_id:
-            owner = await resolve_skill_owner(user_id, session, expert_id)
+            owner = await resolve_skill_owner(
+                user_id, session, expert_id, organization_id=session.organization_id
+            )
             if isinstance(owner, str):
                 return ErrorResponse(
                     message=owner, error="access_denied", session_id=session.session_id
                 )
             owner_id = owner.expert_id
             owner_scope = owner.scope
-        skills = await list_all_skills(user_id, owner_id, owner_scope)
+        skills = await list_all_skills(
+            user_id, owner_id, owner_scope, organization_id=session.organization_id
+        )
         payload = [
             {
                 "name": s.name,
