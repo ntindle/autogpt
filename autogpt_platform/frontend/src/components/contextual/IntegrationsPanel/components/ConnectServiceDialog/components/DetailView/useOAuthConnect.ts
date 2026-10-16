@@ -17,6 +17,12 @@ import {
 } from "@/lib/oauth-popup";
 import { CredentialsActionsContext } from "@/providers/agent-credentials/credentials-provider";
 
+import {
+  getOrgContextHeaders,
+  ORG_HEADER_NAME,
+  TEAM_HEADER_NAME,
+} from "@/services/org-team/headers";
+
 import { getOAuthErrorMessage } from "./helpers";
 
 interface Args {
@@ -28,6 +34,7 @@ interface Args {
   /** Existing account to upgrade. The backend unions its scopes with the
    *  requested ones, so a re-auth cannot narrow what the user already had. */
   credentialID?: string;
+  request?: RequestInit;
 }
 
 export function useOAuthConnect({
@@ -35,6 +42,7 @@ export function useOAuthConnect({
   onSuccess,
   scopes,
   credentialID,
+  request,
 }: Args) {
   const queryClient = useQueryClient();
   const credentialsActions = useContext(CredentialsActionsContext);
@@ -69,6 +77,7 @@ export function useOAuthConnect({
     // may target a different credential). Reconcile the two explicitly if
     // this lifecycle is ever extracted into a shared hook.
     if (isPendingRef.current) return;
+    const flowRequest = snapshotRequest(request);
     isPendingRef.current = true;
     setIsPending(true);
     // Open the sign-in window synchronously, before the first await — iOS
@@ -87,6 +96,7 @@ export function useOAuthConnect({
         // The list that produced the dead id is stale; refresh it now so a
         // cancelled popup does not make every later click pay the retry too.
         () => credentialsActions?.reload(),
+        flowRequest,
       );
       // customMutator rejects non-2xx, so this branch is unreachable at
       // runtime — it exists only to narrow the discriminated union so the
@@ -131,10 +141,14 @@ export function useOAuthConnect({
       const { code, state } = await promise;
       abortRef.current = null;
 
-      const exchanged = await postV1ExchangeOauthCodeForTokens(provider, {
-        code,
-        state_token: state,
-      });
+      const exchanged = await postV1ExchangeOauthCodeForTokens(
+        provider,
+        {
+          code,
+          state_token: state,
+        },
+        flowRequest,
+      );
 
       toast({ title: "Connected via OAuth", variant: "success" });
       await invalidateConnectionQueries(queryClient);
@@ -171,6 +185,25 @@ export function useOAuthConnect({
   return { connect, isPending };
 }
 
+function snapshotRequest(request?: RequestInit): RequestInit {
+  const headers = new Headers(getOrgContextHeaders());
+  new Headers(request?.headers).forEach((value, key) =>
+    headers.set(key, value),
+  );
+  const organizationID = headers.get(ORG_HEADER_NAME) ?? "";
+  const teamID = headers.get(TEAM_HEADER_NAME) ?? "";
+  headers.delete(ORG_HEADER_NAME);
+  headers.delete(TEAM_HEADER_NAME);
+  return {
+    ...request,
+    headers: {
+      ...Object.fromEntries(headers),
+      [ORG_HEADER_NAME]: organizationID,
+      [TEAM_HEADER_NAME]: teamID,
+    },
+  };
+}
+
 function buildLoginParams(scopes?: string[], credentialID?: string) {
   const params: { scopes?: string; credential_id?: string } = {};
   if (scopes?.length) params.scopes = scopes.join(",");
@@ -189,16 +222,18 @@ async function initiateLogin(
   scopes?: string[],
   credentialID?: string,
   onStaleCredential?: () => void,
+  request?: RequestInit,
 ) {
   try {
     return await getV1InitiateOauthFlow(
       provider,
       buildLoginParams(scopes, credentialID),
+      request,
     );
   } catch (error) {
     if (!credentialID || !isMissingUpgradeTarget(error)) throw error;
     onStaleCredential?.();
-    return getV1InitiateOauthFlow(provider, buildLoginParams(scopes));
+    return getV1InitiateOauthFlow(provider, buildLoginParams(scopes), request);
   }
 }
 

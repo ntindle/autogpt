@@ -1,15 +1,9 @@
-import {
-  getGetExpertQueryKey,
-  useUpdateExpertSkills,
-} from "@/app/api/__generated__/endpoints/experts/experts";
-import {
-  getListCopilotSkillsQueryKey,
-  useListCopilotSkills,
-} from "@/app/api/__generated__/endpoints/skills/skills";
-import {
-  useGetV2ListMarketplaceSkills,
-  usePostV2InstallMarketplaceSkill,
-} from "@/app/api/__generated__/endpoints/store/store";
+import { getGetExpertQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useUpdateExpertSkills } from "@/services/experts/scoped-mutations";
+import { getListCopilotSkillsQueryKey } from "@/app/api/__generated__/endpoints/skills/skills";
+import { useListCopilotSkills } from "@/services/skills/scoped-queries";
+import { useGetV2ListMarketplaceSkills } from "@/app/api/__generated__/endpoints/store/store";
+import { usePostV2InstallMarketplaceSkill } from "@/services/skills/marketplace/scoped-mutations";
 import { MarketplaceSkill } from "@/app/api/__generated__/models/marketplaceSkill";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { CopilotSkillInfo } from "@/app/api/__generated__/models/copilotSkillInfo";

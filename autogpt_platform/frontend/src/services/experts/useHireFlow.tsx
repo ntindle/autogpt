@@ -1,8 +1,8 @@
+import { getGetExpertQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
 import {
-  getGetExpertQueryKey,
   useHireExpert,
   useUpdateExpertSoul,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+} from "@/services/experts/scoped-mutations";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { HireResult } from "@/app/api/__generated__/models/hireResult";
 import { Button } from "@/components/atoms/Button/Button";

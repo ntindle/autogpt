@@ -1,6 +1,6 @@
 "use client";
 
-import { useListCopilotSkills } from "@/app/api/__generated__/endpoints/skills/skills";
+import { useListCopilotSkills } from "@/services/skills/scoped-queries";
 import { useListCopilotFollowupSchedules } from "@/app/api/__generated__/endpoints/schedules/schedules";
 import { Text } from "@/components/atoms/Text/Text";
 import Link from "next/link";

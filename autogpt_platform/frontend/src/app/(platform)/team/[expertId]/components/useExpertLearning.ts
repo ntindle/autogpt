@@ -1,9 +1,7 @@
 import { getGetExpertQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
-import {
-  getListSkillLearningHistoryQueryKey,
-  useListSkillLearningHistory,
-  useUpdateExpertLearningPolicy,
-} from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
+import { getListSkillLearningHistoryQueryKey } from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
+import { useListSkillLearningHistory } from "@/services/skill-learning/scoped-queries";
+import { useUpdateExpertLearningPolicy } from "@/services/skill-learning/scoped-mutations";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { LearningHistoryItem } from "@/app/api/__generated__/models/learningHistoryItem";
 import { okData } from "@/app/api/helpers";

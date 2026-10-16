@@ -1,5 +1,5 @@
 import { useGetBrainDumpRecommendedExperts } from "@/app/api/__generated__/endpoints/brain-dump/brain-dump";
-import { useHireExpert } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useHireExpert } from "@/services/experts/scoped-mutations";
 import type { ExpertRecommendations } from "@/app/api/__generated__/models/expertRecommendations";
 import type { RecommendedExpert } from "@/app/api/__generated__/models/recommendedExpert";
 import { toast } from "@/components/molecules/Toast/use-toast";

@@ -1,5 +1,6 @@
-import { useListExpertIdentities } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExpertIdentities } from "@/services/experts/scoped-queries";
 import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
+import type { PrivateResourceScope } from "@/services/org-team/private-resource-scope";
 import { useMemo } from "react";
 
 /**
@@ -71,15 +72,19 @@ export function resolveExpertIdentity(
  * refetch fails. Consumers that present experts as addressable receive the
  * separate `activeExperts` projection instead of iterating this map.
  */
-export function useExpertMap() {
+export function useExpertMap(scope?: PrivateResourceScope) {
   const isExpertsEnabled = useGetFlag(Flag.HIRE_EXPERTS);
-  const expertsQuery = useListExpertIdentities({
-    query: {
-      enabled: isExpertsEnabled,
-      select: (response) =>
-        response.status === 200 ? response.data : undefined,
+  const expertsQuery = useListExpertIdentities(
+    {
+      query: {
+        enabled: isExpertsEnabled,
+        select: (response) =>
+          response.status === 200 ? response.data : undefined,
+      },
     },
-  });
+    undefined,
+    scope,
+  );
 
   // Memoized on purpose: the identities read out of this map are passed as
   // props (`expertIdentity`) down the whole chat tree, so rebuilding it every

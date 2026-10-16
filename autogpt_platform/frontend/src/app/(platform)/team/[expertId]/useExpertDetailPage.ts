@@ -1,10 +1,12 @@
 import {
   getGetExpertQueryKey,
   getListExpertsQueryKey,
+} from "@/app/api/__generated__/endpoints/experts/experts";
+import {
   useGetExpert,
   useGetExpertActivity,
-  useResumeExpertSchedules,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+} from "@/services/experts/scoped-queries";
+import { useResumeExpertSchedules } from "@/services/experts/scoped-mutations";
 import { useGetV1ListExecutionSchedulesForAUser } from "@/app/api/__generated__/endpoints/schedules/schedules";
 import { okData } from "@/app/api/helpers";
 import { useToast } from "@/components/molecules/Toast/use-toast";

@@ -86,50 +86,6 @@ export function useCopilotPage({
     "kickoff",
     parseAsString,
   );
-  const {
-    expertsById,
-    isLoadingExperts,
-    hasExpertsSettled,
-    hasExpertsErrored,
-  } = useExpertMap();
-  const validExpertIdParam =
-    expertIdParam && isValidUUID(expertIdParam) ? expertIdParam : null;
-  // Day one only fires for an expert we can still address. `onKickoff` writes
-  // its opening turn through `sendNewMessage`, bypassing the `onSend` archive
-  // guard, so a bogus id, an unreadable roster or a fired expert has to fall
-  // through to the read-only thread rather than reach the kickoff path.
-  const kickoffExpert = validExpertIdParam
-    ? expertsById.get(validExpertIdParam)
-    : undefined;
-  const kickoffExpertId =
-    isExpertsEnabled && hasExpertsSettled && kickoffExpert?.isArchived === false
-      ? kickoffExpert.id
-      : null;
-  const isKickoffResolving =
-    isExpertsEnabled &&
-    kickoffParam === "1" &&
-    validExpertIdParam !== null &&
-    isLoadingExperts;
-
-  useEffect(() => {
-    if (kickoffParam !== "1") return;
-    if (
-      !shouldClearKickoffParam(
-        isExpertsEnabled,
-        hasExpertsSettled,
-        kickoffExpertId,
-      )
-    )
-      return;
-    void setKickoffParam(null, { history: "replace" });
-  }, [
-    hasExpertsSettled,
-    isExpertsEnabled,
-    kickoffExpertId,
-    kickoffParam,
-    setKickoffParam,
-  ]);
-
   const { copilotLlmModel, isDryRun, setInitialPrompt } = useCopilotUIStore();
   const setArtifactTenantScope = useCopilotUIStore(
     (state) => state.setArtifactTenantScope,
@@ -198,6 +154,54 @@ export function useCopilotPage({
     adoptLatestExpertThread: !newThreadParam,
     createRequestInit: teamRequestInit,
   });
+
+  const {
+    expertsById,
+    isLoadingExperts,
+    hasExpertsSettled,
+    hasExpertsErrored,
+  } = useExpertMap({
+    organizationId: sessionId ? sessionOrganizationId : createOrganizationId,
+    teamId: sessionId ? sessionTeamId : createTeamId,
+    isReady: sessionId ? sessionTenantScope !== undefined : isTeamContextReady,
+  });
+  const validExpertIdParam =
+    expertIdParam && isValidUUID(expertIdParam) ? expertIdParam : null;
+  // Day one only fires for an expert we can still address. `onKickoff` writes
+  // its opening turn through `sendNewMessage`, bypassing the `onSend` archive
+  // guard, so a bogus id, an unreadable roster or a fired expert has to fall
+  // through to the read-only thread rather than reach the kickoff path.
+  const kickoffExpert = validExpertIdParam
+    ? expertsById.get(validExpertIdParam)
+    : undefined;
+  const kickoffExpertId =
+    isExpertsEnabled && hasExpertsSettled && kickoffExpert?.isArchived === false
+      ? kickoffExpert.id
+      : null;
+  const isKickoffResolving =
+    isExpertsEnabled &&
+    kickoffParam === "1" &&
+    validExpertIdParam !== null &&
+    isLoadingExperts;
+
+  useEffect(() => {
+    if (kickoffParam !== "1") return;
+    if (
+      !shouldClearKickoffParam(
+        isExpertsEnabled,
+        hasExpertsSettled,
+        kickoffExpertId,
+      )
+    )
+      return;
+    void setKickoffParam(null, { history: "replace" });
+  }, [
+    hasExpertsSettled,
+    isExpertsEnabled,
+    kickoffExpertId,
+    kickoffParam,
+    setKickoffParam,
+  ]);
 
   // An open session owns its identity: the URL param only describes who the
   // NEXT session will address, and it is absent whenever a thread is reached
@@ -539,6 +543,7 @@ export function useCopilotPage({
   });
 
   const { isKickoffStarting } = useExpertKickoff({
+    organizationId: sessionId ? sessionOrganizationId : createOrganizationId,
     userId: user?.id ?? null,
     expertId: kickoffExpertId,
     kickoff: isExpertsEnabled && kickoffParam === "1",

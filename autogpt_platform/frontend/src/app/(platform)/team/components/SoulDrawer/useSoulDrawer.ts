@@ -1,7 +1,5 @@
-import {
-  getGetExpertQueryKey,
-  useUpdateExpertSoul,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { getGetExpertQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useUpdateExpertSoul } from "@/services/experts/scoped-mutations";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { ExpertSoulUpdate } from "@/app/api/__generated__/models/expertSoulUpdate";
 import { toast } from "@/components/molecules/Toast/use-toast";

@@ -1,8 +1,6 @@
-import {
-  getGetV2GetExpertComputerQueryKey,
-  useGetV2GetExpertComputer,
-  usePostV2StartExpertDesktop,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { getGetV2GetExpertComputerQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useGetV2GetExpertComputer } from "@/services/experts/scoped-queries";
+import { usePostV2StartExpertDesktop } from "@/services/experts/scoped-mutations";
 import type { DesktopStream } from "@/app/api/__generated__/models/desktopStream";
 import { okData } from "@/app/api/helpers";
 import { useToast } from "@/components/molecules/Toast/use-toast";

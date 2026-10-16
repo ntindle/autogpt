@@ -1,6 +1,6 @@
 "use client";
 
-import { useGetExpertOnboarding } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useGetExpertOnboarding } from "@/services/experts/scoped-queries";
 import { AppSidebarTrigger } from "@/components/layout/AppSidebar/components/AppSidebarTrigger/AppSidebarTrigger";
 import type { ReactNode } from "react";
 import { ExpertOnboardingCard } from "./ExpertOnboardingCard";

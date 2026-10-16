@@ -6,7 +6,7 @@ import {
   usePatchV2UpdateSessionPinned,
   usePatchV2UpdateSessionTitle,
 } from "@/app/api/__generated__/endpoints/chat/chat";
-import { useExcludeSkillLearningSource } from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
+import { useExcludeSkillLearningSource } from "@/services/skill-learning/scoped-mutations";
 import { CHAT_SOURCE_KIND } from "@/services/skill-learning/helpers";
 import type { SessionSummaryResponse } from "@/app/api/__generated__/models/sessionSummaryResponse";
 import { Button } from "@/components/atoms/Button/Button";

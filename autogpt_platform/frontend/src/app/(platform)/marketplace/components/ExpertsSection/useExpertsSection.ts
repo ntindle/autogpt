@@ -1,7 +1,5 @@
-import {
-  useListExperts,
-  useListExpertTemplates,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExpertTemplates } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExperts } from "@/services/experts/scoped-queries";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { ExpertTemplate } from "@/app/api/__generated__/models/expertTemplate";
 import { useAuth } from "@/lib/auth/hooks/useAuth";

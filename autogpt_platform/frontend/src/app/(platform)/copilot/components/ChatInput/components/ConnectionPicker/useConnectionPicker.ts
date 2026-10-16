@@ -1,5 +1,6 @@
 "use client";
 
+import { useCopilotTenantScope } from "../../../../CopilotTenantScopeContext";
 import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
 
 import { useGetV2ListChatConnections } from "@/app/api/__generated__/endpoints/chat/chat";
@@ -17,7 +18,11 @@ import {
 import { useLockedTierFallback } from "./useLockedTierFallback";
 
 export function useConnectionPicker() {
-  const connectionsScope = useOrgConnectionScope("connections");
+  const tenantScope = useCopilotTenantScope();
+  const connectionsScope = useOrgConnectionScope(
+    "connections",
+    tenantScope.organizationId,
+  );
   const query = useGetV2ListChatConnections({
     request: connectionsScope.request,
     query: {
@@ -58,6 +63,7 @@ export function useConnectionPicker() {
 
   const { connect: connectChatGPT, isPending: isConnecting } = useOAuthConnect({
     provider: "codex",
+    request: connectionsScope.request,
     onSuccess: () => {
       query.refetch();
     },

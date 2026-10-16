@@ -26,6 +26,7 @@ import { useCopilotUIStore } from "../store";
 import { useChatSession } from "../useChatSession";
 import { useExpertKickoff } from "../useExpertKickoff";
 import { useSendMessage } from "../useSendMessage";
+import { useOrgTeamStore } from "@/services/org-team/store";
 
 const flagState = vi.hoisted(() => ({
   values: { "hire-experts": true } as Record<string, boolean>,
@@ -251,6 +252,52 @@ function persistedAssistantMessage() {
 }
 
 describe("useExpertKickoff", () => {
+  it("uses the explicit expert org for history and transports while another org is active", async () => {
+    useOrgTeamStore.setState({ activeOrgID: "reviewer", isLoaded: true });
+    const scopes: string[] = [];
+    const kickoff = vi.fn(async () => {});
+    server.use(
+      http.get("*/api/chat/sessions", ({ request }) => {
+        scopes.push(request.headers.get("X-Org-Id") ?? "missing");
+        return HttpResponse.json({ sessions: [], total: 0 });
+      }),
+      http.get("*/api/chat/transports", ({ request }) => {
+        scopes.push(request.headers.get("X-Org-Id") ?? "missing");
+        return HttpResponse.json({
+          transports: [
+            {
+              auth_provider: "platform",
+              credential_id: null,
+              label: "Self-hosted chat",
+              available: true,
+              default: true,
+            },
+          ],
+        });
+      }),
+    );
+    function ScopeHarness() {
+      useExpertKickoff({
+        organizationId: "denton",
+        userId: USER_ID,
+        expertId: EXPERT_ID,
+        kickoff: true,
+        sessionId: null,
+        sessionExpertId: null,
+        hasPersistedExpertHistory: null,
+        kickoffAttemptToken: null,
+        isClientThreadEmpty: true,
+        onAdoptSession: vi.fn(),
+        onKickoff: kickoff,
+        onSettled: vi.fn(),
+      });
+      return null;
+    }
+    render(<ScopeHarness />);
+    await waitFor(() => expect(kickoff).toHaveBeenCalledOnce());
+    expect(scopes).toEqual(["denton", "denton"]);
+  });
+
   it("creates atomically and waits for server persistence before consuming kickoff", async () => {
     let createBody: unknown = null;
     let createCount = 0;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useGrantExpertCredentials } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useGrantExpertCredentials } from "@/services/experts/scoped-mutations";
 import type { CredentialsMetaResponse } from "@/app/api/__generated__/models/credentialsMetaResponse";
 import { Button } from "@/components/atoms/Button/Button";
 import { Icon } from "@/components/atoms/Icon/Icon";

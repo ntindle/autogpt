@@ -1,6 +1,6 @@
 "use client";
 
-import { useGetExpert } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useGetExpert } from "@/services/experts/scoped-queries";
 import { okData } from "@/app/api/helpers";
 import { swatchClassFor } from "@/app/(platform)/raise/components/ColorStep/helpers";
 import { ExpertAvatar } from "@/components/molecules/ExpertAvatar/ExpertAvatar";

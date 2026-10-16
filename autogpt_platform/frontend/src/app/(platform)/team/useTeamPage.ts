@@ -1,4 +1,4 @@
-import { useListExperts } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExperts } from "@/services/experts/scoped-queries";
 import { useGetV1ListExecutionSchedulesForAUser } from "@/app/api/__generated__/endpoints/schedules/schedules";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { okData } from "@/app/api/helpers";

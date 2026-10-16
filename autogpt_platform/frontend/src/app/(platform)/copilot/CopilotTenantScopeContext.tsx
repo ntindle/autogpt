@@ -1,16 +1,16 @@
 "use client";
 
 import { createContext, useContext, type ReactNode } from "react";
+import { useOrgTeamStore } from "@/services/org-team/store";
 
 interface CopilotTenantScope {
   organizationId: string | null;
   teamId: string | null;
 }
 
-const CopilotTenantScopeContext = createContext<CopilotTenantScope>({
-  organizationId: null,
-  teamId: null,
-});
+const CopilotTenantScopeContext = createContext<CopilotTenantScope | undefined>(
+  undefined,
+);
 
 interface Props extends CopilotTenantScope {
   children: ReactNode;
@@ -29,5 +29,8 @@ export function CopilotTenantScopeProvider({
 }
 
 export function useCopilotTenantScope() {
-  return useContext(CopilotTenantScopeContext);
+  const scope = useContext(CopilotTenantScopeContext);
+  const organizationId = useOrgTeamStore((state) => state.activeOrgID);
+  const teamId = useOrgTeamStore((state) => state.activeTeamID);
+  return scope ?? { organizationId, teamId };
 }

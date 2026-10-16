@@ -1,8 +1,7 @@
 "use client";
 
 import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
-
-import { useListExpertCredentials } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExpertCredentials } from "@/services/experts/scoped-queries";
 import { useGetV1ListCredentials } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import {
   postV2DiscoverAvailableToolsOnAnMcpServer,
@@ -138,12 +137,17 @@ export function MCPSetupCard({ output, retryInstruction }: Props) {
     data: expertGrants,
     isFetchedAfterMount: expertGrantsFetched,
     isError: expertGrantsError,
-  } = useListExpertCredentials(expertGrant?.expertId ?? "", {
-    query: {
-      enabled: Boolean(expertGrant),
-      select: (res) => okData(res) ?? [],
+  } = useListExpertCredentials(
+    expertGrant?.expertId ?? "",
+    {
+      query: {
+        enabled: Boolean(expertGrant),
+        select: (res) => okData(res) ?? [],
+      },
     },
-  });
+    undefined,
+    { organizationId: tenantScope.organizationId, teamId: tenantScope.teamId },
+  );
   const grantedIds = expertGrant
     ? new Set((expertGrants ?? []).map((grant) => grant.credential_id))
     : null;

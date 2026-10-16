@@ -1,7 +1,5 @@
-import {
-  useListExperts,
-  useListExpertTemplates,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExpertTemplates } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExperts } from "@/services/experts/scoped-queries";
 import { useGetV1ListSystemProviders } from "@/app/api/__generated__/endpoints/integrations/integrations";
 import { okData } from "@/app/api/helpers";
 import { Expert } from "@/app/api/__generated__/models/expert";

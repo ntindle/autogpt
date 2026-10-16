@@ -1,21 +1,17 @@
 import { useOrgConnectionScope } from "@/services/credentials/useOrgConnectionScope";
-import {
-  getGetExpertQueryKey,
-  useListExperts,
-} from "@/app/api/__generated__/endpoints/experts/experts";
+import { getGetExpertQueryKey } from "@/app/api/__generated__/endpoints/experts/experts";
+import { useListExperts } from "@/services/experts/scoped-queries";
 import {
   getGetV1ListCredentialsQueryKey,
   useGetV1ListCredentials,
 } from "@/app/api/__generated__/endpoints/integrations/integrations";
-import {
-  getListCopilotSkillsQueryKey,
-  useListCopilotSkills,
-} from "@/app/api/__generated__/endpoints/skills/skills";
+import { getListCopilotSkillsQueryKey } from "@/app/api/__generated__/endpoints/skills/skills";
+import { useListCopilotSkills } from "@/services/skills/scoped-queries";
 import {
   useGetV2GetMarketplaceSkill,
   useGetV2ListMarketplaceSkills,
-  usePostV2InstallMarketplaceSkill,
 } from "@/app/api/__generated__/endpoints/store/store";
+import { usePostV2InstallMarketplaceSkill } from "@/services/skills/marketplace/scoped-mutations";
 import { Expert } from "@/app/api/__generated__/models/expert";
 import { okData } from "@/app/api/helpers";
 import { formatProviderName } from "@/components/contextual/IntegrationsPanel/helpers";
