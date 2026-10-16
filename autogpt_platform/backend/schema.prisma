@@ -1415,6 +1415,9 @@ model ExpertRoutine {
   userId String?
   User   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  organizationId String?
+  Organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
   // Roster/shared slug, and the key `_sync_routines` matches on. Null when the
   // expert authored this one in conversation; Postgres treats NULLs as
   // distinct, so the unique below still allows many authored rows.
@@ -1475,6 +1478,7 @@ model ExpertRoutine {
   @@unique([expertId, key])
   @@index([expertId, createdAt, id])
   @@index([userId, createdAt, id])
+  @@index([userId, organizationId])
 }
 
 // A Skills Hub listing a roster template comes with; hiring installs its
@@ -3136,8 +3140,9 @@ model Organization {
   // at most one live personal org per user — created via SQL migration
   // 20260713120000_org_one_personal_per_user (Prisma can't model partial indexes).
 
-  memoryOwners PersonalMemoryOrganization[]
-  memoryScopes MemoryScopeRegistry[]
+  memoryOwners   PersonalMemoryOrganization[]
+  memoryScopes   MemoryScopeRegistry[]
+  ExpertRoutines ExpertRoutine[]
 }
 
 model OrganizationAlias {

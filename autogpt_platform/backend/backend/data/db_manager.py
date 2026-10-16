@@ -720,6 +720,7 @@ class DatabaseManager(AppService):
     list_routines = _(experts_db.list_routines)
     enable_routine = _(experts_db.enable_routine)
     disable_routine = _(experts_db.disable_routine)
+    delete_routine = _(experts_db.delete_routine)
     get_routine = _(experts_db.get_routine)
     record_routine_thread = _(experts_routine_jobs.record_routine_thread)
     record_routine_fired = _(experts_routine_jobs.record_routine_fired)
@@ -1320,6 +1321,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     list_routines = d.list_routines
     enable_routine = d.enable_routine
     disable_routine = d.disable_routine
+    delete_routine = d.delete_routine
     enforce_expert_run_budget = d.enforce_expert_run_budget
     spend_approval_required = d.spend_approval_required
     park_execution_for_spend_approval = d.park_execution_for_spend_approval

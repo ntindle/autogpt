@@ -269,7 +269,7 @@ async def build_expert_context(
         return (
             team
             + render_account_standing_work_block()
-            + await _routines_block(user_id, None)
+            + await _routines_block(user_id, None, organization_id=organization_id)
         )
     except Exception as e:
         logger.warning(f"Failed to build expert context: {e}")
@@ -316,7 +316,7 @@ async def _expert_session_context(
         return ""
     return (
         render_expert_workflows_block(expert)
-        + await _routines_block(user_id, expert_id)
+        + await _routines_block(user_id, expert_id, organization_id=organization_id)
         + render_expert_computer_block()
         + teammates
     )
@@ -345,7 +345,9 @@ def render_account_standing_work_block() -> str:
     )
 
 
-async def _routines_block(user_id: str, expert_id: str | None) -> str:
+async def _routines_block(
+    user_id: str, expert_id: str | None, *, organization_id: str | None = None
+) -> str:
     """The standing work this expert offers, and what is actually running.
 
     Without this the model has no idea its own routines exist, so it never
@@ -354,7 +356,9 @@ async def _routines_block(user_id: str, expert_id: str | None) -> str:
     to mention a routine is worse than one that cannot answer at all.
     """
     try:
-        routines = await experts_db().list_routines(user_id, expert_id)
+        routines = await experts_db().list_routines(
+            user_id, expert_id, organization_id=organization_id
+        )
     except Exception as e:
         logger.warning(f"Failed to load routines for expert context: {e}")
         return ""

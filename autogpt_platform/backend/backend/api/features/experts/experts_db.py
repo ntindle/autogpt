@@ -79,6 +79,7 @@ from backend.api.features.experts.routine_jobs import (
     record_routine_thread as record_routine_thread,
 )
 from backend.api.features.experts.routines import create_routine as create_routine
+from backend.api.features.experts.routines import delete_routine as delete_routine
 from backend.api.features.experts.routines import disable_routine as disable_routine
 from backend.api.features.experts.routines import enable_routine as enable_routine
 from backend.api.features.experts.routines import get_routine as get_routine

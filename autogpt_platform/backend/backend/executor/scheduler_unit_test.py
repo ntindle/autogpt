@@ -450,7 +450,10 @@ _WORK_KEY = CredentialPin(id="exa-new", title="Work key")
 async def _fire_into_users_chat(args: CopilotTurnJobArgs, routine=None) -> dict:
     mock_schedule_turn = AsyncMock()
     users_chat = MagicMock(
-        organization_id=None, team_id=None, session_id="session-1", expert_id=None
+        organization_id=routine.organization_id if routine else None,
+        team_id=None,
+        session_id="session-1",
+        expert_id=None,
     )
     store = MagicMock(get_routine=AsyncMock(return_value=routine))
     with (
@@ -479,6 +482,8 @@ async def test_a_routines_turn_runs_on_the_accounts_on_its_row():
     routine = ExpertRoutine(
         id="routine-1",
         title="Briefing",
+        user_id="user-1",
+        organization_id="routine-org",
         prompt="Brief me",
         crons=["0 9 * * *"],
         enabled=True,
@@ -2604,6 +2609,8 @@ async def test_a_switched_off_routine_does_not_fire_and_its_job_is_removed():
     off = ExpertRoutine(
         id="routine-1",
         title="Stopped",
+        user_id="user-1",
+        organization_id="routine-org",
         prompt="Read it.",
         crons=["0 9 * * 1"],
         enabled=False,
@@ -2631,6 +2638,8 @@ async def test_a_switched_on_routine_still_fires():
     on = ExpertRoutine(
         id="routine-1",
         title="Running",
+        user_id="user-1",
+        organization_id="routine-org",
         prompt="Read it.",
         crons=["0 9 * * 1"],
         enabled=True,
@@ -2641,7 +2650,7 @@ async def test_a_switched_on_routine_still_fires():
     db.get_routine = AsyncMock(return_value=on)
     db.record_routine_fired = AsyncMock()
     session = MagicMock(
-        organization_id=None,
+        organization_id="routine-org",
         team_id=None,
         session_id="session-1",
         expert_id=None,
@@ -2696,7 +2705,10 @@ async def _fire_hourly(session_id: str | None, provider: str) -> dict[str, Async
         "_self_delete_copilot_turn_schedule": AsyncMock(),
     }
     session = MagicMock(
-        organization_id=None, team_id=None, session_id="session-1", expert_id=None
+        organization_id=None,
+        team_id=None,
+        session_id="session-1",
+        expert_id=None,
     )
     session.metadata.llm_auth_provider = provider
     with (
@@ -2806,14 +2818,22 @@ async def test_a_refused_one_shot_routine_is_retried_or_switched_off(
     refuse(owner_gate)
     scheduler_client = AsyncMock()
     routine = ExpertRoutine(
-        id="routine-1", title="CI", prompt="Check CI.", enabled=True
+        id="routine-1",
+        title="CI",
+        prompt="Check CI.",
+        enabled=True,
+        user_id="user-1",
+        organization_id="routine-org",
     )
     store = MagicMock(
         get_routine=AsyncMock(return_value=routine),
         mark_routine_unscheduled=AsyncMock(),
     )
     session = MagicMock(
-        organization_id=None, team_id=None, session_id="session-1", expert_id=None
+        organization_id="routine-org",
+        team_id=None,
+        session_id="session-1",
+        expert_id=None,
     )
     session.metadata.llm_auth_provider = "platform"
     schedule_turn = AsyncMock()
