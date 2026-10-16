@@ -37,6 +37,7 @@ from backend.copilot.graphiti.memory_model import (
     SourceKind,
 )
 from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import memory_organization_id
 from backend.copilot.tools.graphiti_forget import (
     invalidate_entity_direct_neighbors,
     mark_edges_superseded,
@@ -399,25 +400,19 @@ async def _create_dream_session(scope: MemoryScope, pass_id: str) -> str:
     # the Scheduler subprocess) auto-uses the DatabaseManager RPC client;
     # the DatabaseManager process itself uses the direct module.
     from backend.copilot.model import ChatSessionMetadata
-    from backend.data.db_accessors import chat_db, orgs_db
+    from backend.data.db_accessors import chat_db
 
     user_id = scope.owner_user_id
-    # Dream passes run per-user with no request context; the user's
-    # default (personal) org is the correct tenant for their dreams.
-    try:
-        org_id, team_id = await orgs_db().get_user_default_team(user_id)
-    except Exception:
-        logger.warning(
-            f"Could not resolve default team for dream session (user {user_id}); "
-            "creating tenant-less session"
-        )
-        org_id, team_id = None, None
+    org_id = await memory_organization_id(scope)
+    team_id = None
 
     session_id = str(uuidlib.uuid4())
     # A dream is unattended, but the user reads and replies to it, and on a
     # self-hosted install the platform route may not exist at all — so it
     # starts on the same connection the user chose for everything else.
-    llm_auth_provider, llm_credential_id = await resolve_default_chat_route(user_id)
+    llm_auth_provider, llm_credential_id = await resolve_default_chat_route(
+        user_id, organization_id=org_id
+    )
     metadata = ChatSessionMetadata(
         kind="dream",
         dream_pass_id=pass_id,

@@ -77,6 +77,9 @@ class NightlyBatchResult(BaseModel):
     # (flag off, no input, etc.). Each Pydantic model gets its own
     # field rather than a generic dict so consumers (admin viz,
     # AgentProbe scorers) don't have to dispatch on runtime type.
+    organization_id: str | None = None
+    expert_id: str | None = None
+    scope_results: dict[str, NightlyBatchResult] = Field(default_factory=dict)
     dream: DreamPassResult | None = None
     ratification: RatificationResult | None = None
     learning: SkillLearningResult | None = None
@@ -96,7 +99,13 @@ class NightlyBatchResult(BaseModel):
     error: str | None = None
 
 
-async def run_nightly_batch_submit(user_id: str) -> NightlyBatchResult:
+async def run_nightly_batch_submit(
+    user_id: str,
+    *,
+    organization_id: str | None = None,
+    expert_id: str | None = None,
+    include_learning: bool = True,
+) -> NightlyBatchResult:
     """Fan out per-user nightly batch-family submissions, in order.
 
     Today the order is dream-pass → ratification-supersession-sweep.
@@ -146,7 +155,11 @@ async def run_nightly_batch_submit(user_id: str) -> NightlyBatchResult:
         )
 
     result = NightlyBatchResult(
-        user_id=user_id, nightly_id=nightly_id, started_at=started_at
+        user_id=user_id,
+        nightly_id=nightly_id,
+        started_at=started_at,
+        organization_id=organization_id,
+        expert_id=expert_id,
     )
 
     # Dream pass submitter. Per-submitter failure stays isolated —
@@ -156,7 +169,9 @@ async def run_nightly_batch_submit(user_id: str) -> NightlyBatchResult:
     try:
         from .orchestrator import execute_dream_pass
 
-        result.dream = await execute_dream_pass(user_id)
+        result.dream = await execute_dream_pass(
+            user_id, organization_id=organization_id, expert_id=expert_id
+        )
         if result.dream.error:
             logger.warning(
                 "Nightly batch %s: dream submitter errored for user %s: %s",
@@ -184,7 +199,9 @@ async def run_nightly_batch_submit(user_id: str) -> NightlyBatchResult:
     # past their grace period — promotions happen inline at
     # retrieval-hit time.
     try:
-        result.ratification = await run_ratification_pass(user_id)
+        result.ratification = await run_ratification_pass(
+            user_id, organization_id=organization_id, expert_id=expert_id
+        )
         if result.ratification.error:
             logger.warning(
                 "Nightly batch %s: ratification sweep errored for user %s: %s",
@@ -204,7 +221,9 @@ async def run_nightly_batch_submit(user_id: str) -> NightlyBatchResult:
         result.error = (prev + " | " if prev else "") + f"ratification: {exc}"
 
     try:
-        if await is_feature_enabled(Flag.DREAM_SKILL_LEARNING_ENABLED, user_id):
+        if include_learning and await is_feature_enabled(
+            Flag.DREAM_SKILL_LEARNING_ENABLED, user_id
+        ):
             result.learning = await run_skill_learning_pass(user_id, trigger="nightly")
     except Exception as exc:
         logger.exception("Nightly skill learning failed for user %s", user_id[:12])

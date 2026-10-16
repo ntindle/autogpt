@@ -19,7 +19,7 @@ async def test_autopilot_dream_fetches_only_unscoped_sessions(mocker):
     )
 
     database.get_user_chat_sessions.assert_awaited_once_with(
-        "user-1", limit=10, autopilot_only=True
+        "user-1", limit=10, autopilot_only=True, organization_id="org-1"
     )
 
 
@@ -33,5 +33,5 @@ async def test_expert_dream_fetches_only_that_experts_sessions(mocker):
     )
 
     database.get_user_chat_sessions.assert_awaited_once_with(
-        "user-1", limit=10, expert_id="expert-1"
+        "user-1", limit=10, expert_id="expert-1", organization_id="org-1"
     )

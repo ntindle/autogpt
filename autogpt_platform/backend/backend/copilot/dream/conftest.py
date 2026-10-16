@@ -15,6 +15,7 @@ in-memory stand-in by default. Tests that need their own fake keep patching
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -189,9 +190,40 @@ def stub_dream_session_route(monkeypatch: pytest.MonkeyPatch) -> None:
     route, so answer "platform, no credential" up front.
     """
 
-    async def _platform_route(user_id: str) -> tuple[str, None]:
+    async def _platform_route(user_id: str, **kwargs) -> tuple[str, None]:
         return ("platform", None)
 
     monkeypatch.setattr(
         "backend.copilot.dream.apply.resolve_default_chat_route", _platform_route
+    )
+
+
+@pytest.fixture(autouse=True)
+def memory_storage_boundary(request, monkeypatch):
+    if request.node.get_closest_marker("integration"):
+        return
+    from backend.copilot.graphiti import scope_resolution
+    from backend.data import db_accessors
+
+    memory_store = MagicMock()
+    memory_store.get_personal_memory_organization = AsyncMock(return_value="org-1")
+    memory_store.register_memory_scope = AsyncMock()
+    monkeypatch.setattr(scope_resolution, "memory_db", lambda: memory_store)
+    monkeypatch.setattr(db_accessors, "memory_db", lambda: memory_store)
+
+
+@pytest.fixture(autouse=True)
+def memory_callback_access(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    class Lease:
+        async def run(self, action):
+            return await action
+
+    @asynccontextmanager
+    async def access(scope):
+        yield Lease()
+
+    monkeypatch.setattr(
+        "backend.copilot.dream.batch_callbacks.memory_scope_access", access
     )

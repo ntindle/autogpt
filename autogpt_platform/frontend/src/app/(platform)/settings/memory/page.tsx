@@ -4,6 +4,7 @@ import { Text } from "@/components/atoms/Text/Text";
 import { ErrorCard } from "@/components/molecules/ErrorCard/ErrorCard";
 import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 import { useEffect } from "react";
+import { useOrgTeamStore } from "@/services/org-team/store";
 
 import { EraseMemoryCard } from "./components/EraseMemoryCard";
 import { LearningHistoryCard } from "./components/LearningHistoryCard";
@@ -20,6 +21,11 @@ import { useMemoryPage } from "./useMemoryPage";
 import { MemoryPageAccess } from "./components/MemoryPageAccess";
 
 function SettingsMemoryPage() {
+  const organizationID = useOrgTeamStore((state) => state.activeOrgID);
+  return <SettingsMemoryContent key={organizationID ?? "personal"} />;
+}
+
+function SettingsMemoryContent() {
   const memoryEnabled = Boolean(useGetFlag(Flag.GRAPHITI_MEMORY));
   useEffect(() => {
     document.title = "Memory – AutoGPT Platform";

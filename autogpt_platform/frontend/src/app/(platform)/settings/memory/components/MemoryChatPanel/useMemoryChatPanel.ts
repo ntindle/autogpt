@@ -6,6 +6,8 @@ import {
   useGetV2GetSession,
   usePostV2CreateSession,
 } from "@/app/api/__generated__/endpoints/chat/chat";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+import { useOrgTeamStore } from "@/services/org-team/store";
 import * as Sentry from "@sentry/nextjs";
 import type { UIDataTypes, UIMessage, UITools } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -33,11 +35,15 @@ export function useMemoryChatPanel({ scopeExpertID }: Args) {
   const openingGenRef = useRef<number | null>(null);
   const lastSeedRef = useRef<MemoryChatSeed | null>(null);
 
-  const { mutateAsync: createSession } = usePostV2CreateSession();
+  const organizationID = useOrgTeamStore((state) => state.activeOrgID);
+  const isLoaded = useOrgTeamStore((state) => state.isLoaded);
+  const request = getTenantRequestInit(organizationID, null, isLoaded);
+  const { mutateAsync: createSession } = usePostV2CreateSession({ request });
 
   const sessionQuery = useGetV2GetSession(sessionId ?? "", undefined, {
+    request,
     query: {
-      enabled: !!sessionId,
+      enabled: isLoaded && !!sessionId,
       staleTime: Infinity,
       refetchOnWindowFocus: false,
       refetchOnMount: true,
@@ -60,6 +66,7 @@ export function useMemoryChatPanel({ scopeExpertID }: Args) {
   const { messages, setMessages, sendMessage, stop, status, error } =
     useCopilotStream({
       sessionId,
+      sessionTenantScope: { organizationId: organizationID, teamId: null },
       hydratedMessages,
       hasActiveStream,
       refetchSession: sessionQuery.refetch,
@@ -85,17 +92,18 @@ export function useMemoryChatPanel({ scopeExpertID }: Args) {
   // Switching scope invalidates the open conversation — reset everything and
   // bump the generation so an in-flight session create for the old scope is
   // discarded instead of binding its session under the new scope's name.
-  const scopeRef = useRef(scopeExpertID);
+  const scopeIdentity = `${organizationID}:${scopeExpertID}`;
+  const scopeRef = useRef(scopeIdentity);
   const scopeGenRef = useRef(0);
   useEffect(() => {
-    if (scopeRef.current === scopeExpertID) return;
-    scopeRef.current = scopeExpertID;
+    if (scopeRef.current === scopeIdentity) return;
+    scopeRef.current = scopeIdentity;
     scopeGenRef.current += 1;
     setIsOpen(false);
     setSessionId(null);
     setMessages([]);
     pendingPromptRef.current = null;
-  }, [scopeExpertID, setMessages]);
+  }, [scopeIdentity, setMessages]);
 
   async function openWithSeed(seed: MemoryChatSeed) {
     // Latest requested seed wins: a second click during the create-session
@@ -142,7 +150,10 @@ export function useMemoryChatPanel({ scopeExpertID }: Args) {
     const isInFlight = status === "streaming" || status === "submitted";
     if (isInFlight) {
       try {
-        await queueFollowUpMessage(sessionId, trimmed);
+        await queueFollowUpMessage(sessionId, trimmed, {
+          organizationId: organizationID,
+          teamId: null,
+        });
         queueMessage(trimmed);
       } catch (err) {
         // The turn finished while we were queueing — send normally instead.

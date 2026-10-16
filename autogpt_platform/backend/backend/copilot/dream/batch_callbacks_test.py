@@ -190,7 +190,7 @@ class TestPhaseChaining:
             mark_errored.await_args.kwargs["error"]
             == "batch DreamInput missing; memory scope unavailable"
         )
-        release_lock.assert_awaited_once_with(MemoryScope.for_user("u1"), None)
+        release_lock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_autopilot_payload_cannot_apply_expert_dream(
@@ -205,7 +205,7 @@ class TestPhaseChaining:
             DreamInput(
                 user_id="u1",
                 expert_id="expert-1",
-                group_id="expert_resolved",
+                group_id=MemoryScope.for_expert("u1", "expert-1").group_id,
                 window_start=now,
                 window_end=now,
             ),
@@ -258,7 +258,7 @@ class TestPhaseChaining:
             DreamInput(
                 user_id="u1",
                 expert_id="expert-1",
-                group_id="expert_resolved",
+                group_id=MemoryScope.for_expert("u1", "expert-1").group_id,
                 window_start=now,
                 window_end=now,
             ),
@@ -511,7 +511,7 @@ class TestPhaseChaining:
             DreamInput(
                 user_id="u1",
                 expert_id="expert-1",
-                group_id="expert_resolved",
+                group_id=MemoryScope.for_expert("u1", "expert-1").group_id,
                 window_start=now,
                 window_end=now,
             ),
@@ -933,12 +933,10 @@ class TestErrorPaths:
 
 class TestMalformedPayload:
     @pytest.mark.asyncio
-    async def test_missing_pass_id_releases_lock_without_token(self, fake_redis):
-        """Malformed payload (missing pass_id) early-returns but, since the
-        user_id is known, still attempts the lock release — with no pass_id
-        there's no persisted token to read, so the release is token-less
-        (release_dream_lock then defers to the lock TTL rather than
-        blind-deleting)."""
+    async def test_missing_pass_id_leaves_unknown_scope_lock_to_expire(
+        self, fake_redis
+    ):
+        """Missing scope authority must not derive a lock from payload user alone."""
         release = AsyncMock()
         entry = _entry()
         entry.payload["pass_id"] = ""
@@ -947,7 +945,7 @@ class TestMalformedPayload:
                 entry,
                 [_row(custom_id="p1:consolidate", content=_CONSOLIDATE_CONTENT)],
             )
-        release.assert_awaited_once_with(MemoryScope.for_user("u1"), None)
+        release.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_unknown_phase_label_releases_lock_with_persisted_token(
@@ -1071,7 +1069,7 @@ class TestLockTokenWiring:
         mark_errored.assert_not_awaited()
         # Token read failed → token-less release; release_dream_lock then
         # defers to the lock TTL rather than blind-deleting.
-        release_lock.assert_awaited_once_with(MemoryScope.for_user("u1"), None)
+        release_lock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_cleanup_failure_after_complete_keeps_job_completed(self, fake_redis):
@@ -1251,7 +1249,7 @@ async def test_dispatch_invalid_attribution_closes_job_without_billing(
         DreamInput(
             user_id="owner",
             expert_id="expert-original",
-            group_id="expert_original",
+            group_id=MemoryScope.for_expert("owner", "expert-original").group_id,
             window_start=now,
             window_end=now,
         ),
@@ -1295,3 +1293,54 @@ async def test_dispatch_invalid_attribution_closes_job_without_billing(
     submit.assert_not_called()
     apply.assert_not_called()
     capture.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload_org", [None, "different-org", "denton"])
+async def test_callback_uses_saved_org_and_rejects_legacy_or_foreign_payload(
+    fake_redis, payload_org
+):
+    now = datetime.now(timezone.utc)
+    scope = MemoryScope.build("u1", organization_id="denton")
+    await persist_input_bundle(
+        "p1",
+        DreamInput(
+            user_id="u1",
+            organization_id="denton",
+            group_id=scope.group_id,
+            window_start=now,
+            window_end=now,
+        ),
+        lock_token="saved-token",
+    )
+    entry = _entry()
+    if payload_org is not None:
+        entry.payload["organization_id"] = payload_org
+    with patch(
+        "backend.copilot.dream.batch_callbacks._handle_phase_result", AsyncMock()
+    ) as handle:
+        await handle_dream_batch_result(entry, [])
+    if payload_org == "denton":
+        assert handle.await_args.kwargs["input_bundle"].memory_scope == scope
+    else:
+        handle.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_callback_revoked_scope_cannot_apply_or_chain(fake_redis):
+    from contextlib import asynccontextmanager
+
+    await _persist_autopilot_bundle()
+
+    @asynccontextmanager
+    async def revoked(scope):
+        yield None
+
+    with (
+        patch("backend.copilot.dream.batch_callbacks.memory_scope_access", revoked),
+        patch(
+            "backend.copilot.dream.batch_callbacks._handle_phase_result", AsyncMock()
+        ) as handle,
+    ):
+        await handle_dream_batch_result(_entry(), [])
+    handle.assert_not_awaited()

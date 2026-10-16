@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel
 
-from backend.copilot.graphiti.scope import MemoryScope
 from backend.copilot.trial_cost_context import capture_cost_context
 from backend.executor.batch_executor import (
     INITIAL_POLL_DELAY_SECONDS,
@@ -161,6 +160,8 @@ async def submit_phase(
     # multi-phase chain can legitimately outlive a TTL stamped once at the
     # first submit. Re-arm the bundle TTL at every submit so it stays alive
     # exactly as long as some phase batch may still call back.
+    if input_bundle.memory_scope.owner_user_id != user_id:
+        raise ValueError("Dream input owner mismatch")
     cost_context = await capture_cost_context(user_id)
     await refresh_input_bundle_ttl(pass_id)
     model = phase_models[phase]
@@ -214,6 +215,7 @@ async def submit_phase(
             "user_id": user_id,
             "cost_context": cost_context.model_dump(mode="json"),
             "expert_id": input_bundle.expert_id,
+            "organization_id": input_bundle.organization_id,
             "pass_id": pass_id,
             "job_id": job_id,
             "phase": phase,
@@ -335,11 +337,10 @@ async def persist_input_bundle(
     from backend.data.redis_client import get_redis_async
 
     redis = await get_redis_async()
+    input_bundle.memory_scope
     payload = _input_bundle_to_dict(input_bundle)
     if lock_token is None:
-        lock_token = await read_dream_lock_token(
-            MemoryScope.build(input_bundle.user_id, input_bundle.expert_id)
-        )
+        lock_token = await read_dream_lock_token(input_bundle.memory_scope)
     if lock_token is not None:
         payload["lock_token"] = lock_token
     await redis.set(
@@ -409,7 +410,9 @@ async def read_input_bundle(pass_id: str) -> DreamInput | None:
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8")
     try:
-        return _dict_to_input_bundle(json.loads(raw))
+        bundle = _dict_to_input_bundle(json.loads(raw))
+        bundle.memory_scope
+        return bundle
     except Exception:
         logger.exception("Corrupted DreamInput in Redis for pass=%s — bailing", pass_id)
         return None
@@ -426,6 +429,7 @@ def _input_bundle_to_dict(input_bundle: DreamInput) -> dict:
     return {
         "user_id": input_bundle.user_id,
         "expert_id": input_bundle.expert_id,
+        "organization_id": input_bundle.organization_id,
         "group_id": input_bundle.group_id,
         "window_start": input_bundle.window_start.isoformat(),
         "window_end": input_bundle.window_end.isoformat(),
@@ -474,6 +478,7 @@ def _dict_to_input_bundle(data: dict) -> DreamInput:
     return DreamInput(
         user_id=data["user_id"],
         expert_id=data.get("expert_id"),
+        organization_id=data.get("organization_id"),
         group_id=data["group_id"],
         window_start=datetime.fromisoformat(data["window_start"]),
         window_end=datetime.fromisoformat(data["window_end"]),

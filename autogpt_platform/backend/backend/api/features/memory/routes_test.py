@@ -5,7 +5,9 @@ from unittest.mock import AsyncMock, patch
 import fastapi
 import fastapi.testclient
 import pytest
+from autogpt_libs.auth.dependencies import get_request_context
 from autogpt_libs.auth.jwt_utils import get_jwt_payload
+from autogpt_libs.auth.models import RequestContext
 from redis.exceptions import ResponseError
 
 from backend.api.features.experts.models import PROTECTED_SOUL_RULES, Expert
@@ -24,9 +26,24 @@ _EXPERT_ID = "11111111-2222-3333-4444-555555555555"
 
 
 @pytest.fixture(autouse=True)
-def setup_app_auth(mock_jwt_user):
+def setup_app_auth(mock_jwt_user, test_user_id):
     app.dependency_overrides[get_jwt_payload] = mock_jwt_user["get_jwt_payload"]
-    yield
+    app.dependency_overrides[get_request_context] = lambda: RequestContext(
+        user_id=test_user_id,
+        org_id="org-1",
+        team_id=None,
+        is_org_owner=True,
+        is_org_admin=True,
+        is_org_billing_manager=True,
+        is_team_admin=False,
+        is_team_billing_manager=False,
+        seat_status="ACTIVE",
+    )
+    with patch("backend.copilot.graphiti.scope_resolution.memory_db") as store:
+        store.return_value.get_personal_memory_organization = AsyncMock(
+            return_value="org-1"
+        )
+        yield
     app.dependency_overrides.clear()
 
 
@@ -213,3 +230,34 @@ class TestEraseScope:
         get_expert.assert_awaited_once_with(
             test_user_id, _EXPERT_ID, include_workflows=False
         )
+
+
+class TestOrganizationIsolation:
+    def test_request_org_selects_private_memory_and_mutations(self):
+        from dataclasses import replace
+
+        from backend.copilot.graphiti.scope import MemoryScope
+
+        context = app.dependency_overrides[get_request_context]()
+        driver = _driver_returning([], [{"uuid": "same-id"}], [{"deleted": 0}])
+        with patch(f"{_MOCK_MODULE}.open_driver", return_value=driver) as opened:
+            app.dependency_overrides[get_request_context] = lambda: replace(
+                context, org_id="org-business"
+            )
+            assert client.get("/memory/facts").status_code == 200
+            assert opened.call_args.args[0] == MemoryScope.build(
+                context.user_id, organization_id="org-business"
+            )
+            assert client.delete("/memory/facts/same-id").status_code == 200
+            assert opened.call_args.args[0].organization_id == "org-business"
+
+    def test_expert_from_another_org_is_not_readable(self):
+        expert = _expert().model_copy(update={"organization_id": "org-business"})
+        with (
+            patch(
+                f"{_MOCK_MODULE}.experts_db.get_expert", AsyncMock(return_value=expert)
+            ),
+            patch(f"{_MOCK_MODULE}.open_driver") as opened,
+        ):
+            assert client.get(f"/memory/experts/{_EXPERT_ID}/facts").status_code == 404
+            opened.assert_not_called()

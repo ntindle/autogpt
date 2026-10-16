@@ -36,6 +36,7 @@ from backend.copilot.dream.ratification import RatificationResult
 from backend.copilot.dream.schemas import DreamPassResult
 from backend.copilot.graphiti.falkordb_driver import open_driver
 from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import resolve_memory_scope
 from backend.util.clients import get_scheduler_client
 from backend.util.url_redaction import redact_url
 
@@ -201,7 +202,7 @@ async def _resolve_memory_scope(user_id: str, expert_id: str | None) -> MemorySc
         raise HTTPException(status_code=404, detail="Expert not found")
 
     try:
-        return MemoryScope.for_expert(user_id, expert.id)
+        return await resolve_memory_scope(user_id, expert.id, expert.organization_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

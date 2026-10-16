@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from backend.copilot.graphiti.falkordb_driver import AutoGPTFalkorDriver, open_driver
 from backend.copilot.graphiti.scope import MemoryScope
+from backend.copilot.graphiti.scope_resolution import memory_organization_id
 from backend.data.db_accessors import chat_db
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ class DreamInput(BaseModel):
 
     user_id: str
     expert_id: str | None = None
+    organization_id: str | None = None
     group_id: str
     window_start: datetime
     window_end: datetime
@@ -74,6 +76,13 @@ class DreamInput(BaseModel):
     # is "aware of" so it can reject demotions for unknown edges.
     known_fact_uuids: set[str] = Field(default_factory=set)
     known_episode_uuids: set[str] = Field(default_factory=set)
+
+    @property
+    def memory_scope(self) -> MemoryScope:
+        scope = MemoryScope.build(self.user_id, self.expert_id, self.organization_id)
+        if scope.group_id != self.group_id:
+            raise ValueError("Dream input memory scope mismatch")
+        return scope
 
 
 # Prefix stamped on every dream-authored episode name (see
@@ -260,13 +269,20 @@ async def _fetch_recent_sessions(
     _ = window_start
     user_id = scope.owner_user_id
     try:
+        organization_id = await memory_organization_id(scope)
         if scope.expert_id is None:
             sessions = await chat_db().get_user_chat_sessions(
-                user_id, limit=limit, autopilot_only=True
+                user_id,
+                limit=limit,
+                autopilot_only=True,
+                organization_id=organization_id,
             )
         else:
             sessions = await chat_db().get_user_chat_sessions(
-                user_id, limit=limit, expert_id=scope.expert_id
+                user_id,
+                limit=limit,
+                expert_id=scope.expert_id,
+                organization_id=organization_id,
             )
     except Exception:
         logger.warning(
@@ -351,6 +367,7 @@ async def gather_dream_input(
     return DreamInput(
         user_id=scope.owner_user_id,
         expert_id=scope.expert_id,
+        organization_id=scope.organization_id,
         group_id=group_id,
         window_start=window_start,
         window_end=window_end,

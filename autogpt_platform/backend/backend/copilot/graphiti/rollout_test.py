@@ -62,7 +62,9 @@ async def test_off_warm_and_default_search_keep_only_personal_memory(expert_id):
     assert warm == search
     assert len(warm) == 1
     assert warm[0].tier == tiers.MemoryTier.personal
-    assert warm[0].group_id == derive_memory_group_id("user-1", expert_id)
+    assert warm[0].group_id == derive_memory_group_id(
+        "user-1", expert_id, "org-personal"
+    )
     org_access.assert_not_awaited()
     team_access.assert_not_awaited()
 

@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@/tests/integrations/test-utils";
+import { act, render, screen, waitFor } from "@/tests/integrations/test-utils";
+import { useOrgTeamStore } from "@/services/org-team/store";
 import userEvent from "@testing-library/user-event";
 import { http } from "msw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -112,6 +113,39 @@ beforeEach(() => {
 });
 
 describe("Settings memory page", () => {
+  it("isolates memory cache and pending responses when switching organizations", async () => {
+    mockHappyPath();
+    let releaseOld!: () => void;
+    const oldResponse = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    const seen: string[] = [];
+    server.use(
+      getListMyMemoryFactsMockHandler200(async ({ request }) => {
+        const org = request.headers.get("X-Org-Id") ?? "missing";
+        seen.push(org);
+        if (org === "org-a") await oldResponse;
+        return {
+          expert_id: null,
+          items: [{ ...FACTS.items[0], fact: `${org} private business` }],
+        };
+      }),
+    );
+    useOrgTeamStore.setState({ activeOrgID: "org-a", isLoaded: true });
+    render(<SettingsMemoryPage />);
+    await waitFor(() => expect(seen).toContain("org-a"));
+    act(() => useOrgTeamStore.setState({ activeOrgID: "org-b" }));
+    expect(await screen.findByText("org-b private business")).toBeDefined();
+    await act(async () => {
+      releaseOld();
+      await oldResponse;
+    });
+    expect(screen.queryByText("org-a private business")).toBeNull();
+    act(() => useOrgTeamStore.setState({ activeOrgID: "org-a" }));
+    expect(await screen.findByText("org-a private business")).toBeDefined();
+    expect(screen.queryByText("org-b private business")).toBeNull();
+  });
+
   it("renders recent memories for the Otto scope", async () => {
     mockHappyPath();
     render(<SettingsMemoryPage />);

@@ -101,16 +101,23 @@ def derive_org_group_id(org_id: str) -> str:
     return _derive_prefixed_group_id(org_id, prefix="org_", id_label="org_id")
 
 
-def derive_memory_group_id(user_id: str, expert_id: str | None = None) -> str:
+def derive_memory_group_id(
+    user_id: str, expert_id: str | None = None, organization_id: str | None = None
+) -> str:
     """Derive the Graphiti namespace for an Otto or expert session.
 
-    Plain Otto sessions retain the exact legacy ``user_<user_id>``
-    namespace so all existing user memories remain available. Expert sessions
-    use a fixed-length digest of the globally unique Expert ID, so memory stays
-    with the expert if authorized ownership changes later. Access remains a
-    separate server-side authorization concern; experts are owner-only today.
+    Explicit organization scopes include owner, organization and optional expert.
+    The canonical None organization preserves the original personal namespaces:
+    user_<user_id> and the existing digest of a globally unique expert ID.
+    Runtime boundaries normalize saved organization IDs before deriving a group.
     """
     user_group_id = derive_group_id(user_id)
+    if organization_id is not None:
+        derive_org_group_id(organization_id)
+        if expert_id is not None:
+            derive_memory_group_id(user_id, expert_id)
+        identity = repr((user_id, organization_id, expert_id)).encode()
+        return f"private_{hashlib.sha256(identity).hexdigest()}"
     if expert_id is None:
         return user_group_id
     if not expert_id:
@@ -133,17 +140,19 @@ def derive_memory_group_id(user_id: str, expert_id: str | None = None) -> str:
     return f"expert_{scope_digest}"
 
 
-def derive_memory_scope_key(user_id: str, expert_id: str | None = None) -> str:
+def derive_memory_scope_key(
+    user_id: str, expert_id: str | None = None, organization_id: str | None = None
+) -> str:
     """Stable internal key for queues, locks, and background markers.
 
     Otto keeps the legacy raw user key where existing Redis contracts use
     it. Expert scopes use the same opaque ID as their Graphiti namespace.
     """
-    if expert_id is None:
+    if expert_id is None and organization_id is None:
         # Validate the opaque user ID while preserving the legacy raw Redis key.
         derive_group_id(user_id)
         return user_id
-    return derive_memory_group_id(user_id, expert_id)
+    return derive_memory_group_id(user_id, expert_id, organization_id)
 
 
 def _close_client_driver(client) -> None:

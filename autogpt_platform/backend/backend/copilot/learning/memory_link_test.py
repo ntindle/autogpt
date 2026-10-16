@@ -54,3 +54,29 @@ async def test_a_learned_version_is_linked_in_its_own_scope(expert_id):
     assert enqueue.await_args.args[0] == MemoryScope.build("user-1", expert_id)
     assert enqueue.await_args.args[1] == "skill_learning_version-1"
     assert enqueue.await_args.kwargs["name"] == "dream_skill_version-1"
+
+
+@pytest.mark.asyncio
+async def test_business_learning_reference_keeps_org_and_owner():
+    with (
+        patch.object(memory_link, "is_enabled_for_user", AsyncMock(return_value=True)),
+        patch.object(
+            memory_link, "enqueue_episode", AsyncMock(return_value=True)
+        ) as enqueue,
+        patch("backend.copilot.graphiti.scope_resolution.memory_db") as db,
+    ):
+        db.return_value.get_personal_memory_organization = AsyncMock(
+            return_value="personal"
+        )
+        version = _version("expert-1")
+        assert await memory_link.link_version_to_memory(
+            "user-1", version, organization_id="denton"
+        )
+        assert enqueue.await_args.args[0] == MemoryScope.build(
+            "user-1", "expert-1", "denton"
+        )
+        enqueue.reset_mock()
+        assert not await memory_link.link_version_to_memory(
+            "foreign", version, organization_id="denton"
+        )
+        enqueue.assert_not_awaited()
