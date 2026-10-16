@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { usePostV2CreateOrganization } from "@/app/api/__generated__/endpoints/orgs/orgs";
 import type { OrgResponse } from "@/app/api/__generated__/models/orgResponse";
 import { toast } from "@/components/molecules/Toast/use-toast";
-import { getQueryClient } from "@/lib/react-query/queryClient";
+import { useOrganizationNavigation } from "@/services/org-team/useOrganizationNavigation";
 import { normalizeOrg } from "@/services/org-team/normalize";
 import { useOrgTeamStore } from "@/services/org-team/store";
 
@@ -17,7 +17,8 @@ interface Args {
 }
 
 export function useCreateOrgDialog({ onClose }: Args) {
-  const { setOrgs, setActiveOrg } = useOrgTeamStore();
+  const { setOrgs } = useOrgTeamStore();
+  const { openOrganization } = useOrganizationNavigation();
 
   const form = useForm<CreateOrgFormValues>({
     resolver: zodResolver(createOrgSchema),
@@ -62,8 +63,7 @@ export function useCreateOrgDialog({ onClose }: Args) {
     }
     const org = response.data as OrgResponse;
     setOrgs([...useOrgTeamStore.getState().orgs, normalizeOrg(org)]);
-    setActiveOrg(org.id);
-    getQueryClient().resetQueries();
+    openOrganization(org.id);
     toast({ title: `Organization "${org.name}" created`, variant: "success" });
     handleClose();
   }

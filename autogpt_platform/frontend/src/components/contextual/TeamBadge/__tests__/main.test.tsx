@@ -41,9 +41,9 @@ describe("TeamBadge", () => {
       expect(container.textContent).toBe("");
     },
   );
-  it("renders the team name resolved from the store", () => {
+  it("hides human team labels in private organizations", () => {
     render(<TeamBadge teamId="team-a" />);
-    expect(screen.getByText("Growth")).toBeTruthy();
+    expect(screen.queryByText("Growth")).toBeNull();
   });
 
   it("renders nothing for an org-home row (null teamId)", () => {

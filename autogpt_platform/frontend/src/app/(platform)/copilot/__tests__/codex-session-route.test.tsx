@@ -1,3 +1,5 @@
+import { useOrgTeamStore } from "@/services/org-team/store";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
 import type { ChatTransportResponse } from "@/app/api/__generated__/models/chatTransportResponse";
 import { server } from "@/mocks/mock-server";
 import {
@@ -7,7 +9,7 @@ import {
   waitFor,
 } from "@/tests/integrations/test-utils";
 import { http, HttpResponse } from "msw";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useCopilotUIStore } from "../store";
 import { useChatSession } from "../useChatSession";
 
@@ -76,9 +78,9 @@ const codexTransport: ChatTransportResponse = {
   default: false,
 };
 
-function SessionHarness() {
+function SessionHarness({ request }: { request?: RequestInit } = {}) {
   const { createSession, setSessionId, sessionLlmAuthProvider } =
-    useChatSession();
+    useChatSession({ createRequestInit: request });
   return (
     <>
       <div data-testid="session-llm-route">
@@ -111,6 +113,14 @@ function captureCreateRequest() {
   );
   return () => requestBody;
 }
+
+beforeEach(() => {
+  useOrgTeamStore.setState({
+    activeOrgID: "org-b",
+    activeTeamID: null,
+    isLoaded: true,
+  });
+});
 
 afterEach(() => {
   server.resetHandlers();
@@ -297,4 +307,30 @@ describe("useChatSession transport route", () => {
       expect(screen.getByTestId("session-llm-route").textContent).toBe("codex");
     });
   });
+});
+
+it("new-chat links pin creation to their URL organization after navigation changes", async () => {
+  testState.transports = [configuredSelfHosted];
+  let createdOrg: string | null | undefined;
+  server.use(
+    http.post("*/api/chat/sessions", ({ request }) => {
+      createdOrg = request.headers.get("X-Org-Id");
+      return HttpResponse.json({
+        id: "new-scoped-session",
+        user_id: "user-1",
+        created_at: "2026-01-01T00:00:00Z",
+        organization_id: "org-a",
+        team_id: null,
+      });
+    }),
+  );
+  render(
+    <NuqsTestingAdapter searchParams="?organizationId=org-a&teamId=__org_home__">
+      <SessionHarness
+        request={{ headers: { "X-Org-Id": "org-b", "X-Team-Id": "team-b" } }}
+      />
+    </NuqsTestingAdapter>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Create session" }));
+  await waitFor(() => expect(createdOrg).toBe("org-a"));
 });
