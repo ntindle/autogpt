@@ -16,7 +16,7 @@ const fetched = {
     color: "",
   },
 };
-vi.mock("@/app/api/__generated__/endpoints/experts/experts", () => ({
+vi.mock("@/services/experts/scoped-queries", () => ({
   useGetExpert: (
     _id: string,
     options: { query: { enabled: boolean; select: (r: unknown) => unknown } },
