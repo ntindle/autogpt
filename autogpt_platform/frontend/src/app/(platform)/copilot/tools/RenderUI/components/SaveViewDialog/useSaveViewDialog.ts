@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { usePostV2SaveUiDraftToFile } from "@/app/api/__generated__/endpoints/chat/chat";
 import { getListWorkspaceFilesQueryKey } from "@/app/api/__generated__/endpoints/workspace/workspace";
@@ -24,14 +24,18 @@ export function useSaveViewDialog(args: Args) {
   const scope = useOpenUIScope();
   const [name, setName] = useState(defaultViewFileName(args.title));
   const [error, setError] = useState<string | null>(null);
-  const { mutateAsync, isPending } = usePostV2SaveUiDraftToFile({
+  const [isPending, setIsPending] = useState(false);
+  const submitting = useRef(false);
+  const { mutateAsync } = usePostV2SaveUiDraftToFile({
     request: openUIRequest(scope),
   });
   const trimmed = name.trim();
   const validationError = validateFileName(trimmed);
 
   async function handleSubmit() {
-    if (validationError || isPending) return;
+    if (validationError || submitting.current) return;
+    submitting.current = true;
+    setIsPending(true);
     setError(null);
     try {
       await args.beforeSave();
@@ -55,6 +59,9 @@ export function useSaveViewDialog(args: Args) {
           ? "A file with this name already exists. Choose another name."
           : "The view couldn't be saved. Try again.",
       );
+    } finally {
+      submitting.current = false;
+      setIsPending(false);
     }
   }
 

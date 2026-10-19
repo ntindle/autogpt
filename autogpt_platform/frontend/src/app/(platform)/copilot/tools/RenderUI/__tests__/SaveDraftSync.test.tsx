@@ -73,7 +73,15 @@ describe("save-to-files draft synchronization", () => {
     fireEvent.change(screen.getByLabelText("Notes"), {
       target: { value: "Newest edit" },
     });
-    await saveToFiles();
+    const dialog = await saveToFiles();
+    expect(
+      within(dialog)
+        .getByRole("button", { name: "Save" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    fireEvent.keyDown(within(dialog).getByLabelText("File name"), {
+      key: "Enter",
+    });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(events).toEqual([]);
     release();
