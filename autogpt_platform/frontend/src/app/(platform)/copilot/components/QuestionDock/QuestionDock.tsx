@@ -20,6 +20,7 @@ import { CopilotChatActionsContext } from "../CopilotChatActionsProvider/useCopi
 import { ChainActionsContext } from "../ToolChain/chainActions";
 import {
   buildAnswersMessage,
+  buildQuestionsEntry,
   getPendingQuestions,
   type PendingQuestions,
 } from "./helpers";
@@ -91,38 +92,31 @@ export function QuestionAnswerForm({
   // Proceed step — register readiness + message instead.
   useEffect(() => {
     if (!chainActions || dismissed) return;
-    chainActions.register({
-      id: dockId,
-      ready: allAnswered,
-      // Answers are ready on the first character of the last one; the user
-      // reviews them through the dock's own action, not an automatic send.
-      manualProceed: true,
-      buildMessage: () =>
-        allAnswered ? buildAnswersMessage(questions, answers) : null,
-      onSent: () => setDismissedId(dockId),
-      submit: taskLinked
-        ? (context) => onAnswerRef.current!(answers, context)
-        : undefined,
-      questions: {
-        id: dockId,
+    chainActions.register(
+      buildQuestionsEntry({
+        dockId,
         questions,
+        answers,
+        register: chainActions.register,
+        setAnswers,
+        dismiss: () => setDismissedId(dockId),
+        isPending,
+        submit: taskLinked
+          ? (values, context) => onAnswerRef.current!(values, context)
+          : undefined,
         renderRecipient: hasRecipients
           ? (question) => recipientRef.current?.(question)
           : undefined,
-        answers,
-        onAnswer: (keyword, value) =>
-          setAnswers((prev) => ({ ...prev, [keyword]: value })),
-        onSkip: () => setDismissedId(dockId),
-      },
-    });
+      }),
+    );
     return () => chainActions.unregister(dockId);
   }, [
     chainActions,
     dismissed,
     dockId,
-    allAnswered,
     answers,
     questions,
+    isPending,
     taskLinked,
     hasRecipients,
   ]);

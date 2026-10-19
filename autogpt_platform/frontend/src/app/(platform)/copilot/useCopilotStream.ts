@@ -26,6 +26,7 @@ import {
 import {
   deduplicateMessages,
   extractSendMessageText,
+  extractSendMessageAttachments,
   getSendSuppressionReason,
   hasActiveBackendStream,
   hasInProgressAssistantParts,
@@ -538,6 +539,7 @@ export function useCopilotStream({
 
     const suppressReason = getSendSuppressionReason({
       text,
+      attachments: extractSendMessageAttachments(args[0]),
       isReconnectScheduled: reconnectScheduledRef.current,
       lastSubmittedText: coord?.lastSubmittedMessageText ?? null,
       messages: chatRuntime?.chat.messages ?? rawMessages,
