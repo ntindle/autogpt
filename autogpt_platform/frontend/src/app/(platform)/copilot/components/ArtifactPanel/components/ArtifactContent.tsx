@@ -16,7 +16,11 @@ import {
   TAILWIND_CDN_URL,
   wrapWithHeadInjection,
 } from "@/lib/iframe-sandbox-csp";
-import { useArtifactContent } from "./useArtifactContent";
+import {
+  artifactContentCacheKey,
+  useArtifactContent,
+} from "./useArtifactContent";
+import { useAuthStore } from "@/lib/auth/hooks/useAuthStore";
 
 interface Props {
   artifact: ArtifactRef;
@@ -327,12 +331,16 @@ function ArtifactRenderer({
 }
 
 export function ArtifactContent(props: Props) {
+  const ownerId = useAuthStore((state) => state.user?.id);
   if (props.artifact.expert) {
     return <ExpertArtifactContent expert={props.artifact.expert} />;
   }
   return (
     <Suspense fallback={<ArtifactSkeleton />}>
-      <ArtifactContentLoader {...props} />
+      <ArtifactContentLoader
+        key={artifactContentCacheKey(props.artifact, ownerId)}
+        {...props}
+      />
     </Suspense>
   );
 }
