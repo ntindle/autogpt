@@ -1,5 +1,6 @@
 "use client";
 import { ChatContainer } from "./components/ChatContainer/ChatContainer";
+import { ChatSenderRegistration } from "./components/ChatSenderRegistration/ChatSenderRegistration";
 import type { FloatingControls } from "./components/ChatMessagesContainer/components/ThreadHeader";
 import { ProviderLimitDialog } from "./components/ProviderLimitDialog/ProviderLimitDialog";
 import { RateLimitGate } from "./components/RateLimitResetDialog/RateLimitGate";
@@ -101,6 +102,21 @@ function ChatHostBody({
           Test mode — this session runs workflows as simulation
         </div>
       )}
+      {sessionId &&
+        !isLoadingSession &&
+        !isRestoringActiveSession &&
+        !isSessionError &&
+        !isSessionNotFound &&
+        !isResolvingExpertIdentity &&
+        !isAdoptingExpertSession &&
+        !isKickoffStarting &&
+        !expertIdentity?.isArchived && (
+          <ChatSenderRegistration
+            key={sessionId}
+            sessionId={sessionId}
+            onSend={onSend}
+          />
+        )}
       <div className="min-h-0 flex-1 overflow-hidden">
         <ChatContainer
           isUsageRefused={!!rateLimitMessage || usageRefresh.guarded}

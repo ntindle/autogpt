@@ -194,7 +194,11 @@ export default function SharedChatPage() {
           </CopilotChatActionsProvider>
         </div>
       </div>
-      {isMobile ? <ArtifactPanel mobile /> : <ArtifactPanel />}
+      {isMobile ? (
+        <ArtifactPanel mobile readOnly />
+      ) : (
+        <ArtifactPanel readOnly />
+      )}
     </SharedChatChrome>
   );
 }
