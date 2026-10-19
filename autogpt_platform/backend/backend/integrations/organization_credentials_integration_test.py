@@ -534,3 +534,93 @@ async def test_graph_matcher_uses_explicit_saved_org_and_personal_override(owner
             owner_id, graph, organization_id=None
         )
         assert matched["github"].id == a.id
+
+
+async def test_idle_refresh_reloads_and_persists_each_saved_org(owner, monkeypatch):
+    import time
+
+    owner_id, personal, business = owner
+    manager = IntegrationCredentialsManager()
+    old = int(time.time()) - 20 * 86_400
+    credentials = [
+        OAuth2Credentials(
+            provider="github",
+            access_token=SecretStr("old-access"),
+            refresh_token=SecretStr("old-refresh"),
+            access_token_expires_at=old,
+            scopes=["repo"],
+        )
+        for _ in range(2)
+    ]
+    for org, credential in zip((personal, business), credentials):
+        await user.set_user_credentials(owner_id, [credential], org)
+
+    async def refresh(credential):
+        return credential.model_copy(
+            update={
+                "access_token": SecretStr(f"new-{credential.id}"),
+                "access_token_expires_at": int(time.time()) + 3_600,
+            }
+        )
+
+    handler = SimpleNamespace(
+        needs_refresh=lambda credential: credential.access_token_expires_at <= old,
+        refresh_tokens=AsyncMock(side_effect=refresh),
+    )
+    monkeypatch.setattr(manager, "_get_oauth_handler", AsyncMock(return_value=handler))
+    with credential_scope(business):
+        await manager.refresh_idle_credentials()
+    assert handler.refresh_tokens.await_count == 2
+    for org, credential in zip((personal, business), credentials):
+        stored = await user.get_user_credentials(owner_id, org)
+        assert [item.id for item in stored] == [credential.id]
+        assert stored[0].access_token.get_secret_value() == f"new-{credential.id}"
+
+
+async def test_briefing_chat_ignores_ambient_business_connection(owner, monkeypatch):
+    from backend.copilot import db as chat_db
+    from backend.copilot import transports
+    from backend.copilot.transports_test import _codex_credentials
+
+    owner_id, personal, business = owner
+    credentials = [_codex_credentials(str(uuid.uuid4())) for _ in range(2)]
+    monkeypatch.setattr(
+        transports, "has_codex_access_for_discovery", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(transports, "is_deployment_chat_available", lambda: True)
+    for org, credential in zip((personal, business), credentials):
+        await user.set_user_credentials(owner_id, [credential], org)
+    await user.set_user_default_chat_route(owner_id, "codex", credentials[0].id)
+    with credential_scope(business):
+        session_id = await chat_db.append_plain_session_message(
+            owner_id, "Private personal briefing", str(uuid.uuid4())
+        )
+    assert session_id is not None
+    session = await chat_db.get_chat_session_metadata(session_id)
+    assert session.organization_id is None
+    assert session.metadata.llm_credential_id == credentials[0].id
+    assert session.metadata.llm_auth_provider == "codex"
+
+
+async def test_idle_refresh_skips_revoked_organization_membership(owner, monkeypatch):
+    import time
+
+    owner_id, _personal, business = owner
+    manager = IntegrationCredentialsManager()
+    credential = OAuth2Credentials(
+        provider="github",
+        access_token=SecretStr("old"),
+        refresh_token=SecretStr("fake-refresh"),
+        access_token_expires_at=int(time.time()) - 20 * 86_400,
+        scopes=[],
+    )
+    await user.set_user_credentials(owner_id, [credential], business)
+    await db.prisma.orgmember.update(
+        where={"orgId_userId": {"orgId": business, "userId": owner_id}},
+        data={"status": "SUSPENDED"},
+    )
+    refresh = AsyncMock()
+    monkeypatch.setattr(manager, "refresh_if_needed", refresh)
+    await manager.refresh_idle_credentials()
+    refresh.assert_not_awaited()
+    assert (await user.get_user_credentials(owner_id, business))[0] == credential

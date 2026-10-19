@@ -5,6 +5,21 @@ import {
   type PrivateResourceScope,
 } from "@/services/org-team/private-resource-scope";
 
+export function useUpdateExpertMode<
+  TError = api.UpdateExpertModeMutationError,
+  TContext = unknown,
+>(
+  options?: Parameters<typeof api.useUpdateExpertMode<TError, TContext>>[0],
+  queryClient?: Parameters<typeof api.useUpdateExpertMode<TError, TContext>>[1],
+  scope?: PrivateResourceScope,
+) {
+  const resolved = usePrivateResourceScope(scope);
+  return api.useUpdateExpertMode<TError, TContext>(
+    { ...options, request: pinnedResourceRequest(resolved, options?.request) },
+    queryClient,
+  );
+}
+
 export function useHireExpert<
   TError = api.HireExpertMutationError,
   TContext = unknown,

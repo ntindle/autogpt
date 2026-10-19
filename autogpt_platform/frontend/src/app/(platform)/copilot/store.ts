@@ -182,6 +182,12 @@ interface CopilotUIState {
   initialPrompt: string | null;
   setInitialPrompt: (prompt: string | null) => void;
 
+  /** Text of a message that never went out. Unlike `initialPrompt`, the
+   *  composer adds it to whatever the user has typed since. */
+  recoveredDraft: string | null;
+  restoreDraft: (text: string) => void;
+  clearRecoveredDraft: () => void;
+
   /**
    * Bumped every time the composer actually sends a message. Chain action
    * cards draft into the input rather than sending themselves, so this is
@@ -317,6 +323,15 @@ function withArtifactScope(
 export const useCopilotUIStore = create<CopilotUIState>((set, get) => ({
   initialPrompt: null,
   setInitialPrompt: (prompt) => set({ initialPrompt: prompt }),
+
+  recoveredDraft: null,
+  restoreDraft: (text) =>
+    set((state) => ({
+      recoveredDraft: state.recoveredDraft
+        ? `${state.recoveredDraft}\n\n${text}`
+        : text,
+    })),
+  clearRecoveredDraft: () => set({ recoveredDraft: null }),
 
   sentMessageCount: 0,
   notifyMessageSent: () =>

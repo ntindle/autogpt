@@ -341,3 +341,87 @@ async def test_legacy_session_learning_resolves_original_personal_org(organizati
     assert await _matches_source(session, source)
     session.organization_id = denton
     assert not await _matches_source(session, source)
+
+
+async def test_expert_mode_is_private_and_rechecks_saved_org_membership(organizations):
+    user, (personal, denton, _) = organizations
+    experts = []
+    for org in (personal, denton):
+        team = await prisma.team.find_first(where={"orgId": org, "isDefault": True})
+        experts.append(
+            await prisma.expert.create(
+                data={
+                    "ownerUserId": user,
+                    "organizationId": org,
+                    "teamId": team.id,
+                    "name": "Private helper",
+                    "role": "Review",
+                    "identity": "Review private documents",
+                    "visibility": "PRIVATE",
+                }
+            )
+        )
+    await experts_db.update_autopilot_mode(user, experts[1].id, "ask_first")
+    assert await experts_db.get_autopilot_mode(user, experts[0].id) is None
+    assert await experts_db.get_autopilot_mode(user, experts[1].id) == "ask_first"
+    assert [
+        row.autopilot_mode
+        for row in await experts_db.list_expert_identities(user, organization_id=denton)
+    ] == ["ask_first"]
+    await prisma.orgmember.update(
+        where={"orgId_userId": {"orgId": denton, "userId": user}},
+        data={"status": "SUSPENDED"},
+    )
+    assert await experts_db.get_autopilot_mode(user, experts[1].id) is None
+    with pytest.raises(ExpertNotFoundError):
+        await experts_db.update_autopilot_mode(user, experts[1].id, "unsupervised")
+    assert (
+        await prisma.expert.find_unique(where={"id": experts[1].id})
+    ).autopilotMode == "ask_first"
+
+
+async def test_deleted_browser_cleanup_preserves_org_and_session_scope(
+    organizations, mocker
+):
+    from backend.copilot import db as chat_db
+    from backend.copilot.tools import agent_browser
+
+    user, (personal, denton, _) = organizations
+    workspace = await get_or_create_workspace(user)
+    sessions = []
+    for org in (personal, denton):
+        team = await prisma.team.find_first(where={"orgId": org, "isDefault": True})
+        session = await chat_db.create_chat_session(
+            session_id=str(uuid4()), user_id=user, organization_id=org, team_id=team.id
+        )
+        sessions.append((session.session_id, org, team.id))
+    files = []
+    for session_id, org, team in sessions:
+        manager = WorkspaceManager(
+            user, workspace.id, session_id, organization_id=org, team_id=team
+        )
+        files.append(
+            await manager.write_file(
+                content=b'{"cookies":[]}',
+                filename=agent_browser._STATE_FILENAME,
+                mime_type="application/json",
+            )
+        )
+    deleted, org, team = sessions[1]
+    await chat_db.delete_chat_session(deleted, user, organization_id=org, team_id=team)
+    mocker.patch.object(agent_browser, "_run", AsyncMock(return_value=(0, "", "")))
+    lookup = mocker.patch.object(
+        agent_browser,
+        "get_workspace_manager",
+        AsyncMock(side_effect=AssertionError("deleted session cannot resolve")),
+    )
+    await agent_browser.close_browser_session(
+        deleted, user, deleted_session_scope=(org, team)
+    )
+    lookup.assert_not_awaited()
+    assert (
+        await prisma.userworkspacefile.find_unique(where={"id": files[1].id})
+    ).isDeleted
+    assert not (
+        await prisma.userworkspacefile.find_unique(where={"id": files[0].id})
+    ).isDeleted

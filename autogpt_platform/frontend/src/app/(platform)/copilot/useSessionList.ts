@@ -1,6 +1,10 @@
 import { getV2ListSessions } from "@/app/api/__generated__/endpoints/chat/chat";
 import type { SessionSummaryResponse } from "@/app/api/__generated__/models/sessionSummaryResponse";
-import { type InfiniteData, useInfiniteQuery } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  useInfiniteQuery,
+  useMutationState,
+} from "@tanstack/react-query";
 import {
   getTeamScopedQueryKey,
   getTenantRequestInit,
@@ -27,6 +31,12 @@ export function getSessionListQueryKey(
 ) {
   return getTeamScopedQueryKey(SESSION_LIST_QUERY_KEY, organizationId, teamId);
 }
+// Chats with a delete in flight stay out of every list, whatever a refetch
+// returns before the server has removed them.
+export const SESSION_DELETE_MUTATION_KEY = [
+  "copilot",
+  "delete-session",
+] as const;
 
 type SessionListPage = Awaited<ReturnType<typeof getV2ListSessions>>;
 export type SessionListInfiniteData = InfiniteData<SessionListPage>;
@@ -61,9 +71,15 @@ export function useSessionList({ enabled = true }: Args = {}) {
     refetchInterval: SESSION_LIST_REFETCH_INTERVAL_MS,
     enabled: enabled && isTenantReady,
   });
+  const deletingIds = useMutationState({
+    filters: { mutationKey: SESSION_DELETE_MUTATION_KEY, status: "pending" },
+    select: (mutation) => (mutation.state.variables as { id: string }).id,
+  });
 
   return {
-    sessions: flattenSessions(query.data),
+    sessions: flattenSessions(query.data).filter(
+      (session) => !deletingIds.includes(session.id),
+    ),
     isLoading: query.isLoading,
     hasMore: !!query.hasNextPage,
     isLoadingMore: query.isFetchingNextPage,
@@ -76,6 +92,33 @@ export function flattenSessions(data: SessionListInfiniteData | undefined) {
   return data.pages.flatMap((page) =>
     page.status === 200 ? page.data.sessions : [],
   );
+}
+
+export function removeSessionFromList(
+  data: SessionListInfiniteData | undefined,
+  sessionId: string,
+): SessionListInfiniteData | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    pages: data.pages.map((page) => {
+      if (page.status !== 200) return page;
+      const sessions = page.data.sessions.filter(
+        (session) => session.id !== sessionId,
+      );
+      if (sessions.length === page.data.sessions.length) return page;
+      // Lowering `total` keeps `getNextPageParam`'s offset in step with the
+      // server once the row is really gone.
+      return {
+        ...page,
+        data: {
+          ...page.data,
+          sessions,
+          total: Math.max(0, page.data.total - 1),
+        },
+      };
+    }),
+  };
 }
 
 export interface SessionGroup {
