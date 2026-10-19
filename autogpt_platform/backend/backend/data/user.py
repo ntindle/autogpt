@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Optional, cast
 from urllib.parse import quote_plus
@@ -27,6 +28,7 @@ from backend.data.db import prisma, query_raw_with_schema, transaction
 from backend.data.model import (
     CREDENTIALS_ADAPTER,
     Credentials,
+    OAuth2Credentials,
     User,
     UserIntegrations,
     UserMetadata,
@@ -40,6 +42,7 @@ from backend.data.org_migration import ensure_personal_org
 from backend.data.posthog_lifecycle_sync import schedule_posthog_lifecycle_sync
 from backend.data.profile import ensure_profile
 from backend.data.subscription_trial import get_subscription_trial
+from backend.data.tenancy import has_live_resource_access
 from backend.notifications.audience_enrichment import points_at_excluded_country
 from backend.notifications.posthog_audience import set_account_properties
 from backend.notifications.queue import queue_audience_change
@@ -468,6 +471,52 @@ async def get_user_credentials(
                 exc_info=True,
             )
     return credentials
+
+
+async def get_near_expiry_oauth_credentials(
+    refresh_before: int,
+) -> list[tuple[str, str, OAuth2Credentials]]:
+    """Return refreshable user OAuth credentials expired at or before the cutoff.
+
+    This cross-user query is for trusted system callers such as the scheduler,
+    never user-scoped requests. Access-token expiry does not invalidate a refresh grant.
+    """
+    rows = await prisma.integrationcredential.find_many(
+        where={"ownerType": "USER", "status": "active", "credentialType": "oauth2"}
+    )
+    now = int(time.time())
+    cryptor = JSONCryptor()
+    candidates: list[tuple[str, str, OAuth2Credentials]] = []
+
+    for row in rows:
+        try:
+            credential = CREDENTIALS_ADAPTER.validate_python(
+                cryptor.decrypt(row.encryptedPayload)
+            )
+        except Exception:
+            logger.error(
+                f"Corrupt credential row {row.id} for user {row.ownerId}; skipping"
+            )
+            continue
+
+        if credential.type != "oauth2":
+            continue
+        if (
+            credential.refresh_strategy == "oauth_handler"
+            and not credential.is_managed
+            and credential.refresh_token is not None
+            and credential.access_token_expires_at is not None
+            and credential.access_token_expires_at <= refresh_before
+            and (
+                credential.refresh_token_expires_at is None
+                or credential.refresh_token_expires_at > now
+            )
+        ) and await has_live_resource_access(
+            row.ownerId, row.organizationId, None, "execute"
+        ):
+            candidates.append((row.ownerId, row.organizationId, credential))
+
+    return candidates
 
 
 async def set_user_credentials(

@@ -272,11 +272,13 @@ export const ChatContainer = ({
 
   const isVoiceModeEnabled = useGetFlag(Flag.COPILOT_VOICE_MODE);
   const isAutoModeEnabled = useGetFlag(Flag.COPILOT_AUTO_MODE);
+  // A thread keeps the mode stored on it; a new expert chat starts on the
+  // expert's own default until its first send creates the session.
+  const initialMode = sessionId
+    ? sessionAutopilotMode
+    : (expertIdentity?.autopilotMode ?? null);
   const modeSelector = isAutoModeEnabled ? (
-    <AutopilotModeSelector
-      sessionId={sessionId}
-      persistedMode={sessionAutopilotMode}
-    />
+    <AutopilotModeSelector sessionId={sessionId} persistedMode={initialMode} />
   ) : undefined;
   const silenceTimeoutMs = useVoiceSilenceTimeout();
   const voice = useVoiceMode({
@@ -541,18 +543,16 @@ export const ChatContainer = ({
                             expertId={expertIdentity?.id ?? null}
                             modeSelector={modeSelector}
                             expertName={expertIdentity?.name ?? null}
-                            voiceToggle={
-                              isVoiceModeEnabled ? (
-                                <VoiceModeButton
-                                  isActive={voice.isActive}
-                                  disabled={
-                                    isInputDisabled ||
-                                    isSendLocked ||
-                                    voice.isStarting
+                            voiceMode={
+                              isVoiceModeEnabled
+                                ? {
+                                    onStart: voice.toggle,
+                                    disabled:
+                                      isInputDisabled ||
+                                      isSendLocked ||
+                                      voice.isStarting,
                                   }
-                                  onClick={voice.toggle}
-                                />
-                              ) : undefined
+                                : undefined
                             }
                             voiceBar={
                               voice.isActive ? (
@@ -596,16 +596,14 @@ export const ChatContainer = ({
                 onCreateSession={onCreateSession}
                 onSend={guardedOnSend}
                 modeSelector={modeSelector}
-                voiceToggle={
-                  isVoiceModeEnabled ? (
-                    <VoiceModeButton
-                      isActive={false}
-                      disabled={
-                        isInputDisabled || isSendLocked || isCreatingSession
+                voiceMode={
+                  isVoiceModeEnabled
+                    ? {
+                        onStart: handleStartVoiceInNewChat,
+                        disabled:
+                          isInputDisabled || isSendLocked || isCreatingSession,
                       }
-                      onClick={handleStartVoiceInNewChat}
-                    />
-                  ) : undefined
+                    : undefined
                 }
                 isUploadingFiles={isUploadingFiles}
                 droppedFiles={droppedFiles}

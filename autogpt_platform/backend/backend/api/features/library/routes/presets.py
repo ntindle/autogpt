@@ -1,4 +1,3 @@
-import logging
 from typing import Any, Optional
 
 import autogpt_libs.auth as autogpt_auth_lib
@@ -13,8 +12,6 @@ from backend.data.model import CredentialsMetaInput
 from backend.executor.utils import add_graph_execution
 from backend.util.exceptions import (
     ExpertRunPausedError,
-    MissingConfigError,
-    NotFoundError,
     WebhookRegistrationError,
     WebhookSetupUnavailableError,
 )
@@ -27,8 +24,6 @@ from ..triggers import (
     update_triggered_preset,
 )
 from .live import require_live_library_create, require_live_library_delete
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(
     tags=["presets"],
@@ -64,21 +59,15 @@ async def list_presets(
     Returns:
         models.LibraryAgentPresetResponse: A response containing the list of presets.
     """
-    try:
-        return await db.list_presets(
-            user_id=user_id,
-            graph_id=graph_id,
-            page=page,
-            page_size=page_size,
-            organization_id=ctx.org_id,
-            team_id=ctx.team_id,
-            enforce_team_scope=True,
-        )
-    except Exception as e:
-        logger.exception("Failed to list presets for user %s: %s", user_id, e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-        )
+    return await db.list_presets(
+        user_id=user_id,
+        graph_id=graph_id,
+        page=page,
+        page_size=page_size,
+        organization_id=ctx.org_id,
+        team_id=ctx.team_id,
+        enforce_team_scope=True,
+    )
 
 
 @router.get(
@@ -104,24 +93,9 @@ async def get_preset(
         models.LibraryAgentPreset: The preset details.
 
     Raises:
-        HTTPException: If the preset is not found or an error occurs.
+        HTTPException: If the preset is not found.
     """
-    try:
-        preset = await db.get_preset(
-            user_id,
-            preset_id,
-            ctx.org_id,
-            ctx.team_id,
-            True,
-        )
-    except Exception as e:
-        logger.exception(
-            "Error retrieving preset %s for user %s: %s", preset_id, user_id, e
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-        )
-
+    preset = await db.get_preset(user_id, preset_id, ctx.org_id, ctx.team_id, True)
     if (
         not preset
         or preset.organization_id != ctx.org_id
@@ -161,44 +135,25 @@ async def create_preset(
 
     Returns:
         models.LibraryAgentPreset: The created preset.
-
-    Raises:
-        HTTPException: If an error occurs while creating the preset.
     """
-    try:
-        if isinstance(preset, models.LibraryAgentPresetCreatable):
-            return await db.create_preset(
+    if isinstance(preset, models.LibraryAgentPresetCreatable):
+        return await db.create_preset(
+            user_id,
+            preset,
+            expert_id=await experts_db.resolve_expert_for_graph(
                 user_id,
-                preset,
-                expert_id=await experts_db.resolve_expert_for_graph(
-                    user_id,
-                    preset.graph_id,
-                    organization_id=ctx.org_id,
-                    team_id=ctx.team_id,
-                    enforce_scope=True,
-                ),
+                preset.graph_id,
                 organization_id=ctx.org_id,
                 team_id=ctx.team_id,
                 enforce_scope=True,
-            )
-        else:
-            return await db.create_preset_from_graph_execution(
-                user_id,
-                preset,
-                organization_id=ctx.org_id,
-                team_id=ctx.team_id,
-            )
-    except NotFoundError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
-    except MissingConfigError as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e)
+            ),
+            organization_id=ctx.org_id,
+            team_id=ctx.team_id,
+            enforce_scope=True,
         )
-    except Exception as e:
-        logger.exception("Preset creation failed for user %s: %s", user_id, e)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
-        )
+    return await db.create_preset_from_graph_execution(
+        user_id, preset, organization_id=ctx.org_id, team_id=ctx.team_id
+    )
 
 
 @router.post(
@@ -243,7 +198,7 @@ async def setup_trigger(
         )
     except WebhookSetupUnavailableError as e:
         # Server-side availability problem (e.g. Redis lock), not a bad
-        # request — retryable, mirroring create_preset's MissingConfigError.
+        # request — retryable, like MissingConfigError's global 503.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Trigger setup is temporarily unavailable: {e}",

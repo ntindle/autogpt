@@ -36,8 +36,11 @@ from typing import Any
 
 from backend.copilot.context import get_workspace_manager
 from backend.copilot.model import ChatSession
+from backend.data.db_accessors import workspace_db
+from backend.data.workspace_scope import WorkspaceScope
 from backend.util.background import spawn_background_task
 from backend.util.request import validate_url_host
+from backend.util.workspace import WorkspaceManager
 
 from .base import BaseTool
 from .models import (
@@ -462,11 +465,20 @@ async def close_browser_daemon(session_name: str) -> bool:
     return True
 
 
-async def close_browser_session(session_name: str, user_id: str | None = None) -> None:
+async def close_browser_session(
+    session_name: str,
+    user_id: str | None = None,
+    *,
+    deleted_session_scope: tuple[str | None, str | None] | None = None,
+) -> None:
     """Shut down the local agent-browser daemon and clean up stored state.
 
     Deletes ``._browser_state.json`` from workspace storage so cookies and
     other credentials do not linger after the session is deleted.
+
+    ``deleted_session_scope`` is trusted attribution from a successful session
+    deletion. Its file grant survives that row disappearing, without granting
+    access outside the deleted session folder or its original organization.
 
     Best-effort: errors are logged but never raised.
     """
@@ -477,8 +489,21 @@ async def close_browser_session(session_name: str, user_id: str | None = None) -
     # Delete persisted browser state (cookies, localStorage) from workspace.
     if user_id:
         try:
-            manager = await get_workspace_manager(user_id, session_name)
-            file_info = await manager.get_file_info_by_path(_STATE_FILENAME)
+            if deleted_session_scope is None:
+                manager = await get_workspace_manager(user_id, session_name)
+                state_path = _STATE_FILENAME
+            else:
+                workspace = await workspace_db().get_or_create_workspace(user_id)
+                organization_id, team_id = deleted_session_scope
+                manager = WorkspaceManager(
+                    user_id,
+                    workspace.id,
+                    organization_id=organization_id,
+                    team_id=team_id,
+                    scope=WorkspaceScope(session_ids=[session_name]),
+                )
+                state_path = f"/sessions/{session_name}/{_STATE_FILENAME}"
+            file_info = await manager.get_file_info_by_path(state_path)
             if file_info is not None:
                 await manager.delete_file(file_info.id)
         except Exception:
