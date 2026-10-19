@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ArtifactRef } from "../../../store";
 import type { ArtifactClassification } from "../helpers";
 import { fetchArtifactResource } from "../artifactRequest";
+import { useAuthStore } from "@/lib/auth/hooks/useAuthStore";
 
 // Cap on cached text artifacts. Long sessions with many large artifacts
 // would otherwise hold every opened one in memory.
@@ -11,7 +12,7 @@ const CONTENT_CACHE_MAX = 12;
 const CONTENT_FETCH_MAX_RETRIES = 2;
 const CONTENT_FETCH_RETRY_DELAY_MS = 500;
 
-// Module-level LRU keyed by artifact id so a sibling action (e.g. Copy
+// Module-level LRU keyed by owner, scope and artifact so a sibling action (e.g. Copy
 // in ArtifactPanelHeader) can read what the panel already fetched without
 // re-hitting the network.
 const contentCache = new Map<string, string>();
@@ -118,8 +119,35 @@ async function fetchArtifactResponse(artifact: ArtifactRef): Promise<Response> {
   throw new Error("Failed to fetch artifact");
 }
 
-export function getCachedArtifactContent(id: string): string | undefined {
-  return contentCache.get(id);
+interface ArtifactCacheRef {
+  id: string;
+  organizationId?: string | null;
+  teamId?: string | null;
+}
+
+export function artifactContentCacheKey(
+  artifact: ArtifactCacheRef,
+  ownerId: string | undefined,
+) {
+  return JSON.stringify([
+    ownerId,
+    artifact.organizationId === undefined
+      ? "unscoped"
+      : artifact.organizationId,
+    artifact.teamId,
+    artifact.id,
+  ]);
+}
+
+export function getCachedArtifactContent(
+  artifact: string | ArtifactCacheRef,
+): string | undefined {
+  return contentCache.get(
+    artifactContentCacheKey(
+      typeof artifact === "string" ? { id: artifact } : artifact,
+      useAuthStore.getState().user?.id,
+    ),
+  );
 }
 
 export function clearContentCache() {
@@ -130,6 +158,8 @@ export function useArtifactContent(
   artifact: ArtifactRef,
   classification: ArtifactClassification,
 ) {
+  const ownerId = useAuthStore((state) => state.user?.id);
+  const cacheKey = artifactContentCacheKey(artifact, ownerId);
   const [content, setContent] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -142,7 +172,7 @@ export function useArtifactContent(
 
   function retry() {
     // Drop any cached failure/content for this id so we actually re-fetch.
-    contentCache.delete(artifact.id);
+    contentCache.delete(cacheKey);
     // Flip into loading + clear error synchronously with the click so the
     // user always sees the skeleton (rather than the error UI re-flashing
     // instantly for same-error retries). See SECRT-2224.
@@ -158,21 +188,21 @@ export function useArtifactContent(
     return () => {
       const node = scrollRef.current;
       if (node && node.scrollTop > 0) {
-        scrollPositions.current.set(artifact.id, node.scrollTop);
+        scrollPositions.current.set(cacheKey, node.scrollTop);
       }
     };
-  }, [artifact.id]);
+  }, [cacheKey]);
 
   // Restore scroll position — wait until isLoading flips to false, since
   // the scroll container is replaced by a Skeleton during loading and the
   // real content div would otherwise mount with scrollTop=0.
   useEffect(() => {
     if (isLoading) return;
-    const saved = scrollPositions.current.get(artifact.id);
+    const saved = scrollPositions.current.get(cacheKey);
     if (saved != null && scrollRef.current) {
       scrollRef.current.scrollTop = saved;
     }
-  }, [artifact.id, isLoading]);
+  }, [cacheKey, isLoading]);
 
   useEffect(() => {
     const isMedia =
@@ -252,10 +282,10 @@ export function useArtifactContent(
     // LRU touch — re-insert so the most-recently-used entry sits at the
     // tail and the oldest entry falls off the head first.
     const cache = contentCache;
-    const cached = cache.get(artifact.id);
+    const cached = cache.get(cacheKey);
     if (cached !== undefined) {
-      cache.delete(artifact.id);
-      cache.set(artifact.id, cached);
+      cache.delete(cacheKey);
+      cache.set(cacheKey, cached);
       setContent(cached);
       setIsLoading(false);
       return () => {
@@ -271,7 +301,7 @@ export function useArtifactContent(
             const oldest = cache.keys().next().value;
             if (oldest !== undefined) cache.delete(oldest);
           }
-          cache.set(artifact.id, text);
+          cache.set(cacheKey, text);
           setContent(text);
           setIsLoading(false);
         }
@@ -286,7 +316,7 @@ export function useArtifactContent(
     return () => {
       cancelled = true;
     };
-  }, [artifact.id, artifact.sourceUrl, classification.type, retryNonce]);
+  }, [cacheKey, artifact.sourceUrl, classification.type, retryNonce]);
 
   return { content, pdfUrl, mediaUrl, isLoading, error, scrollRef, retry };
 }

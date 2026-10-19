@@ -12,23 +12,31 @@ import { ArtifactErrorBoundary } from "./ArtifactErrorBoundary";
 import { ArtifactReactPreview } from "./ArtifactReactPreview";
 import { ArtifactSkeleton } from "./ArtifactSkeleton";
 import { ExpertArtifactContent } from "./ExpertArtifactContent";
+import { OpenUIArtifact } from "./OpenUIArtifact";
 import {
   FRAGMENT_LINK_INTERCEPTOR_SCRIPT,
   TAILWIND_CDN_URL,
   wrapWithHeadInjection,
 } from "@/lib/iframe-sandbox-csp";
-import { useArtifactContent } from "./useArtifactContent";
+import {
+  artifactContentCacheKey,
+  useArtifactContent,
+} from "./useArtifactContent";
+import { useAuthStore } from "@/lib/auth/hooks/useAuthStore";
 
 interface Props {
   artifact: ArtifactRef;
   isSourceView: boolean;
   classification: ArtifactClassification;
+  /** Public viewers: interactive views render their saved source only. */
+  readOnly?: boolean;
 }
 
 function ArtifactContentLoader({
   artifact,
   isSourceView,
   classification,
+  readOnly = false,
 }: Props) {
   const { content, pdfUrl, mediaUrl, isLoading, error, scrollRef, retry } =
     useArtifactContent(artifact, classification);
@@ -70,6 +78,7 @@ function ArtifactContentLoader({
           mediaUrl={mediaUrl}
           isSourceView={isSourceView}
           classification={classification}
+          readOnly={readOnly}
         />
       </ArtifactErrorBoundary>
     </div>
@@ -179,6 +188,7 @@ function ArtifactRenderer({
   mediaUrl,
   isSourceView,
   classification,
+  readOnly,
 }: {
   artifact: ArtifactRef;
   content: string | null;
@@ -186,6 +196,7 @@ function ArtifactRenderer({
   mediaUrl: string | null;
   isSourceView: boolean;
   classification: ArtifactClassification;
+  readOnly: boolean;
 }) {
   // Image: render directly from URL (no content fetch)
   if (classification.type === "image") {
@@ -225,6 +236,16 @@ function ArtifactRenderer({
       <pre className="whitespace-pre-wrap break-words p-4 font-mono text-sm text-zinc-800">
         {content}
       </pre>
+    );
+  }
+
+  if (classification.type === "openui") {
+    return (
+      <OpenUIArtifact
+        artifact={artifact}
+        content={content}
+        readOnly={readOnly}
+      />
     );
   }
 
@@ -330,12 +351,16 @@ function ArtifactRenderer({
 }
 
 export function ArtifactContent(props: Props) {
+  const ownerId = useAuthStore((state) => state.user?.id);
   if (props.artifact.expert) {
     return <ExpertArtifactContent expert={props.artifact.expert} />;
   }
   return (
     <Suspense fallback={<ArtifactSkeleton />}>
-      <ArtifactContentLoader {...props} />
+      <ArtifactContentLoader
+        key={artifactContentCacheKey(props.artifact, ownerId)}
+        {...props}
+      />
     </Suspense>
   );
 }

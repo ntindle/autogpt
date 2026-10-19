@@ -89,6 +89,7 @@ _READ = frozenset(
         "read_expert_chat",
         "read_skill",
         "read_workspace_file",
+        "render_ui",
         "search_docs",
         "search_feature_requests",
         "validate_agent_graph",

@@ -5,5 +5,5 @@
   },
   "fork": "ntindle/autogpt",
   "mainline": "mainline",
-  "branches": ["personal/tasks", "personal/orgs"]
+  "branches": ["personal/tasks", "personal/orgs", "personal/openui"]
 }

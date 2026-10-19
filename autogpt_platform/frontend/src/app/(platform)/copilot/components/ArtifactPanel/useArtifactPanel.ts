@@ -49,7 +49,7 @@ export function useArtifactPanel() {
     if (!activeArtifact || !canCopy) return;
     // Reuse content already fetched by the preview pane when available —
     // Copy should feel instant, not trigger a second network round-trip.
-    const cached = getCachedArtifactContent(activeArtifact.id);
+    const cached = getCachedArtifactContent(activeArtifact);
     const textPromise = cached
       ? Promise.resolve(cached)
       : fetchArtifactResource(activeArtifact).then((res) => {

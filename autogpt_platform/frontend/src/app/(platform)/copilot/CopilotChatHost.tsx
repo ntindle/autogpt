@@ -1,6 +1,7 @@
 "use client";
 import { TaskConversationContext } from "./components/TaskConversationContext/TaskConversationContext";
 import { ChatContainer } from "./components/ChatContainer/ChatContainer";
+import { ChatSenderRegistration } from "./components/ChatSenderRegistration/ChatSenderRegistration";
 import type { FloatingControls } from "./components/ChatMessagesContainer/components/ThreadHeader";
 import { ProviderLimitDialog } from "./components/ProviderLimitDialog/ProviderLimitDialog";
 import { RateLimitGate } from "./components/RateLimitResetDialog/RateLimitGate";
@@ -8,6 +9,7 @@ import { useCopilotPage } from "./useCopilotPage";
 import { ConversationOrganization } from "./components/ConversationOrganization/ConversationOrganization";
 import { TaskScopeContext } from "@/services/tasks/TaskScopeContext";
 import { CopilotTenantScopeProvider } from "./CopilotTenantScopeContext";
+import { OpenUIScopeProvider } from "./tools/RenderUI/OpenUIScopeContext";
 import { FlaskConicalIcon } from "@hugeicons/core-free-icons";
 import { Icon } from "@/components/atoms/Icon/Icon";
 import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
@@ -106,94 +108,114 @@ function ChatHostBody({
       organizationId={sessionOrganizationId}
       teamId={sessionTeamId}
     >
-      <TaskScopeContext.Provider
-        value={{
-          organizationId: sessionOrganizationId,
-          teamId: sessionTeamId,
-          ready: sessionId
-            ? !isLoadingSession && !isSessionError
-            : isTeamContextReady,
-        }}
+      <OpenUIScopeProvider
+        organizationId={sessionOrganizationId}
+        teamId={sessionTeamId}
       >
-        <ConversationOrganization organizationId={sessionOrganizationId} />
-        {/* Only shown when the CURRENT session is confirmed dry_run via its
+        <TaskScopeContext.Provider
+          value={{
+            organizationId: sessionOrganizationId,
+            teamId: sessionTeamId,
+            ready: sessionId
+              ? !isLoadingSession && !isSessionError
+              : isTeamContextReady,
+          }}
+        >
+          <ConversationOrganization organizationId={sessionOrganizationId} />
+          {sessionId &&
+            !isLoadingSession &&
+            !isRestoringActiveSession &&
+            !isSessionError &&
+            !isSessionNotFound &&
+            !isResolvingExpertIdentity &&
+            !isAdoptingExpertSession &&
+            !isKickoffStarting &&
+            !expertIdentity?.isArchived && (
+              <ChatSenderRegistration
+                key={sessionId}
+                sessionId={sessionId}
+                onSend={onSend}
+              />
+            )}
+          {/* Only shown when the CURRENT session is confirmed dry_run via its
           immutable metadata. Never based on the global isDryRun preference
           (which only predicts future sessions). */}
-        {sessionId && sessionDryRun && (
-          <div className="flex items-center justify-center gap-1.5 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
-            <Icon icon={FlaskConicalIcon} size={13} />
-            Test mode — this session runs workflows as simulation
+          {sessionId && sessionDryRun && (
+            <div className="flex items-center justify-center gap-1.5 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-800">
+              <Icon icon={FlaskConicalIcon} size={13} />
+              Test mode — this session runs workflows as simulation
+            </div>
+          )}
+          {sessionId && sessionWorkspaceTaskId ? (
+            <TaskConversationContext sessionId={sessionId} />
+          ) : null}
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <ChatContainer
+              isUsageRefused={!!rateLimitMessage || usageRefresh.guarded}
+              usageFailure={platformLimitFailure}
+              onDismissUsage={dismissAfterProviderChange}
+              usageRefresh={usageRefresh}
+              usage={usage}
+              chatAuthProvider={chatLlmAuthProvider}
+              messages={messages}
+              status={status}
+              error={error}
+              sessionId={sessionId}
+              sessionOrganizationId={sessionOrganizationId}
+              sessionTeamId={sessionTeamId}
+              sessionChatStatus={sessionChatStatus}
+              sessionSentFrom={sessionSentFrom}
+              sessionAutopilotMode={sessionAutopilotMode}
+              isLoadingSession={isLoadingSession}
+              isSessionError={isSessionError}
+              isSessionNotFound={isSessionNotFound}
+              isCreatingSession={isCreatingSession}
+              isReconnecting={isReconnecting}
+              isFinishProbing={isFinishProbing}
+              isRestoringActiveSession={isRestoringActiveSession}
+              restoreStatusMessage={restoreStatusMessage}
+              activeStreamStartedAt={activeStreamStartedAt}
+              isUserStopping={isUserStopping}
+              onCreateSession={createSession}
+              onSend={onSend}
+              onStop={stop}
+              onEnqueue={onEnqueue}
+              queuedMessages={queuedMessages}
+              isUploadingFiles={isUploadingFiles}
+              pendingSend={pendingSend}
+              hasMoreMessages={hasMoreMessages}
+              isLoadingMore={isLoadingMore}
+              onLoadMore={loadMore}
+              droppedFiles={droppedFiles}
+              onDroppedFilesConsumed={onDroppedFilesConsumed}
+              turnStats={turnStats}
+              expertIdentity={expertIdentity}
+              isResolvingExpertIdentity={isResolvingExpertIdentity}
+              isAdoptingExpertSession={isAdoptingExpertSession}
+              isKickoffStarting={isKickoffStarting}
+              createTeamId={createTeamId}
+              onCreateTeamChange={setCreateTeamId}
+              isTeamContextReady={isTeamContextReady}
+              canSelectCreateTeam={canSelectCreateTeam}
+              onBackendTurn={followBackendTurn}
+              floatingControls={floatingControls}
+            />
           </div>
-        )}
-        {sessionId && sessionWorkspaceTaskId ? (
-          <TaskConversationContext sessionId={sessionId} />
-        ) : null}
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <ChatContainer
-            isUsageRefused={!!rateLimitMessage || usageRefresh.guarded}
-            usageFailure={platformLimitFailure}
-            onDismissUsage={dismissAfterProviderChange}
-            usageRefresh={usageRefresh}
-            usage={usage}
-            chatAuthProvider={chatLlmAuthProvider}
-            messages={messages}
-            status={status}
-            error={error}
+          <RateLimitGate
+            refreshState={usageRefresh}
+            rateLimitMessage={rateLimitMessage}
+            failure={platformLimitFailure}
             sessionId={sessionId}
-            sessionOrganizationId={sessionOrganizationId}
-            sessionTeamId={sessionTeamId}
-            sessionChatStatus={sessionChatStatus}
-            sessionSentFrom={sessionSentFrom}
-            sessionAutopilotMode={sessionAutopilotMode}
-            isLoadingSession={isLoadingSession}
-            isSessionError={isSessionError}
-            isSessionNotFound={isSessionNotFound}
-            isCreatingSession={isCreatingSession}
-            isReconnecting={isReconnecting}
-            isFinishProbing={isFinishProbing}
-            isRestoringActiveSession={isRestoringActiveSession}
-            restoreStatusMessage={restoreStatusMessage}
-            activeStreamStartedAt={activeStreamStartedAt}
-            isUserStopping={isUserStopping}
-            onCreateSession={createSession}
-            onSend={onSend}
-            onStop={stop}
-            onEnqueue={onEnqueue}
-            queuedMessages={queuedMessages}
-            isUploadingFiles={isUploadingFiles}
-            pendingSend={pendingSend}
-            hasMoreMessages={hasMoreMessages}
-            isLoadingMore={isLoadingMore}
-            onLoadMore={loadMore}
-            droppedFiles={droppedFiles}
-            onDroppedFilesConsumed={onDroppedFilesConsumed}
-            turnStats={turnStats}
-            expertIdentity={expertIdentity}
-            isResolvingExpertIdentity={isResolvingExpertIdentity}
-            isAdoptingExpertSession={isAdoptingExpertSession}
-            isKickoffStarting={isKickoffStarting}
-            createTeamId={createTeamId}
-            onCreateTeamChange={setCreateTeamId}
-            isTeamContextReady={isTeamContextReady}
-            canSelectCreateTeam={canSelectCreateTeam}
-            onBackendTurn={followBackendTurn}
-            floatingControls={floatingControls}
+            onDismiss={dismissRateLimit}
+            onSendNow={onSend}
           />
-        </div>
-        <RateLimitGate
-          refreshState={usageRefresh}
-          rateLimitMessage={rateLimitMessage}
-          failure={platformLimitFailure}
-          sessionId={sessionId}
-          onDismiss={dismissRateLimit}
-          onSendNow={onSend}
-        />
-        <ProviderLimitDialog
-          failure={providerLimit}
-          sessionId={sessionId}
-          onDismiss={dismissProviderLimit}
-        />
-      </TaskScopeContext.Provider>
+          <ProviderLimitDialog
+            failure={providerLimit}
+            sessionId={sessionId}
+            onDismiss={dismissProviderLimit}
+          />
+        </TaskScopeContext.Provider>
+      </OpenUIScopeProvider>
     </CopilotTenantScopeProvider>
   );
 }

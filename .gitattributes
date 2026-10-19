@@ -11,3 +11,6 @@ classic/forge/tests/vcr_cassettes/**/**.y*ml linguist-generated
 
 .github/scripts/platform-single-container-*.sh text eol=lf
 autogpt_platform/single-container/*.sh text eol=lf
+autogpt_platform/backend/backend/copilot/tools/openui_library.txt text eol=lf
+autogpt_platform/backend/backend/copilot/tools/openui-validator.cjs text eol=lf
+autogpt_platform/backend/backend/copilot/tools/openui-validator.LICENSE.txt text eol=lf
