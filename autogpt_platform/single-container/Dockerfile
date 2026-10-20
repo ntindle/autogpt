@@ -24,6 +24,7 @@ ARG NEXT_PUBLIC_FORCE_FLAG_ARTIFACTS=false
 ARG NEXT_PUBLIC_FORCE_FLAG_ARTIFACTS_PAGE=false
 ARG NEXT_PUBLIC_FORCE_FLAG_CHAT_WORKSPACE_FILES=false
 ARG NEXT_PUBLIC_FORCE_FLAG_CHAT_SHARING=false
+ARG FRONTEND_BUILD_HEAP_MB=8192
 
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
@@ -48,7 +49,7 @@ ENV NODE_ENV=production \
     DATABASE_URL="postgresql:///postgres?host=%2Frun%2Fpostgresql&user=autogpt_frontend"
 
 RUN pnpm run generate:api \
-    && NODE_OPTIONS="--max-old-space-size=8192" pnpm build \
+    && NODE_OPTIONS="--max-old-space-size=${FRONTEND_BUILD_HEAP_MB}" pnpm build \
     && rm -f .env .env.local .env.production
 
 FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS node-runtime
