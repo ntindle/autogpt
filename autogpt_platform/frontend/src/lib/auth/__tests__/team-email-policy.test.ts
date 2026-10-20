@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { assertTeamEmailUsesGoogle, isTeamEmail } from "../team-email-policy";
+import { assertTeamEmailUsesGoogle } from "../team-email-policy";
+import { isTeamEmail } from "../team-email";
 
 describe("isTeamEmail", () => {
   it.each([

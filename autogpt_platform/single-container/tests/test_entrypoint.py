@@ -197,6 +197,41 @@ class AccountRegistrationTest(unittest.TestCase):
 
 
 class EnvironmentPolicyTest(unittest.TestCase):
+    def test_local_team_password_signup_defaults_off(self) -> None:
+        for overrides in (
+            {},
+            {"AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP": ""},
+            {"AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP": "false"},
+        ):
+            with self.subTest(overrides=overrides):
+                result = self._configure(
+                    output="$AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP", **overrides
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines()[-1], "false")
+
+    def test_local_team_password_signup_opt_in_keeps_auth_enabled(self) -> None:
+        result = self._configure(
+            output=(
+                "$AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP "
+                "$ENABLE_AUTH $AUTH_REQUIRE_EMAIL_VERIFICATION"
+            ),
+            AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP="true",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines()[-1], "true true false")
+
+    def test_rejects_invalid_local_team_password_signup_toggle(self) -> None:
+        result = self._configure(AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP="yes")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP must be true or false",
+            result.stderr,
+        )
+
     def test_image_preserves_background_embedding_backfill_at_startup(
         self,
     ) -> None:

@@ -27,6 +27,7 @@ class FrontendEnvironmentTest(unittest.TestCase):
             "BETTER_AUTH_URL": "https://autogpt.example.com",
         }
         optional = {
+            "AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP": "true",
             "AUTH_CALLBACK_URL": "/auth/callback",
             "AUTH_DISCORD_CLIENT_ID": "discord-client",
             "AUTH_DISCORD_CLIENT_SECRET": "discord-secret",

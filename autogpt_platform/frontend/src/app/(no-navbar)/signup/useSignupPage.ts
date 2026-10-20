@@ -2,6 +2,7 @@ import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useCaptureMarketingPrompt } from "@/hooks/useCaptureMarketingPrompt";
 import { sanitizeAuthNext } from "@/lib/auth-redirect";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
+import { isTeamEmail } from "@/lib/auth/team-email";
 import { setMarketingOptOutFlag } from "@/services/analytics/marketing-opt-out-cookie";
 import { trackSignupMarketingOptOut } from "@/services/analytics/signup-analytics";
 import { environment } from "@/services/environment";
@@ -13,7 +14,7 @@ import { useForm } from "react-hook-form";
 import z from "zod";
 import { signup as signupAction } from "./actions";
 
-export function useSignupPage() {
+export function useSignupPage(allowTeamPassword: boolean) {
   useCaptureMarketingPrompt();
 
   const { user, isUserLoading, isLoggedIn } = useAuth();
@@ -124,7 +125,7 @@ export function useSignupPage() {
     setMarketingOptOutFlag(false);
     setIsLoading(true);
 
-    if (data.email.includes("@agpt.co")) {
+    if (isTeamEmail(data.email) && !allowTeamPassword) {
       toast({
         title:
           "Please use Google SSO to create an account using an AutoGPT email.",

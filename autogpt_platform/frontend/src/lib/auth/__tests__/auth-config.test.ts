@@ -302,6 +302,13 @@ describe("email verification", () => {
 });
 
 describe("team email sign-up", () => {
+  beforeEach(() => {
+    vi.stubEnv("NEXT_PUBLIC_BEHAVE_AS", "LOCAL");
+    vi.stubEnv("AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP", "false");
+    vi.stubEnv("AUTH_ALLOW_NEW_ACCOUNTS", "true");
+    vi.stubEnv("AUTH_SIGNUP_ALLOWLIST", "");
+  });
+
   type CreateUserHook = (
     user: { email: string },
     ctx: { path?: string } | null,
@@ -331,6 +338,81 @@ describe("team email sign-up", () => {
     await expect(
       createUser({ email: "someone@agpt.co" }, { path: "/callback/google" }),
     ).resolves.toBeUndefined();
+  });
+
+  it("allows explicitly opted-in LOCAL password signup for exact allowlisted team emails", async () => {
+    vi.stubEnv("AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP", "true");
+    vi.stubEnv(
+      "AUTH_SIGNUP_ALLOWLIST",
+      " John.Ababseh@agpt.co, toran@agpt.co,nicholas.tindle@agpt.co ",
+    );
+    const createUser = await loadCreateUserHook();
+
+    for (const email of [
+      "john.ababseh@agpt.co",
+      "TORAN@AGPT.CO",
+      "nicholas.tindle@agpt.co",
+    ]) {
+      await expect(
+        createUser({ email }, { path: "/sign-up/email" }),
+      ).resolves.toBeUndefined();
+    }
+    await expect(
+      createUser({ email: "unlisted@agpt.co" }, { path: "/sign-up/email" }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it.each(["CLOUD", "", "local"])(
+    "cannot opt out of team SSO in %s mode",
+    async (mode) => {
+      vi.stubEnv("NEXT_PUBLIC_BEHAVE_AS", mode);
+      vi.stubEnv("AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP", "true");
+      vi.stubEnv("AUTH_SIGNUP_ALLOWLIST", "toran@agpt.co");
+      const createUser = await loadCreateUserHook();
+
+      await expect(
+        createUser({ email: "toran@agpt.co" }, { path: "/sign-up/email" }),
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        body: { code: "TEAM_EMAIL_REQUIRES_GOOGLE" },
+      });
+    },
+  );
+
+  it.each(["", "@agpt.co", "*@agpt.co", "someone@agpt.co,@agpt.co"])(
+    "does not treat %s as exact permission for another team email",
+    async (allowlist) => {
+      vi.stubEnv("AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP", "true");
+      vi.stubEnv("AUTH_SIGNUP_ALLOWLIST", allowlist);
+      const createUser = await loadCreateUserHook();
+
+      await expect(
+        createUser({ email: "toran@agpt.co" }, { path: "/sign-up/email" }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+    },
+  );
+
+  it("still honors closed registration and rejects non-allowlisted non-team emails", async () => {
+    vi.stubEnv("AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP", "true");
+    vi.stubEnv("AUTH_SIGNUP_ALLOWLIST", "toran@agpt.co,guest@example.com");
+    const createUser = await loadCreateUserHook();
+
+    await expect(
+      createUser({ email: "guest@example.com" }, { path: "/sign-up/email" }),
+    ).resolves.toBeUndefined();
+    await expect(
+      createUser({ email: "unlisted@example.com" }, { path: "/sign-up/email" }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+
+    vi.stubEnv("AUTH_ALLOW_NEW_ACCOUNTS", "false");
+    await expect(
+      createUser({ email: "toran@agpt.co" }, { path: "/sign-up/email" }),
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      body: {
+        message: "New account registration is not allowed at this time.",
+      },
+    });
   });
 
   it("leaves other password sign-ups to the signup gate", async () => {
