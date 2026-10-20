@@ -216,6 +216,7 @@ configure_backend_cors_origin() {
 
 configure_account_registration() {
   normalize_toggle AUTH_ALLOW_NEW_ACCOUNTS true
+  normalize_toggle AUTH_ALLOW_LOCAL_TEAM_PASSWORD_SIGNUP false
   if [[ "${AUTH_ALLOW_NEW_ACCOUNTS}" == true ]]; then
     log "WARNING: open account registration is enabled; anyone who can reach the app can sign up"
     log "after creating the intended accounts, set AUTH_ALLOW_NEW_ACCOUNTS=false and recreate the container"

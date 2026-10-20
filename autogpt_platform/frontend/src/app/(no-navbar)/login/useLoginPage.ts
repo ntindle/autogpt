@@ -6,6 +6,7 @@ import {
   getEmailVerificationNotice,
 } from "@/lib/auth/email-verification";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
+import { isTeamEmail } from "@/lib/auth/team-email";
 import { environment } from "@/services/environment";
 import { loginFormSchema, LoginProvider } from "@/types/auth";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -15,7 +16,7 @@ import { useForm } from "react-hook-form";
 import z from "zod";
 import { login as loginAction } from "./actions";
 
-export function useLoginPage() {
+export function useLoginPage(allowTeamPassword: boolean) {
   useCaptureMarketingPrompt();
 
   const { user, isUserLoading, isLoggedIn } = useAuth();
@@ -95,7 +96,7 @@ export function useLoginPage() {
     setIsLoading(true);
     setIsLoggingIn(true);
 
-    if (data.email.includes("@agpt.co")) {
+    if (isTeamEmail(data.email) && !allowTeamPassword) {
       toast({
         title: "Please use Google SSO to login using an AutoGPT email.",
         variant: "default",
