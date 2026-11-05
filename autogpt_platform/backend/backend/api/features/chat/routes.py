@@ -6,15 +6,24 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from autogpt_libs import auth
-from fastapi import APIRouter, HTTPException, Query, Request, Response, Security
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    Security,
+)
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from backend.api.credential_scope import credential_user_id
 from backend.api.features.experts import experts_db
+from backend.api.features.experts.models import Expert
 from backend.api.live_auth import requires_live_resource_permission
 from backend.blocks.desktop._api import DesktopStream
 from backend.copilot import active_turns
@@ -26,6 +35,11 @@ from backend.copilot.active_turns import (
     inflight_turn_limit_message,
 )
 from backend.copilot.at_reset import cancel_resume_at_reset_in_background
+from backend.copilot.background_delivery import (
+    cancel_background_subtasks,
+    cancel_orphaned_background_subtasks,
+)
+from backend.copilot.background_task import BackgroundSessionState
 from backend.copilot.computer import (
     ComputerInfo,
     computer_owner,
@@ -34,7 +48,10 @@ from backend.copilot.computer import (
     open_desktop,
 )
 from backend.copilot.config import ChatConfig, CopilotLlmAuthProvider, CopilotLLMModel
-from backend.copilot.credential_selection import remember_selection
+from backend.copilot.credential_selection import (
+    credential_matches_selection,
+    remember_selection,
+)
 from backend.copilot.db import (
     chat_message_has_assistant_reply,
     get_chat_messages_paginated,
@@ -45,18 +62,20 @@ from backend.copilot.expert_kickoff import (
     expert_kickoff_metadata,
     scoped_client_message_id,
 )
+from backend.copilot.gate.card_approval import record_card_decisions
 from backend.copilot.llm_attribution import is_impersonated_request
 from backend.copilot.model import (
     CHAT_STATUS_IDLE,
     CHAT_STATUS_RUNNING,
     AutopilotMode,
-    ChatSession,
     ChatSessionInfo,
     ChatSessionMetadata,
+    SessionIdConflictError,
     create_chat_session,
     delete_chat_session,
     get_chat_session_metadata,
     get_or_create_builder_session,
+    get_or_create_client_chat_session,
     get_or_create_expert_kickoff_session,
     get_user_sessions,
     update_session_autopilot_mode,
@@ -97,14 +116,9 @@ from backend.copilot.rate_limit import (
     RateLimitExceeded,
     RateLimitUnavailable,
     acquire_reset_lock,
-    check_rate_limit,
-    enforce_payment_paywall,
     get_daily_reset_count,
-    get_global_rate_limits,
-    get_usage_status,
     increment_daily_reset_count,
     release_reset_lock,
-    reset_daily_usage,
 )
 from backend.copilot.response_model import (
     StreamError,
@@ -112,11 +126,16 @@ from backend.copilot.response_model import (
     StreamFinishStep,
     StreamFollowUpQueued,
     StreamHeartbeat,
+    StreamRecoveredError,
     StreamStart,
     StreamStartStep,
     StreamStatus,
 )
-from backend.copilot.service import strip_injected_context_for_display
+from backend.copilot.service import (
+    EmptyUserMessage,
+    normalise_user_message,
+    strip_injected_context_for_display,
+)
 from backend.copilot.session_permissions import resolve_session_permissions
 from backend.copilot.tools.e2b_sandbox import kill_sandbox
 from backend.copilot.tools.manage_presets import (
@@ -174,9 +193,18 @@ from backend.data.credit import UsageTransactionMetadata, get_user_credit_model
 from backend.data.db_accessors import (
     LiveResourceAccessRevoked,
     LiveResourceLeaseGuard,
+    background_task_db,
     live_resource_lease,
     live_resource_scopes_lease,
     require_exact_chat_session_scope,
+)
+from backend.data.entitlement import enforce_entitlement, enforce_payment_paywall
+from backend.data.entitlement_limits import (
+    check_rate_limit,
+    get_global_rate_limits,
+    get_usage_status,
+    org_plan_decides,
+    reset_daily_usage,
 )
 from backend.data.redis_client import get_redis_async
 from backend.data.tenancy import (
@@ -188,13 +216,13 @@ from backend.data.understanding import get_business_understanding
 from backend.data.workspace import build_files_block
 from backend.data.workspace_folder import resolve_attachable_workspace_folders
 from backend.integrations.codex.access import enforce_codex_access_http
-from backend.integrations.credentials_store import provider_matches
 from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.util import tracing
 from backend.util.background import spawn_background_task
 from backend.util.exceptions import InsufficientBalanceError, NotFoundError
 from backend.util.feature_flag import Flag, is_feature_enabled
 from backend.util.settings import Settings
+from backend.util.text_limits import MAX_TITLE_LENGTH, MAX_URL_LENGTH, IDText
 
 settings = Settings()
 
@@ -226,23 +254,26 @@ async def enforce_model_entitlement(
         raise HTTPException(status_code=403, detail="advanced_tier_not_entitled")
 
 
-async def enforce_platform_allowance(user_id: str) -> None:
+async def enforce_platform_allowance(user_id: str, org_id: str | None) -> None:
     """Refuse a platform-billed turn when the user's allowance is spent.
 
     Raises 429 with a structured ``ProviderFailure`` envelope, or 503 when the
-    allowance can't be read. Shared by every route that starts a turn.
+    allowance can't be read. Shared by every route that starts a turn; the
+    allowance is the tier the user works under in *org_id*.
     """
     try:
         daily_limit, weekly_limit, usage_tier = await get_global_rate_limits(
             user_id,
             config.daily_cost_limit_microdollars,
             config.weekly_cost_limit_microdollars,
+            org_id,
         )
         await check_rate_limit(
             user_id=user_id,
             daily_cost_limit=daily_limit,
             weekly_cost_limit=weekly_limit,
             expected_tier=usage_tier,
+            org_id=org_id,
         )
     except RateLimitExceeded as e:
         # Structured envelope (not a bare string) so the frontend can
@@ -428,20 +459,12 @@ async def _live_chat_session_delivery(
             await asyncio.gather(loss_monitor, return_exceptions=True)
 
 
-# Minimum age before the orphan-reset paths (``get_session`` and
-# ``cancel_session_task``) will touch a ``chatStatus='running'`` session
-# that has no live Redis stream.  Lower bound has to clear the
-# ``acquire_turn_slot``→``dispatch_turn.create_session`` window (a few
-# ms in practice).  30s is a generous safety margin — anything still
-# at ``running`` after that without a Redis stream is genuinely an
-# orphan, not an in-flight admit racing this read.
-_ORPHAN_RUNNING_RESET_THRESHOLD_SECONDS = 30
-
-
-async def _try_release_orphan_running(session_id: str, user_id: str) -> bool:
+async def _try_release_orphan_running(
+    session_id: str, user_id: str, *, cancel_background: bool = False
+) -> bool:
     """Force-release a session if it's stuck in ``chatStatus='running'``
-    older than ``_ORPHAN_RUNNING_RESET_THRESHOLD_SECONDS`` (= the
-    ``acquire_turn_slot``→``create_session`` race window).  Returns
+    older than ``ORPHAN_RUNNING_RESET_SECONDS`` (its rationale is with the
+    constant in ``active_turns``).  Returns
     True iff a release happened — callers map that into their response
     so the user can tell ``orphan_released`` apart from
     ``no_active_session``."""
@@ -455,8 +478,12 @@ async def _try_release_orphan_running(session_id: str, user_id: str) -> bool:
     if updated_at.tzinfo is None:
         updated_at = updated_at.replace(tzinfo=timezone.utc)
     age = (datetime.now(timezone.utc) - updated_at).total_seconds()
-    if age <= _ORPHAN_RUNNING_RESET_THRESHOLD_SECONDS:
+    if age <= active_turns.ORPHAN_RUNNING_RESET_SECONDS:
         return False
+    if cancel_background:
+        return await cancel_orphaned_background_subtasks(
+            user_id, session_id, updated_at
+        )
     await active_turns.release_turn_slot(user_id, session_id)
     return True
 
@@ -490,22 +517,31 @@ def _strip_injected_context(message: dict) -> dict:
 # ========== Request/Response Models ==========
 
 
+# {url: str, content: str}: the page the user attached.
+MAX_CHAT_MESSAGE_LENGTH = 64_000
+MAX_CONTEXT_ENTRIES = 5
+ChatContext = dict[
+    Annotated[str, StringConstraints(max_length=MAX_URL_LENGTH)],
+    Annotated[str, StringConstraints(max_length=MAX_CHAT_MESSAGE_LENGTH)],
+]
+
+
 class StreamChatRequest(BaseModel):
     """Request model for streaming chat with optional context."""
 
-    message: str = Field(max_length=64_000)
+    message: str = Field(max_length=MAX_CHAT_MESSAGE_LENGTH)
     is_user_message: bool = True
-    context: dict[str, str] | None = None  # {url: str, content: str}
+    context: ChatContext | None = Field(default=None, max_length=MAX_CONTEXT_ENTRIES)
     voice: bool = Field(
         default=False,
         description="Voice mode is waiting on speech. Adds one line asking the "
         "reply to open with a spoken acknowledgement before any tool call; "
         "text turns never pay for it.",
     )
-    file_ids: list[str] | None = Field(
+    file_ids: list[IDText] | None = Field(
         default=None, max_length=20
     )  # Workspace file IDs attached to this message
-    folder_ids: list[str] | None = Field(
+    folder_ids: list[IDText] | None = Field(
         default=None,
         max_length=5,
         description="Workspace folder IDs attached to this message. Named in "
@@ -549,10 +585,10 @@ class StreamChatRequest(BaseModel):
 class QueuePendingMessageRequest(BaseModel):
     """Request model for queueing a follow-up while a turn is running."""
 
-    message: str = Field(max_length=64_000)
-    context: dict[str, str] | None = None
-    file_ids: list[str] | None = Field(default=None, max_length=20)
-    folder_ids: list[str] | None = Field(default=None, max_length=5)
+    message: str = Field(max_length=MAX_CHAT_MESSAGE_LENGTH)
+    context: ChatContext | None = Field(default=None, max_length=MAX_CONTEXT_ENTRIES)
+    file_ids: list[IDText] | None = Field(default=None, max_length=20)
+    folder_ids: list[IDText] | None = Field(default=None, max_length=5)
     message_id: str | None = Field(
         default=None,
         max_length=64,
@@ -606,6 +642,12 @@ class CreateSessionRequest(BaseModel):
     mode keyed by the authenticated user and expert. It is invalid without
     ``expert_id``.
 
+    ``session_id`` lets the client name the session up front, which makes
+    the create idempotent: a retry after a lost response adopts the session
+    the first attempt committed (409 if the id is someone else's or scoped
+    to another expert). Builder and kickoff sessions pick their own ids, so
+    it is rejected alongside them (422).
+
     Extra/unknown fields are rejected (422) to prevent silent mis-use.
     """
 
@@ -617,6 +659,7 @@ class CreateSessionRequest(BaseModel):
     llm_credential_id: str | None = Field(default=None, max_length=128)
     expert_id: str | None = Field(default=None, max_length=128)
     expert_kickoff: bool = False
+    session_id: UUID | None = None
     # The approval mode the chat starts on. Leave unset to start on the
     # expert's default (or the platform default); send only a deliberate pick.
     autopilot_mode: AutopilotMode | None = None
@@ -666,6 +709,10 @@ class SessionDetailResponse(BaseModel):
     expert_id: str | None = None
     organization_id: str | None = None
     team_id: str | None = None
+    # From the background-task record, not the transcript page: a child's
+    # outcome, and whether a parent still has a continuation to come.
+    background_outcome: str | None = None
+    background_pending: bool = False
 
 
 class SessionSummaryResponse(BaseModel):
@@ -701,7 +748,7 @@ class CancelSessionResponse(BaseModel):
 class UpdateSessionTitleRequest(BaseModel):
     """Request model for updating a session's title."""
 
-    title: str
+    title: str = Field(max_length=MAX_TITLE_LENGTH)
 
     @field_validator("title")
     @classmethod
@@ -924,6 +971,12 @@ async def set_default_chat_transport(
     return ChatTransportsResponse(transports=transports)
 
 
+async def _new_session_expert(user_id: str, expert_id: str | None) -> Expert | None:
+    if expert_id is None:
+        return None
+    return await experts_db.get_expert(user_id, expert_id)
+
+
 async def _resolve_new_session_llm_route(
     user_id: str,
     request: CreateSessionRequest | None,
@@ -1010,7 +1063,7 @@ async def create_session(
 ) -> CreateSessionResponse:
     """Create (or get-or-create) a chat session.
 
-    Two modes, selected by the request body:
+    Four modes, selected by the request body:
 
     - Default: create a fresh session for the user. ``dry_run=True`` forces
       run_capability and run_agent calls to use dry-run simulation.
@@ -1024,11 +1077,15 @@ async def create_session(
       with the panel's scope (see :data:`BUILDER_BLOCKED_TOOLS`).
     - Expert kickoff: atomically create or adopt the canonical first session
       for ``(user_id, expert_id)``.
+    - Client-named: when ``session_id`` is set, a plain or expert create
+      adopts the session that id already names, so a retry after a lost
+      response never leaves an empty session behind.
 
     Args:
         user_id: The authenticated user ID parsed from the JWT (required).
         request: Optional request body with ``dry_run``,
-            ``builder_graph_id`` and/or ``expert_id``.
+            ``builder_graph_id``, ``expert_id``, ``expert_kickoff`` and/or
+            ``session_id``.
 
     Returns:
         CreateSessionResponse: Details of the resulting session.
@@ -1038,6 +1095,15 @@ async def create_session(
     expert_id = request.expert_id if request else None
     expert_kickoff = request.expert_kickoff if request else False
     autopilot_mode = request.autopilot_mode if request else None
+    client_session_id = (
+        str(request.session_id) if request and request.session_id else None
+    )
+
+    if client_session_id and (builder_graph_id or expert_kickoff):
+        raise HTTPException(
+            status_code=422,
+            detail="session_id cannot be combined with builder_graph_id or expert_kickoff",
+        )
 
     if expert_kickoff and expert_id is None:
         raise HTTPException(
@@ -1053,17 +1119,28 @@ async def create_session(
             detail="builder_graph_id and expert_id are mutually exclusive",
         )
 
-    if expert_id is not None:
-        expert = await experts_db.get_expert(user_id, expert_id)
-        if expert is None or expert.is_archived:
-            raise HTTPException(status_code=404, detail="Expert not found")
-
-    llm_auth_provider, llm_credential_id = await _resolve_new_session_llm_route(
-        user_id, request
+    # The expert and the connection don't depend on each other, so they are
+    # looked up side by side. Both lookups end before either is acted on, and
+    # the expert's failures come first: a failed lookup, then a missing or
+    # archived expert (404), then the connection's error.
+    expert, route = await asyncio.gather(
+        _new_session_expert(user_id, expert_id),
+        _resolve_new_session_llm_route(user_id, request),
+        return_exceptions=True,
     )
+    if isinstance(expert, BaseException):
+        raise expert
+    if expert_id is not None and (expert is None or expert.is_archived):
+        raise HTTPException(status_code=404, detail="Expert not found")
+    if isinstance(route, BaseException):
+        raise route
+    llm_auth_provider, llm_credential_id = route
 
     if llm_auth_provider == "platform":
-        await enforce_payment_paywall(user_id)
+        # A private expert's chat runs in its owner's personal organization.
+        await enforce_entitlement(
+            user_id, None if expert_id is not None else ctx.org_id
+        )
 
     logger.info(
         f"Creating session with user_id: "
@@ -1100,16 +1177,33 @@ async def create_session(
         )
     else:
         try:
-            session = await create_chat_session(
-                user_id,
-                dry_run=dry_run,
-                organization_id=ctx.org_id,
-                team_id=ctx.team_id,
-                llm_auth_provider=llm_auth_provider,
-                llm_credential_id=llm_credential_id,
-                expert_id=expert_id,
-                autopilot_mode=autopilot_mode,
-            )
+            if client_session_id:
+                session = await get_or_create_client_chat_session(
+                    user_id,
+                    client_session_id,
+                    dry_run=dry_run,
+                    organization_id=ctx.org_id,
+                    team_id=ctx.team_id,
+                    llm_auth_provider=llm_auth_provider,
+                    llm_credential_id=llm_credential_id,
+                    expert_id=expert_id,
+                    autopilot_mode=autopilot_mode,
+                )
+            else:
+                session = await create_chat_session(
+                    user_id,
+                    dry_run=dry_run,
+                    organization_id=ctx.org_id,
+                    team_id=ctx.team_id,
+                    llm_auth_provider=llm_auth_provider,
+                    llm_credential_id=llm_credential_id,
+                    expert_id=expert_id,
+                    autopilot_mode=autopilot_mode,
+                )
+        except SessionIdConflictError as e:
+            raise HTTPException(
+                status_code=409, detail="Session id already in use"
+            ) from e
         except experts_db.ExpertNotFoundError as e:
             raise HTTPException(status_code=404, detail="Expert not found") from e
         except experts_db.ExpertPrivateTenancyNotFoundError as e:
@@ -1153,7 +1247,7 @@ async def get_session_computer(
 
 @router.post(
     "/sessions/{session_id}/desktop",
-    dependencies=[Security(auth.requires_user)],
+    dependencies=[Security(auth.requires_user), Depends(enforce_payment_paywall)],
     responses={
         404: {"description": "Session not found or access denied"},
         502: {"description": "The desktop could not be started"},
@@ -1279,7 +1373,7 @@ async def disconnect_session_stream(
 class CredentialSelectionRequest(BaseModel):
     """The credential the user picked for each provider on a connect card."""
 
-    selections: dict[str, str] = Field(
+    selections: dict[IDText, IDText] = Field(
         description="Provider slug to credential id.",  # gitleaks:allow (schema text)
         max_length=20,
     )
@@ -1318,7 +1412,7 @@ async def select_session_credentials_route(
             # later one would silently drop a credential the caller validated.
             raise HTTPException(status_code=422, detail="duplicate_provider")
         credential = await store.get_creds_by_id(user_id, credential_id)
-        if credential is None or not provider_matches(credential.provider, provider):
+        if credential is None or not credential_matches_selection(credential, provider):
             raise HTTPException(status_code=404, detail="credential_not_found")
         selections[provider] = credential_id
 
@@ -1521,9 +1615,11 @@ async def get_session(
 
     # Only check active stream on initial load (not on "load more" requests)
     active_stream_info = None
+    background = BackgroundSessionState()
     if before_sequence is None:
-        active_session, last_message_id = await stream_registry.get_active_session(
-            session_id, user_id
+        (active_session, last_message_id), background = await asyncio.gather(
+            stream_registry.get_active_session(session_id, user_id),
+            background_task_db().get_session_background_state(session_id, user_id),
         )
         if active_session:
             active_stream_info = ActiveStreamInfo(
@@ -1578,6 +1674,8 @@ async def get_session(
         expert_id=page.session.expert_id,
         organization_id=page.session.organization_id,
         team_id=page.session.team_id,
+        background_outcome=background.outcome,
+        background_pending=background.pending,
     )
 
 
@@ -1586,18 +1684,20 @@ async def get_session(
 )
 async def get_copilot_usage(
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
 ) -> CoPilotUsagePublic:
     """Get CoPilot usage status for the authenticated user.
 
     Returns the percentage of the daily/weekly allowance used — not the
     raw spend or cap — so clients cannot derive per-turn cost or platform
-    margins. Global defaults sourced from LaunchDarkly (falling back to
+    margins. Global defaults sourced from PostHog (falling back to
     config). Includes the user's rate-limit tier.
     """
     daily_limit, weekly_limit, tier = await get_global_rate_limits(
         user_id,
         config.daily_cost_limit_microdollars,
         config.weekly_cost_limit_microdollars,
+        ctx.org_id,
     )
     status = await get_usage_status(
         user_id=user_id,
@@ -1605,6 +1705,7 @@ async def get_copilot_usage(
         weekly_cost_limit=weekly_limit,
         rate_limit_reset_cost=config.rate_limit_reset_cost,
         tier=tier,
+        org_id=ctx.org_id,
     )
     return CoPilotUsagePublic.from_status(status)
 
@@ -1628,6 +1729,9 @@ class RateLimitResetResponse(BaseModel):
             "description": "Bad Request (feature disabled or daily limit not reached)"
         },
         402: {"description": "Payment Required (insufficient credits)"},
+        409: {
+            "description": "Conflict (resets aren't available in a team organization)"
+        },
         429: {
             "description": "Too Many Requests (max daily resets exceeded or reset in progress)"
         },
@@ -1638,6 +1742,7 @@ class RateLimitResetResponse(BaseModel):
 )
 async def reset_copilot_usage(
     user_id: Annotated[str, Security(auth.get_user_id)],
+    ctx: Annotated[auth.RequestContext, Security(auth.get_request_context)],
 ) -> RateLimitResetResponse:
     """Reset the daily CoPilot rate limit by spending credits.
 
@@ -1645,12 +1750,21 @@ async def reset_copilot_usage(
     to reset their daily usage counter and continue working.
     Returns 400 if the feature is disabled or the user is not over the limit.
     Returns 402 if the user has insufficient credits.
+    Returns 409 in a team organization: its plan sets each member's limits
+    there, and personal credits don't buy them back. Everywhere else these are
+    the user's own counters.
     """
     cost = config.rate_limit_reset_cost
     if cost <= 0:
         raise HTTPException(
             status_code=400,
             detail="Rate limit reset is not available.",
+        )
+    if await org_plan_decides(ctx.org_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Resetting usage with credits isn't available in a team "
+            "organization.",
         )
 
     if not settings.config.enable_credit:
@@ -1869,8 +1983,14 @@ async def _cancel_session_task_live(
     # block the cancel itself, so we swallow and log.
     await _clear_pending_best_effort(session_id)
 
+    await cancel_background_subtasks(user_id, session_id)
+
     # Queued sessions: just flip back to idle.  The user clicked X
     # before any compute was spent; no executor involvement needed.
+    if await background_task_db().cancel_queued_background_followup(
+        user_id, session_id
+    ):
+        return CancelSessionResponse(cancelled=True, reason="dequeued")
     if await turn_queue.cancel_queued_turn(user_id=user_id, session_id=session_id):
         return CancelSessionResponse(cancelled=True, reason="dequeued")
 
@@ -1887,10 +2007,13 @@ async def _cancel_session_task_live(
         #     orphaning the executor work in the opposite direction.
         # Gate the cleanup on session age so a fresh admit isn't stomped.
         # Anything older than the threshold is the real orphan.
-        if await _try_release_orphan_running(session_id, user_id):
+        if await _try_release_orphan_running(
+            session_id, user_id, cancel_background=True
+        ):
             return CancelSessionResponse(cancelled=True, reason="orphan_released")
         return CancelSessionResponse(cancelled=True, reason="no_active_session")
 
+    await cancel_background_subtasks(user_id, session_id, active_session.turn_id)
     await enqueue_cancel_task(session_id)
     logger.info(f"[CANCEL] Published cancel for session ...{session_id[-8:]}")
 
@@ -2048,13 +2171,23 @@ async def stream_chat_post(
         extra={"json_fields": log_meta},
     )
     session = await _validate_and_get_writable_session(session_id, user_id, ctx)
+    message = request.message
+    if request.is_user_message:
+        # The same input normalisation as the engines' own, applied before
+        # the message is stored or queued: the stored row is replayed as
+        # history on later turns, past the engines' entry sanitising. It runs
+        # before anything is written, so a refused message changes nothing.
+        try:
+            message = normalise_user_message(message)
+        except EmptyUserMessage as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     await _apply_autopilot_mode(session, user_id, request.autopilot_mode)
 
     await enforce_model_entitlement(request.model, session, user_id)
 
     # Fire-and-forget; per-user Redis dedup inside the helper provides
     # cross-process / cross-restart idempotency. Same pattern as
-    # graphiti/ingest.py's ensure_dream_system_scheduled registration.
+    # graphiti/ingest.py's ensure_scope_scheduled registration.
     from backend.copilot.briefing.scheduling import ensure_morning_briefing_scheduled
 
     # Spawned through the shared helper: the loop only holds a weak
@@ -2068,11 +2201,13 @@ async def stream_chat_post(
 
     is_platform_route = session.metadata.llm_auth_provider == "platform"
     if is_platform_route:
-        await enforce_payment_paywall(user_id)
+        await enforce_entitlement(user_id, session.organization_id)
     elif session.metadata.llm_auth_provider == "codex":
         await enforce_codex_access_http(user_id)
 
-    message = request.message
+    if request.is_user_message:
+        # The only writer of card approvals: a model can add chat rows, not requests.
+        await record_card_decisions(user_id, session_id, message)
     message_id = (
         scoped_client_message_id(user_id, session_id, request.message_id)
         if request.message_id
@@ -2173,7 +2308,7 @@ async def stream_chat_post(
     # pending-message frequency, and concurrent-turn caps remain enforced by
     # the shared scheduling path below.
     if user_id and is_platform_route:
-        await enforce_platform_allowance(user_id)
+        await enforce_platform_allowance(user_id, session.organization_id)
 
     # Enrich message with file metadata if file_ids are provided.
     # Also sanitise file_ids so only validated, workspace-scoped IDs are
@@ -2246,6 +2381,9 @@ async def stream_chat_post(
                 user_id=user_id,
                 message=message,
                 message_id=message_id,
+                # The id already stops a retransmit; matching on text as well would
+                # drop a resend after a turn stopped before it wrote a reply.
+                dedupe_content=client_message_id is None,
                 message_metadata=message_metadata,
                 message_already_persisted=resume_persisted_kickoff,
                 is_user_message=request.is_user_message,
@@ -2264,6 +2402,13 @@ async def stream_chat_post(
                 request_arrival_at=request_arrival_at,
                 impersonated=is_impersonated_request(http_request),
             )
+    except turn_queue.SessionNotIdle as exc:
+        await release_client_message_claim()
+        raise HTTPException(
+            status_code=409,
+            detail="Another reply started while this message was being sent. "
+            "Please send this message again.",
+        ) from exc
     except ConcurrentTurnLimitError as exc:
         if resume_persisted_kickoff:
             raise HTTPException(status_code=429, detail=str(exc)) from exc
@@ -2533,7 +2678,9 @@ async def queue_pending_message(
 ):
     """Queue a follow-up message while the session has an active turn."""
     session = await _validate_and_get_writable_session(session_id, user_id, ctx)
-    if session.metadata.llm_auth_provider == "codex":
+    if session.metadata.llm_auth_provider == "platform":
+        await enforce_entitlement(user_id, session.organization_id)
+    elif session.metadata.llm_auth_provider == "codex":
         await enforce_codex_access_http(user_id)
     client_message_id = (
         scoped_client_message_id(user_id, session_id, request.message_id)
@@ -2698,13 +2845,13 @@ def _resume_refusal(
 def _resume_response(
     session_id: str,
     subscriber_queue: "asyncio.Queue[stream_registry.StreamEntry]",
-    session: ChatSession,
+    session: ChatSessionInfo,
     user_id: str,
     *,
     cursor: bool,
 ) -> StreamingResponse:
-    """Stream the queue as SSE. A ``cursor`` read writes no made-up frame: a
-    stream that stops without the turn's finish just ends the response."""
+    """Stream stored frames and id-less recovered terminal errors. A cursor
+    read that stops without a stored finish ends without inventing one."""
 
     async def event_generator() -> AsyncGenerator[str, None]:
         chunk_count = 0
@@ -2723,7 +2870,7 @@ def _resume_response(
                 if (
                     cursor
                     and frame_id is None
-                    and not isinstance(chunk, StreamHeartbeat)
+                    and not isinstance(chunk, (StreamHeartbeat, StreamRecoveredError))
                 ):
                     break
                 if chunk_count < 3:
@@ -2855,49 +3002,6 @@ async def get_ttl_config() -> dict:
     return {
         "stream_ttl_seconds": config.stream_ttl,
         "stream_ttl_ms": config.stream_ttl * 1000,
-    }
-
-
-# ========== Health Check ==========
-
-
-@router.get("/health", status_code=200)
-async def health_check() -> dict:
-    """
-    Health check endpoint for the chat service.
-
-    Performs a full cycle test of session creation and retrieval. Should always return healthy
-    if the service and data layer are operational.
-
-    Returns:
-        dict: A status dictionary indicating health, service name, and API version.
-
-    """
-    from backend.data.user import get_or_create_user
-
-    # Ensure health check user exists (required for FK constraint)
-    health_check_user_id = "health-check-user"
-    await get_or_create_user(
-        {
-            "sub": health_check_user_id,
-            "email": "health-check@system.local",
-            "user_metadata": {"name": "Health Check User"},
-        }
-    )
-
-    # Create and retrieve session to verify full data layer
-    session = await create_chat_session(health_check_user_id, dry_run=False)
-    fetched = await get_chat_session_metadata(session.session_id, health_check_user_id)
-    if fetched is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Chat read path unhealthy: session not found after create",
-        )
-
-    return {
-        "status": "healthy",
-        "service": "chat",
-        "version": "0.1.0",
     }
 
 

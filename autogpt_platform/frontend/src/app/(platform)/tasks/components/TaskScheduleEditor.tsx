@@ -61,7 +61,7 @@ export function TaskScheduleEditor({ task }: Props) {
   }
   return (
     <details className="rounded-xl border border-border p-4">
-      <summary className="cursor-pointer text-sm font-medium">
+      <summary className="text-sm cursor-pointer font-medium">
         {task.schedule ? "Edit schedule" : "Schedule this work"}
       </summary>
       <div className="mt-4 space-y-3">
@@ -71,13 +71,13 @@ export function TaskScheduleEditor({ task }: Props) {
             ? "Your confirmed agent assignment carries forward."
             : "New occurrences stay on your list without starting an agent."}
         </p>
-        <label className="block space-y-1 text-xs">
+        <label className="text-xs block space-y-1">
           Cadence
           <select
             aria-label="Schedule cadence"
             value={cadence}
             onChange={(event) => setCadence(event.target.value)}
-            className="h-9 w-full rounded-lg border border-border bg-background px-2 text-sm"
+            className="text-sm h-9 w-full rounded-lg border border-border bg-background px-2"
           >
             <option value="once">Once</option>
             <option value="0 9 * * *">Every day at 9 AM</option>

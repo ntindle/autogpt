@@ -16,6 +16,7 @@ does not re-verify org membership.
 
 import asyncio
 import logging
+from collections.abc import Collection
 from contextlib import asynccontextmanager
 from contextvars import Context, ContextVar, copy_context
 from datetime import timedelta
@@ -1154,3 +1155,48 @@ def visibility_filter(
             ),
         ]
     }
+
+
+async def writable_organization_ids(
+    user_id: str, organization_id: str
+) -> frozenset[str | None]:
+    """The organizations whose rows a call acting in *organization_id* may change.
+
+    Rows tagged with it, and untagged rows only when it is the user's personal
+    org: they predate org tagging, and the backfill gives them the personal
+    org, so changing them from another org would change what the personal org
+    runs. ``None`` in the result stands for untagged rows.
+    """
+    if await is_own_personal_org(user_id, organization_id):
+        return frozenset({organization_id, None})
+    return frozenset({organization_id})
+
+
+async def is_own_personal_org(user_id: str, organization_id: str) -> bool:
+    """Whether *organization_id* is *user_id*'s own personal org: a personal,
+    undeleted org they own. A tenancy question, so ask it here rather than of
+    the billing ledger's cached owner lookup."""
+    membership = await prisma.orgmember.find_first(
+        where={
+            "userId": user_id,
+            "orgId": organization_id,
+            "isOwner": True,
+            "Org": {"isPersonal": True, "deletedAt": None},
+        }
+    )
+    return membership is not None
+
+
+def organization_filter(
+    organization_ids: Collection[str | None], *, org_field: str = "organizationId"
+) -> dict:
+    """A Prisma clause matching rows tagged with one of *organization_ids*.
+
+    ``None`` among them matches untagged rows.
+    """
+    clauses: list[dict] = [
+        {org_field: {"in": sorted(o for o in organization_ids if o is not None)}}
+    ]
+    if None in organization_ids:
+        clauses.append({org_field: None})
+    return {"OR": clauses}

@@ -353,6 +353,16 @@ async def store_listing_version_delivery_lease(
             raise LiveResourceAccessRevoked("store_listing_version_lease_lost")
 
 
+def background_task_db():
+    if db.is_connected():
+        from backend.copilot import background_task_db as store
+
+        return store
+    from backend.util.clients import get_database_manager_async_client
+
+    return get_database_manager_async_client()
+
+
 def chat_db():
     if db.is_connected():
         from backend.copilot import db as _chat_db
@@ -496,6 +506,19 @@ def user_db():
     return user_db
 
 
+def memory_schedule_db():
+    if db.is_connected():
+        from backend.data import memory_schedule as _memory_schedule_db
+
+        memory_schedule_db = _memory_schedule_db
+    else:
+        from backend.util.clients import get_database_manager_async_client
+
+        memory_schedule_db = get_database_manager_async_client()
+
+    return memory_schedule_db
+
+
 def understanding_db():
     if db.is_connected():
         from backend.data import understanding as _understanding_db
@@ -578,6 +601,32 @@ def review_db():
         review_db = get_database_manager_async_client()
 
     return review_db
+
+
+def org_access_db():
+    if db.is_connected():
+        from backend.data import org_access as _org_access_db
+
+        org_access_db = _org_access_db
+    else:
+        from backend.util.clients import get_database_manager_async_client
+
+        org_access_db = get_database_manager_async_client()
+
+    return org_access_db
+
+
+def org_plan_db():
+    if db.is_connected():
+        from backend.data import org_plan as _org_plan_db
+
+        org_plan_db = _org_plan_db
+    else:
+        from backend.util.clients import get_database_manager_async_client
+
+        org_plan_db = get_database_manager_async_client()
+
+    return org_plan_db
 
 
 def credit_db():
@@ -759,6 +808,22 @@ def tasks_db():
     return get_database_manager_async_client()
 
 
+def dream_db():
+    if db.is_connected():
+        from backend.data import dream_pass as _dream_db
+
+        dream_db = _dream_db
+    else:
+        from backend.util.clients import get_database_manager_async_client
+
+        # The dream record is written under a short deadline that already
+        # covers retrying (copilot/dream/store.py); a retrying client would
+        # only keep going on a request the deadline has given up on.
+        dream_db = get_database_manager_async_client(should_retry=False)
+
+    return dream_db
+
+
 def pro_activation_db():
     if db.is_connected():
         from backend.data import pro_activation
@@ -791,3 +856,16 @@ def memory_db():
     from backend.util.clients import get_database_manager_async_client
 
     return get_database_manager_async_client()
+
+
+def scheduled_chats_db():
+    if db.is_connected():
+        from backend.copilot.scheduled_chats import forget as _scheduled_chats_db
+
+        scheduled_chats_db = _scheduled_chats_db
+    else:
+        from backend.util.clients import get_database_manager_async_client
+
+        scheduled_chats_db = get_database_manager_async_client()
+
+    return scheduled_chats_db

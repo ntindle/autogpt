@@ -71,7 +71,7 @@ export function TaskList({ page }: Props) {
         renderBranch(null, 0)
       ) : (
         <div className="mx-auto flex max-w-md flex-col items-center py-24 text-center">
-          <div className="mb-5 flex size-12 items-center justify-center rounded-2xl bg-violet-100 text-2xl text-violet-600">
+          <div className="bg-violet-100 text-2xl text-violet-600 mb-5 flex size-12 items-center justify-center rounded-2xl">
             ✓
           </div>
           <h2 className="text-lg font-semibold">
@@ -79,7 +79,7 @@ export function TaskList({ page }: Props) {
               ? "Nothing in this view"
               : "What would you like to get done?"}
           </h2>
-          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+          <p className="text-sm mt-2 leading-relaxed text-muted-foreground">
             {tasks.length
               ? "Try another filter or add a task."
               : "Add a task or paste a whole list. Keep some for yourself and hand others to AutoPilot or your Experts."}

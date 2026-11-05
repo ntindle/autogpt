@@ -2,6 +2,8 @@ import { APIError } from "better-auth/api";
 import { readLocalTeamPasswordConfig } from "./server/team-password-config";
 import { isTeamEmail } from "./team-email";
 
+export { isTeamEmail };
+
 /**
  * By default, AutoGPT team addresses sign up through Google, which vouches for
  * an address its owner controls. With email verification off, a password

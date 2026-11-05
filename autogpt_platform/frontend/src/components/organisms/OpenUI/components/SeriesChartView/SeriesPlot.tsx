@@ -1,4 +1,3 @@
-import { colors as palette } from "@/components/styles/colors";
 import {
   Bar,
   BarChart,
@@ -18,11 +17,11 @@ interface Props {
   visible: string[];
 }
 const colors = [
-  palette.purple[500],
-  palette.slate[500],
-  palette.orange[500],
-  palette.green[500],
-  palette.red[500],
+  "rgb(var(--color-brand))",
+  "rgb(var(--color-sky))",
+  "rgb(var(--color-orange))",
+  "rgb(var(--color-indigo))",
+  "rgb(var(--color-pink))",
 ];
 
 export function SeriesPlot({ data, visible }: Props) {

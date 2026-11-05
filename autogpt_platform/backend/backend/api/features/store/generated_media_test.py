@@ -1,8 +1,12 @@
 import io
+from collections import Counter
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
+from autogpt_libs.auth.models import RequestContext
+from fastapi import HTTPException
 from PIL import Image, UnidentifiedImageError
 
 from backend.api.features.library import db as library_db
@@ -10,6 +14,37 @@ from backend.api.features.store import image_gen, local_media, media, routes
 from backend.blocks.ideogram import TEST_CREDENTIALS, IdeogramModelBlock
 from backend.data.graph import GraphBaseMeta
 from backend.util.settings import Settings
+
+
+def _org(user_id: str) -> str:
+    return f"personal-org-{user_id}"
+
+
+def _ctx(user_id: str) -> RequestContext:
+    """The caller in their own personal workspace."""
+    return RequestContext(
+        user_id=user_id,
+        org_id=_org(user_id),
+        team_id=None,
+        is_org_owner=True,
+        is_org_admin=True,
+        is_org_billing_manager=False,
+        is_team_admin=False,
+        is_team_billing_manager=False,
+        seat_status="ACTIVE",
+    )
+
+
+@pytest.fixture(autouse=True)
+def live_workspace(monkeypatch):
+    """The caller's workspace stays live through every write these tests make."""
+
+    @asynccontextmanager
+    async def lease(user_id, organization_id, team_id, access):
+        yield True
+
+    monkeypatch.setattr(routes, "live_resource_lease", lease)
+    monkeypatch.setattr(library_db, "live_resource_lease", lease)
 
 
 @pytest.fixture
@@ -27,6 +62,16 @@ def generated_media_io(monkeypatch, tmp_path):
     monkeypatch.setattr(image_gen, "ideogram_credentials", TEST_CREDENTIALS)
     monkeypatch.setattr(media, "Settings", lambda: settings)
     monkeypatch.setattr(local_media, "Settings", lambda: settings)
+
+    counters = Counter()
+
+    async def incr_with_ttl(redis, key, ttl_seconds):
+        assert ttl_seconds == 24 * 60 * 60
+        counters[key] += 1
+        return counters[key]
+
+    monkeypatch.setattr(image_gen, "get_redis_async", AsyncMock())
+    monkeypatch.setattr(image_gen, "incr_with_ttl", incr_with_ttl)
 
     objects = {}
 
@@ -54,11 +99,15 @@ def graph_and_library_update(monkeypatch):
     monkeypatch.setattr(
         routes.backend.data.graph, "get_graph", AsyncMock(return_value=graph)
     )
-    update = AsyncMock(return_value=Mock())
+    update = AsyncMock(return_value=1)
     monkeypatch.setattr(
         library_db.prisma.models.LibraryAgent,
         "prisma",
-        Mock(return_value=Mock(update=update)),
+        Mock(
+            return_value=Mock(
+                find_first=AsyncMock(return_value=Mock()), update_many=update
+            )
+        ),
     )
     return graph, update
 
@@ -102,15 +151,26 @@ async def test_generated_thumbnail_upload_and_reuse(
     )
     for _ in range(2):
         if caller == "marketplace":
-            result = await routes.generate_image(graph.id, user_id="test-user")
+            result = await routes.generate_image(
+                graph.id, user_id="test-user", ctx=_ctx("test-user")
+            )
             assert result.image_url == expected_url
         else:
             result = await library_db.add_generated_agent_image(
-                graph, "test-user", "library-agent-1"
+                graph, "test-user", "library-agent-1", _org("test-user"), None
             )
             assert result is not None
             update.assert_awaited_with(
-                where={"id": "library-agent-1"}, data={"imageUrl": expected_url}
+                where={
+                    "id": "library-agent-1",
+                    "userId": "test-user",
+                    "organizationId": _org("test-user"),
+                    "teamId": None,
+                    "agentGraphId": graph.id,
+                    "agentGraphVersion": graph.version,
+                    "isDeleted": False,
+                },
+                data={"imageUrl": expected_url},
             )
 
     generate.assert_awaited_once()
@@ -147,7 +207,9 @@ async def test_invalid_generated_image_is_not_uploaded(
     monkeypatch.setattr(image_gen, "Requests", Mock(return_value=Mock(get=download)))
 
     with pytest.raises(UnidentifiedImageError):
-        await routes.generate_image(graph.id, user_id="test-user")
+        await routes.generate_image(
+            graph.id, user_id="test-user", ctx=_ctx("test-user")
+        )
     scanner.assert_not_awaited()
     assert not objects
     assert not local_media.media_root().exists()
@@ -167,7 +229,7 @@ async def test_flux_still_requests_and_preserves_jpeg(
     download = AsyncMock(return_value=httpx.Response(200, content=source.getvalue()))
     monkeypatch.setattr(image_gen, "Requests", Mock(return_value=Mock(get=download)))
 
-    result = await image_gen.generate_agent_image(graph)
+    result = await image_gen.generate_agent_image(graph, "test-user")
     assert result.read() == source.getvalue()
     assert run.call_args.kwargs["input"]["output_format"] == "jpg"
 
@@ -189,7 +251,84 @@ async def test_generate_image_regenerates_when_the_existence_check_fails(
         media, "check_media_exists", AsyncMock(side_effect=RuntimeError("GCS is down"))
     )
 
-    result = await routes.generate_image(graph.id, user_id="test-user")
+    result = await routes.generate_image(
+        graph.id, user_id="test-user", ctx=_ctx("test-user")
+    )
 
     generate.assert_awaited_once()
     assert result.image_url.endswith("users/test-user/images/agent_graph-1.jpeg")
+
+
+@pytest.mark.parametrize("use_v2", [True, False], ids=["ideogram", "replicate"])
+@pytest.mark.parametrize("provider_format,mode", [("PNG", "RGB")])
+async def test_generated_images_stop_at_each_users_daily_limit(
+    generated_media_io,
+    graph_and_library_update,
+    ideogram_response,
+    monkeypatch,
+    provider_format,
+    mode,
+    use_v2,
+):
+    settings, _, _ = generated_media_io
+    settings.config.use_agent_image_generation_v2 = use_v2
+    _, update = graph_and_library_update
+    _, ideogram, _ = ideogram_response
+    replicate = Mock(return_value="https://replicate.example/image.png")
+    monkeypatch.setattr(image_gen.settings.secrets, "replicate_api_key", "test-key")
+    monkeypatch.setattr(
+        image_gen, "ReplicateClient", Mock(return_value=Mock(run=replicate))
+    )
+    generate = ideogram if use_v2 else replicate
+    monkeypatch.setattr(image_gen, "DAILY_LIMIT", 3)
+
+    results = [
+        await library_db.add_generated_agent_image(
+            GraphBaseMeta(id=f"graph-{i}", name="Agent", description=""),
+            "test-user",
+            f"library-agent-{i}",
+            _org("test-user"),
+            None,
+        )
+        for i in range(5)
+    ]
+
+    assert [result is not None for result in results] == [True] * 3 + [False] * 2
+    assert generate.call_count == update.await_count == 3
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.generate_image(
+            "graph-4", user_id="test-user", ctx=_ctx("test-user")
+        )
+    assert exc_info.value.status_code == 429
+    assert generate.call_count == 3
+    await routes.generate_image("graph-4", user_id="other-user", ctx=_ctx("other-user"))
+    assert generate.call_count == 4
+
+
+@pytest.mark.parametrize("provider_format,mode", [("PNG", "RGB")])
+async def test_no_image_is_generated_when_the_limit_cannot_be_checked(
+    generated_media_io,
+    graph_and_library_update,
+    ideogram_response,
+    monkeypatch,
+    provider_format,
+    mode,
+):
+    graph, update = graph_and_library_update
+    _, generate, _ = ideogram_response
+    monkeypatch.setattr(
+        image_gen, "get_redis_async", AsyncMock(side_effect=ConnectionError)
+    )
+
+    result = await library_db.add_generated_agent_image(
+        graph, "test-user", "library-agent-1", _org("test-user"), None
+    )
+
+    assert result is None
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.generate_image(
+            graph.id, user_id="test-user", ctx=_ctx("test-user")
+        )
+    assert exc_info.value.status_code == 503
+    generate.assert_not_awaited()
+    update.assert_not_awaited()

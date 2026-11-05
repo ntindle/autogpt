@@ -27,11 +27,11 @@ export function TaskSchedules() {
   });
   if (query.isLoading)
     return (
-      <p className="p-6 text-sm text-muted-foreground">Loading schedules…</p>
+      <p className="text-sm p-6 text-muted-foreground">Loading schedules…</p>
     );
   if (query.isError)
     return (
-      <p role="alert" className="p-6 text-sm text-destructive">
+      <p role="alert" className="text-sm text-destructive p-6">
         Schedules could not be loaded.{" "}
         <button
           type="button"
@@ -47,7 +47,7 @@ export function TaskSchedules() {
       className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-8"
       aria-label="Scheduled work"
     >
-      <p className="mb-4 text-xs text-muted-foreground">
+      <p className="text-xs mb-4 text-muted-foreground">
         Your existing workflow and chat schedules. Each Tasks occurrence
         completes independently.
       </p>
@@ -58,7 +58,7 @@ export function TaskSchedules() {
           ))}
         </ul>
       ) : (
-        <p className="py-12 text-center text-sm text-muted-foreground">
+        <p className="text-sm py-12 text-center text-muted-foreground">
           No scheduled work yet. Set a cadence in a task’s details.
         </p>
       )}
@@ -98,13 +98,13 @@ function ScheduleRow({ schedule }: { schedule: TaskScheduleInfo }) {
   return (
     <li className="flex items-center gap-3 py-4">
       {schedule.cron ? (
-        <Repeat size={20} className="shrink-0 text-violet-600" />
+        <Repeat size={20} className="text-violet-600 shrink-0" />
       ) : (
         <Clock size={20} className="shrink-0 text-muted-foreground" />
       )}
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium">{schedule.name}</p>
-        <p className="mt-1 text-xs text-muted-foreground">
+        <p className="text-xs mt-1 text-muted-foreground">
           {schedule.paused
             ? "Paused"
             : `Next: ${schedule.next_run_time ? new Date(schedule.next_run_time).toLocaleString() : "Waiting"}`}{" "}

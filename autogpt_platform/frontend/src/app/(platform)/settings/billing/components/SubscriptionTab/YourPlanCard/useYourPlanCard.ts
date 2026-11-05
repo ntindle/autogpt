@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { getGetV2GetCopilotUsageQueryKey } from "@/app/api/__generated__/endpoints/chat/chat";
 
 import {
+  getGetV1ManagePaymentMethodsQueryKey,
   useGetSubscriptionStatus,
   useGetV1ManagePaymentMethods,
   useUpdateSubscriptionTier,
@@ -17,6 +18,7 @@ import type { SubscriptionTierRequestTier } from "@/app/api/__generated__/models
 import type { SubscriptionUpgradePreview } from "@/app/api/__generated__/models/subscriptionUpgradePreview";
 import { ApiError } from "@/lib/autogpt-server-api/helpers";
 import { toast } from "@/components/molecules/Toast/use-toast";
+import { useCheckoutRedirect } from "@/hooks/useCheckoutRedirect";
 import {
   centsToUSD,
   getSubscriptionValue,
@@ -27,6 +29,8 @@ import {
   trackPaywallViewed,
   trackPlanSelected,
 } from "@/services/analytics/monetization-analytics";
+import { getPersonalBillingQueryOptions } from "@/services/org-team/org-wallet";
+import { useActiveOrgWallet } from "@/services/org-team/useActiveOrgWallet";
 
 import { formatCents, formatShortDate } from "../../../helpers";
 import { getCheckoutReturnURLs } from "../helpers";
@@ -85,8 +89,17 @@ export function useYourPlanCard() {
     },
   });
 
+  // The plan is the person's own, so its billing portal is too, even while a
+  // team organization is active.
+  const wallet = useActiveOrgWallet();
+  const personalBilling = getPersonalBillingQueryOptions(
+    getGetV1ManagePaymentMethodsQueryKey(),
+    wallet,
+  );
   const paymentPortal = useGetV1ManagePaymentMethods({
+    request: personalBilling.request,
     query: {
+      ...personalBilling.query,
       select: (res) => {
         const raw = res.data as GetV1ManagePaymentMethods200 | undefined;
         const url = raw && typeof raw === "object" ? raw.url : undefined;
@@ -100,7 +113,9 @@ export function useYourPlanCard() {
   // The mutation settles before the Checkout redirect starts; this keeps the
   // plan actions busy across the wait for the Ads conversion too.
   const [isChangingTier, setIsChangingTier] = useState(false);
-  const isUpdatingTier = isUpdatePending || isChangingTier;
+  const checkoutRedirect = useCheckoutRedirect();
+  const isUpdatingTier =
+    isUpdatePending || isChangingTier || checkoutRedirect.isRedirectingHere;
 
   const effectiveTier = subscription.data?.tier ?? null;
   const isPaid = effectiveTier !== null && effectiveTier !== "NO_TIER";
@@ -240,7 +255,7 @@ export function useYourPlanCard() {
     billingCycle?: SubscriptionTierRequestBillingCycle,
     preview?: SubscriptionUpgradePreview,
   ) {
-    if (isUpdatingTier) return false;
+    if (isUpdatingTier || checkoutRedirect.isRedirecting) return false;
     setIsChangingTier(true);
     try {
       return await requestTierChange(tier, billingCycle, preview);
@@ -287,6 +302,7 @@ export function useYourPlanCard() {
         // Navigating away — don't refetch (would set state on an
         // unmounting component while Stripe Checkout takes over).
         window.location.href = url;
+        checkoutRedirect.markRedirecting();
         return;
       }
       await Promise.all([
@@ -629,6 +645,8 @@ export function useYourPlanCard() {
         : tierCosts[nextTierKey]
       : undefined,
     isUpdatingTier,
+    // Any checkout on the page leaving for Stripe, not just this one.
+    isRedirecting: checkoutRedirect.isRedirecting,
     upgradeReview,
     upgradeUsageMultiplier:
       subscription.data?.tier_multipliers?.MAX &&

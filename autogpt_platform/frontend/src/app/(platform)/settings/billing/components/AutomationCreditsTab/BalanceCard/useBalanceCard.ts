@@ -2,29 +2,20 @@
 
 import { useState } from "react";
 
-import {
-  useGetV1GetUserCredits,
-  usePostV1RequestCreditTopUp,
-} from "@/app/api/__generated__/endpoints/credits/credits";
+import { usePostV1RequestCreditTopUp } from "@/app/api/__generated__/endpoints/credits/credits";
 import { toast } from "@/components/molecules/Toast/use-toast";
+import { useCheckoutRedirect } from "@/hooks/useCheckoutRedirect";
+
+import { useAutomationCreditsBalance } from "../useAutomationCreditsBalance";
 
 export function useBalanceCard() {
-  const {
-    data: balanceCents,
-    isLoading,
-    isError,
-    refetch,
-  } = useGetV1GetUserCredits({
-    query: {
-      select: (res) => {
-        const raw = res.data as { credits?: number } | undefined;
-        return typeof raw?.credits === "number" ? raw.credits : null;
-      },
-    },
-  });
+  const { isTeamOrg, balanceCents, isLoading, isError, refetch } =
+    useAutomationCreditsBalance();
 
-  const { mutateAsync: requestTopUp, isPending: isAdding } =
+  const { mutateAsync: requestTopUp, isPending: isRequestingTopUp } =
     usePostV1RequestCreditTopUp();
+  const checkoutRedirect = useCheckoutRedirect();
+  const isAdding = isRequestingTopUp || checkoutRedirect.isRedirectingHere;
 
   const [open, setOpen] = useState(false);
   const [amount, setAmount] = useState("");
@@ -38,7 +29,7 @@ export function useBalanceCard() {
     numericAmount >= 5;
 
   async function handleSubmit() {
-    if (!isValid) return;
+    if (!isValid || isAdding || checkoutRedirect.isRedirecting) return;
     try {
       const result = await requestTopUp({
         data: {
@@ -66,8 +57,8 @@ export function useBalanceCard() {
 
       const url = body?.checkout_url;
       if (url) {
-        // Navigating away — don't touch React state on the unmounting tree.
         window.location.href = url;
+        checkoutRedirect.markRedirecting();
         return;
       }
 
@@ -87,7 +78,9 @@ export function useBalanceCard() {
   }
 
   return {
-    balanceCents: balanceCents ?? null,
+    balanceCents,
+    // A team organization's credits are added by AutoGPT for now.
+    canBuyCredits: !isTeamOrg,
     isLoading,
     isError,
     refetch,
@@ -97,6 +90,8 @@ export function useBalanceCard() {
     setAmount,
     isValid,
     isAdding,
+    // Any checkout on the page leaving for Stripe, not just this one.
+    isRedirecting: checkoutRedirect.isRedirecting,
     handleSubmit: () => void handleSubmit(),
   };
 }

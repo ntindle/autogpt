@@ -32,7 +32,7 @@ export function TaskAttemptInfo({ title, onChat }: Props) {
             <button
               type="button"
               aria-label={`Explain stopped attempt for ${title}`}
-              className="flex min-h-11 min-w-11 items-center justify-center rounded-md text-amber-700 focus-visible:ring-2 focus-visible:ring-ring sm:min-h-8 sm:min-w-8"
+              className="text-amber-700 focus-visible:ring-ring flex min-h-11 min-w-11 items-center justify-center rounded-md focus-visible:ring-2 sm:min-h-8 sm:min-w-8"
             >
               <WarningCircle size={18} aria-hidden />
             </button>

@@ -33,7 +33,7 @@ export function BreakdownEditor({
     <>
       {editor.hasUpdate ? (
         <div
-          className="space-y-2 rounded-lg bg-muted p-3 text-sm"
+          className="text-sm space-y-2 rounded-lg bg-muted p-3"
           role="status"
         >
           <p>
@@ -62,7 +62,7 @@ export function BreakdownEditor({
         ))}
       </ol>
       <div className="flex flex-wrap items-center justify-between gap-3 py-3">
-        <p className="max-w-md text-xs leading-relaxed text-muted-foreground">
+        <p className="text-xs max-w-md leading-relaxed text-muted-foreground">
           {delegated
             ? held
               ? "Confirmed owners inherit the planning hold. Execution stays on hold."

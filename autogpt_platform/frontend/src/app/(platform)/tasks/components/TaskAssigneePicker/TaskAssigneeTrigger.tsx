@@ -35,13 +35,13 @@ export function TaskAssigneeTrigger({ task, held, picker }: Props) {
             task.title
           }
           className={cn(
-            "flex min-h-11 items-center gap-1 rounded-full border border-transparent pr-1 outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:min-h-9",
+            "focus-visible:ring-ring flex min-h-11 items-center gap-1 rounded-full border border-transparent pr-1 outline-none focus-visible:ring-2 disabled:opacity-50 sm:min-h-9",
             suggested &&
-              "border-dashed border-violet-500 bg-violet-50/40 pl-1 pr-2.5 text-violet-700",
+              "border-violet-500 bg-violet-50/40 text-violet-700 border-dashed pr-2.5 pl-1",
           )}
         >
           <TaskIdentity assignee={identity} />
-          <span className="max-w-24 truncate text-xs sm:max-w-36">
+          <span className="text-xs max-w-24 truncate sm:max-w-36">
             {suggesting ? "Finding owner…" : (identity?.name ?? "Choose owner")}
           </span>
         </button>
@@ -60,7 +60,7 @@ export function TaskAssigneeTrigger({ task, held, picker }: Props) {
             onClick={(event) =>
               picker.assign(task.suggestion ?? null, event.detail === 0)
             }
-            className="flex size-7 items-center justify-center rounded-full text-violet-700 hover:bg-violet-100 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+            className="text-violet-700 hover:bg-violet-100 focus-visible:ring-ring flex size-7 items-center justify-center rounded-full focus-visible:ring-2 disabled:opacity-40"
           >
             <Check size={15} weight="bold" aria-hidden />
           </button>
@@ -70,7 +70,7 @@ export function TaskAssigneeTrigger({ task, held, picker }: Props) {
             aria-label={"Dismiss suggested owner for " + task.title}
             title="Dismiss suggestion"
             onClick={(event) => picker.dismiss(event.detail === 0)}
-            className="flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+            className="focus-visible:ring-ring flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-2 disabled:opacity-40"
           >
             <X size={15} aria-hidden />
           </button>

@@ -33,7 +33,7 @@ export function ComparisonCard({
           "border-primary bg-primary/5 ring-1 ring-primary",
       )}
     >
-      <div className="flex flex-wrap items-center justify-between gap-1 text-xs font-medium text-muted-foreground">
+      <div className="text-xs flex flex-wrap items-center justify-between gap-1 font-medium text-muted-foreground">
         <span className="whitespace-nowrap">
           OPTION {index === 0 ? "A" : "B"}
         </span>
@@ -53,14 +53,14 @@ export function ComparisonCard({
           />
         )}
       <div>
-        <h4 className="break-words text-base font-semibold text-foreground">
+        <h4 className="text-base font-semibold break-words text-foreground">
           {option.title}
         </h4>
-        <p className="mt-1 hidden text-sm text-muted-foreground md:block">
+        <p className="text-sm mt-1 hidden text-muted-foreground md:block">
           {option.description}
         </p>
       </div>
-      <dl className="space-y-2 text-sm">
+      <dl className="text-sm space-y-2">
         {option.facts?.map((fact, factIndex) => (
           <div key={factIndex} className="flex flex-col gap-0.5">
             <dt className="text-xs text-muted-foreground">{fact.label}</dt>
@@ -69,7 +69,7 @@ export function ComparisonCard({
         ))}
       </dl>
       <details className="text-sm text-muted-foreground md:hidden">
-        <summary className="min-h-11 cursor-pointer py-3 text-xs font-medium text-foreground">
+        <summary className="text-xs min-h-11 cursor-pointer py-3 font-medium text-foreground">
           About this option
         </summary>
         <p className="pb-2">{option.description}</p>
@@ -89,11 +89,10 @@ export function ComparisonCard({
         type="button"
         size="small"
         variant={selected ? "primary" : "secondary"}
-        className="mt-auto h-auto min-h-11 w-full min-w-0 whitespace-normal break-words text-xs md:text-sm"
+        className="text-xs md:text-sm mt-auto h-auto min-h-11 w-full min-w-0 break-words whitespace-normal"
         aria-pressed={selected}
         disabled={disabled}
         onClick={onChoose}
-        unmask={false}
       >
         Choose {option.title}
       </Button>

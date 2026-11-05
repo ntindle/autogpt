@@ -1,15 +1,15 @@
 import {
   BrainIcon,
+  Building03Icon,
   Calculator01Icon,
   Database01Icon,
   DollarSignIcon,
   File02Icon,
-  GaugeIcon,
   Pulse01Icon,
   ReceiptTextIcon,
   Robot01Icon,
-  Search01Icon,
   SlidersHorizontalIcon,
+  UserIcon,
   UserMultipleIcon,
 } from "@hugeicons/core-free-icons";
 
@@ -26,6 +26,12 @@ export interface AdminNavItem {
 // environment check instead of the value at module load.
 export function getAdminNavItems(): AdminNavItem[] {
   return [
+    { label: "Users", href: "/admin/users", Icon: UserIcon },
+    {
+      label: "Organization Access",
+      href: "/admin/organizations",
+      Icon: Building03Icon,
+    },
     {
       label: "Marketplace Management",
       href: "/admin/marketplace",
@@ -37,12 +43,6 @@ export function getAdminNavItems(): AdminNavItem[] {
       href: "/admin/diagnostics",
       Icon: Pulse01Icon,
     },
-    {
-      label: "User Impersonation",
-      href: "/admin/impersonation",
-      Icon: Search01Icon,
-    },
-    { label: "Rate Limits", href: "/admin/rate-limits", Icon: GaugeIcon },
     {
       label: "Platform Costs",
       href: "/admin/platform-costs",
@@ -61,7 +61,7 @@ export function getAdminNavItems(): AdminNavItem[] {
     },
     { label: "Memory Inspector", href: "/admin/memory", Icon: BrainIcon },
     {
-      label: "Admin User Management",
+      label: "Admin settings",
       href: "/admin/settings",
       Icon: SlidersHorizontalIcon,
     },

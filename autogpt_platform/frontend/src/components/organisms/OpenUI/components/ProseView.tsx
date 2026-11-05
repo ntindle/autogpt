@@ -1,7 +1,7 @@
 import type { ComponentRenderProps } from "@openuidev/react-lang";
 import { defaultRehypePlugins } from "streamdown";
 import type { z } from "zod/v4";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { MessageResponse } from "@/components/organisms/Message/Message";
 import type { Prose } from "@/lib/openui/catalog";
 
 // Without rehype-raw, HTML in the model's Markdown is dropped instead of rendered.
@@ -15,7 +15,7 @@ export function ProseView({
 }: ComponentRenderProps<z.infer<typeof Prose.props>>) {
   return (
     <MessageResponse
-      className="text-sm leading-relaxed text-zinc-700"
+      className="text-sm text-zinc-700 leading-relaxed"
       rehypePlugins={rehypePlugins}
     >
       {props.markdown ?? ""}

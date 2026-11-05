@@ -32,6 +32,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
@@ -43,6 +44,7 @@ import { PRESETS_PAGE_SIZE } from "../components/NewAgentLibraryView/hooks/useAg
 import { SidebarRunsList } from "../components/NewAgentLibraryView/components/sidebar/SidebarRunsList/SidebarRunsList";
 import { getGetV1ListGraphExecutionsQueryKey } from "@/app/api/__generated__/endpoints/graphs/graphs";
 import { getGetV1ListExecutionSchedulesForAGraphQueryKey } from "@/app/api/__generated__/endpoints/schedules/schedules";
+import { getTeamScopedQueryKey } from "@/components/contextual/TeamPicker/helpers";
 
 const PARENT_ID = "parent-agent-id";
 const PARENT_GRAPH_ID = "parent-graph-id";
@@ -101,17 +103,20 @@ function renderWithInitialParams(
     defaultOptions: { queries: { retry: false } },
   }),
 ) {
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <NuqsTestingAdapter searchParams={searchParams}>
-        <BackendAPIProvider>
-          <OnboardingProvider>
-            <TooltipProvider>{ui}</TooltipProvider>
-          </OnboardingProvider>
-        </BackendAPIProvider>
-      </NuqsTestingAdapter>
-    </QueryClientProvider>,
-  );
+  function Providers({ children }: { children: ReactNode }) {
+    return (
+      <QueryClientProvider client={queryClient}>
+        <NuqsTestingAdapter searchParams={searchParams}>
+          <BackendAPIProvider>
+            <OnboardingProvider>
+              <TooltipProvider>{children}</TooltipProvider>
+            </OnboardingProvider>
+          </BackendAPIProvider>
+        </NuqsTestingAdapter>
+      </QueryClientProvider>
+    );
+  }
+  return render(ui, { wrapper: Providers });
 }
 
 function baseHandlers(
@@ -254,8 +259,12 @@ describe("Library agent view — trigger agents", () => {
       defaultOptions: { queries: { retry: false, staleTime: 60_000 } },
     });
     const onCountsChange = vi.fn();
-    const schedulesKey =
-      getGetV1ListExecutionSchedulesForAGraphQueryKey(PARENT_GRAPH_ID);
+    // The sidebar keys its queries by the workflow's organization and team.
+    const schedulesKey = getTeamScopedQueryKey(
+      getGetV1ListExecutionSchedulesForAGraphQueryKey(PARENT_GRAPH_ID),
+      null,
+      null,
+    );
     server.use(
       ...baseHandlers(),
       emptyPresetsHandler,
@@ -269,6 +278,8 @@ describe("Library agent view — trigger agents", () => {
         agent={getGetV2GetLibraryAgentResponseMock({
           id: PARENT_ID,
           graph_id: PARENT_GRAPH_ID,
+          organization_id: null,
+          team_id: null,
         })}
         onSelectRun={vi.fn()}
         onCountsChange={onCountsChange}
@@ -446,7 +457,8 @@ describe("Library agent view — trigger agents", () => {
     );
 
     // Wait until the trigger detail view is fully rendered
-    await screen.findByText("Remove Me");
+    // The name shows in the sidebar and in the detail view.
+    await screen.findAllByText("Remove Me");
 
     // Side panel has "Remove trigger" icon button
     const removeButton = await screen.findByRole("button", {
@@ -525,7 +537,8 @@ describe("Library agent view — trigger agents", () => {
     // is the path under test (not the side panel).
     renderWithInitialParams(<NewAgentLibraryView />, "activeTab=triggers");
 
-    await screen.findByText("Dropdown Victim");
+    // The name shows in the sidebar and in the detail view.
+    await screen.findAllByText("Dropdown Victim");
 
     // Open the trigger-agent row's dropdown. Other rows may also have
     // "More actions" buttons (webhook triggers) but we only have one
@@ -579,7 +592,8 @@ describe("Library agent view — trigger agents", () => {
       `activeTab=triggers&activeItem=${TRIGGER_ID}`,
     );
 
-    await screen.findByText("Error Case");
+    // The name shows in the sidebar and in the detail view.
+    await screen.findAllByText("Error Case");
 
     const removeButton = await screen.findByRole("button", {
       name: /remove trigger/i,
@@ -1073,5 +1087,72 @@ describe("Library agent view — trigger agents", () => {
     expect(screen.queryByText("Hidden Watcher")).toBeNull();
     // And the GET .../triggers request never fires.
     expect(triggerAgentsCallCount).toBe(0);
+  });
+
+  // The sidebar's run modal is seeded from the active template, which
+  // NewAgentLibraryView splits in render. Unmemoised, every parent re-render
+  // (the runs list's execution polling, a tab count update) hands the modal
+  // fresh objects and its seed effect wipes what the user is typing.
+  test("a parent re-render keeps what the user typed into the run modal", async () => {
+    const template = makeWebhookPreset({
+      webhook_id: null,
+      inputs: { topic: "weather", _node_input_mask_abc: { events: "push" } },
+    });
+
+    server.use(
+      ...baseHandlers({
+        has_external_trigger: true,
+        credentials_input_schema: { properties: {}, required: [] },
+        trigger_setup_info: {
+          provider: "github",
+          credentials_input_name: null,
+          config_schema: {
+            type: "object",
+            properties: { events: { type: "string", title: "Events" } },
+            required: [],
+          },
+        },
+        input_schema: {
+          type: "object",
+          properties: { topic: { type: "string", title: "Topic" } },
+          required: ["topic"],
+        },
+      }),
+      emptyPresetsHandler,
+      emptySchedulesHandler,
+      getGetV2ListTriggerAgentsMockHandler([]),
+      getGetV2GetASpecificPresetMockHandler(
+        getGetV2GetASpecificPresetResponseMock(template),
+      ),
+    );
+
+    const user = userEvent.setup();
+    const { rerender } = renderWithInitialParams(
+      <NewAgentLibraryView />,
+      "activeTab=templates&activeItem=preset-1",
+    );
+
+    const openButton = await screen.findByRole("button", {
+      name: /new workflow task/i,
+    });
+    await waitFor(() =>
+      expect((openButton as HTMLButtonElement).disabled).toBe(false),
+    );
+    await user.click(openButton);
+
+    // Scoped to the dialog: the Templates detail view behind it shows the same
+    // stored values.
+    const dialog = await screen.findByRole("dialog");
+    const topic = await within(dialog).findByDisplayValue("weather");
+    await user.clear(topic);
+    await user.type(topic, "sports");
+    expect(within(dialog).getByDisplayValue("sports")).toBeTruthy();
+
+    rerender(<NewAgentLibraryView />);
+
+    expect(within(dialog).getByDisplayValue("sports")).toBeTruthy();
+    expect(within(dialog).queryByDisplayValue("weather")).toBeNull();
+    // The trigger config half of the split is seeded the same way.
+    expect(within(dialog).getByDisplayValue("push")).toBeTruthy();
   });
 });

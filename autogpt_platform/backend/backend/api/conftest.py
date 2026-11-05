@@ -3,8 +3,32 @@
 Database-backed setup fixtures are defined in the parent conftest.py.
 """
 
+from types import SimpleNamespace
+
 import pytest
+from prisma.enums import SubscriptionTier
 from pytest_snapshot.plugin import Snapshot
+
+from backend.data import entitlement
+from backend.data.org_plan import OrgPlanSnapshot
+from backend.data.pro_activation import UsageActivationState
+from backend.data.user import is_user_banned as _REAL_IS_USER_BANNED
+
+# The one check every paywall asks (``backend.data.entitlement``), and the
+# modules that call it by name.
+_PAYWALL_CHECK_SITES = (
+    "backend.data.entitlement.paywall_reason",
+    "backend.api.external.v2.mcp_calls.paywall_reason",
+)
+_REAL_PAYWALL_REASON = entitlement.paywall_reason
+_BAN_CHECK_SITES = (
+    "backend.data.user.is_user_banned",
+    "backend.api.external.middleware.is_user_banned",
+    "backend.api.features.integrations.router.is_user_banned",
+    "backend.api.ws_api.is_user_banned",
+    "backend.data.auth.oauth.is_user_banned",
+    "backend.executor.utils.is_user_banned",
+)
 
 
 @pytest.fixture
@@ -93,17 +117,116 @@ def mock_jwt_admin(admin_user_id):
 
 @pytest.fixture(autouse=True)
 def _bypass_paywall(mocker):
-    """Make every API test treat the user as paid by default.
+    """Make every API test treat the user as entitled by default.
 
-    Tests have no real Supabase row backing the JWT, so without this
-    bypass every paywalled route would 503 on the tier-lookup failure
-    inside ``enforce_payment_paywall`` and every graph execution would
-    raise ``UserPaywalledError`` from ``add_graph_execution`` once the
-    paywall is wired up. Tests that specifically exercise the paywall
-    (e.g. ``TestEnforcePaymentPaywall``, ``TestIsUserPaywalled``) live
-    in ``rate_limit_test.py`` and patch ``_fetch_user_tier`` directly,
-    bypassing this helper.
+    Tests have no real rows backing the JWT or its organization, so without
+    this bypass every paywalled route would 503 on the lookup failure inside
+    ``enforce_payment_paywall``. Tests of the check itself live beside
+    ``backend/data/entitlement.py``; ``paywalled_user`` runs it for real.
     """
-    paywall_off = mocker.AsyncMock(return_value=False)
-    mocker.patch("backend.copilot.rate_limit.is_user_paywalled", new=paywall_off)
-    mocker.patch("backend.executor.utils.is_user_paywalled", new=paywall_off)
+    paywall_off = mocker.AsyncMock(return_value=None)
+    for site in _PAYWALL_CHECK_SITES:
+        mocker.patch(site, new=paywall_off)
+
+
+@pytest.fixture
+def real_entitlement(mocker):
+    """Undoes ``_bypass_paywall``: the entitlement check reads the database."""
+    for site in _PAYWALL_CHECK_SITES:
+        mocker.patch(site, new=_REAL_PAYWALL_REASON)
+
+
+@pytest.fixture
+def paywalled_user(mocker, set_platform_payment, test_user_id):
+    """Make the signed-in test user one without a plan, judged by the real check.
+
+    Undoes ``_bypass_paywall``, stubs the stored tier and the organization (the
+    user's personal one) and turns payment on, so a 402 comes from the same
+    entitlement check production runs.
+    """
+
+    async def no_plan(user_id: str) -> UsageActivationState:
+        return UsageActivationState(
+            user_id=user_id, tier=SubscriptionTier.NO_TIER, ready=True
+        )
+
+    async def personal_org(org_id: str) -> OrgPlanSnapshot:
+        return OrgPlanSnapshot(org_id=org_id, exists=True, is_personal=True)
+
+    for site in _PAYWALL_CHECK_SITES:
+        mocker.patch(site, new=_REAL_PAYWALL_REASON)
+    mocker.patch.object(entitlement, "get_org_plan_snapshot", new=personal_org)
+    mocker.patch(
+        "backend.copilot.usage_activation.pro_activation_db",
+        return_value=SimpleNamespace(get_usage_activation_state=no_plan),
+    )
+    set_platform_payment(True)
+    return test_user_id
+
+
+@pytest.fixture(autouse=True)
+def _no_bans(mocker):
+    """No account is banned unless a test asks for ``real_ban_lookup``. Once a
+    session test has connected Prisma, the real lookup would query it from
+    TestClient's own event loop."""
+    ban_off = mocker.AsyncMock(return_value=False)
+    for site in _BAN_CHECK_SITES:
+        mocker.patch(site, new=ban_off)
+
+
+@pytest.fixture
+def real_ban_lookup(mocker):
+    """Undoes ``_no_bans``."""
+    for site in _BAN_CHECK_SITES:
+        mocker.patch(site, new=_REAL_IS_USER_BANNED)
+
+
+@pytest.fixture
+def auth_row(mocker, real_ban_lookup):
+    """Give a fresh user id an auth row in one ban state, read by the real
+    ``is_user_banned``: ``auth_row("banned" | "until_tomorrow" | "lapsed" |
+    "unbanned") -> user_id``."""
+    import uuid
+    from datetime import datetime, timedelta, timezone
+
+    from prisma.models import AuthUser
+
+    from backend.data import db
+    from backend.data import user as user_module
+
+    now = datetime.now(timezone.utc)
+    states = {
+        "banned": (True, None),
+        "until_tomorrow": (True, now + timedelta(days=1)),
+        "lapsed": (True, now - timedelta(minutes=1)),
+        "unbanned": (None, None),
+    }
+    rows: dict[str, AuthUser] = {}
+
+    async def find_unique(where):
+        return rows.get(where["id"])
+
+    # Connected, so the lookup reads the row here rather than over the RPC.
+    mocker.patch.object(db, "is_connected", return_value=True)
+    mocker.patch.object(user_module, "AuthUser").prisma.return_value.find_unique = (
+        find_unique
+    )
+
+    def make(state: str) -> str:
+        user_id = str(uuid.uuid4())
+        banned, ban_expires = states[state]
+        rows[user_id] = AuthUser(
+            id=user_id,
+            name="Test",
+            email=f"{user_id}@example.com",
+            emailVerified=True,
+            banned=banned,
+            banExpires=ban_expires,
+            createdAt=now,
+            updatedAt=now,
+        )
+        return user_id
+
+    yield make
+    for user_id in rows:
+        _REAL_IS_USER_BANNED.cache_delete(user_id)

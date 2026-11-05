@@ -1,6 +1,5 @@
 """write_workspace_file / read_workspace_file on OpenUI view files."""
 
-import base64
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
@@ -24,6 +23,11 @@ from backend.copilot.tools.workspace_files import (
 from backend.data import db
 from backend.data.workspace import OPENUI_MIME_TYPE, WorkspaceFile
 from backend.util.json import SafeJson
+
+
+@pytest.fixture(autouse=True)
+def fake_virus_scanner(monkeypatch):
+    monkeypatch.setattr("backend.util.workspace.scan_content_safe", AsyncMock())
 
 
 @pytest_asyncio.fixture(loop_scope="session")
@@ -109,7 +113,8 @@ async def test_view_files_are_saved_revised_in_place_and_read_with_edits(
             user_id=user.id, session=session, file_id=written.file_id, length=10
         )
         assert isinstance(ranged, WorkspaceFileContentResponse)
-        assert base64.b64decode(ranged.content_base64).decode() == SOURCE[:10]
+        assert ranged.content == SOURCE[:10]
+        assert ranged.content_base64 is None
     finally:
         await ChatUIDraft.prisma().delete_many(where={"fileId": written.file_id})
         await DeleteWorkspaceFileTool()._execute(

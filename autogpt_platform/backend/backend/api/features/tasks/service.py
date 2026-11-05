@@ -11,14 +11,11 @@ from backend.copilot.model import (
     update_session_title,
 )
 from backend.copilot.pending_message_helpers import is_turn_in_flight
-from backend.copilot.rate_limit import (
-    check_rate_limit,
-    enforce_payment_paywall,
-    get_global_rate_limits,
-)
 from backend.copilot.session_permissions import resolve_session_permissions
 from backend.copilot.transports import resolve_default_chat_route
 from backend.data.db_accessors import tasks_db
+from backend.data.entitlement import enforce_entitlement
+from backend.data.entitlement_limits import check_rate_limit, get_global_rate_limits
 from backend.integrations.codex.access import enforce_codex_access_http
 from backend.util.exceptions import NotFoundError
 
@@ -155,7 +152,11 @@ async def dispatch_task(task: WorkspaceTask) -> None:
         return
     try:
         session = await ensure_task_session(claimed)
-        await _admit(session.user_id, session.metadata.llm_auth_provider)
+        await _admit(
+            session.user_id,
+            session.metadata.llm_auth_provider,
+            organization_id=session.organization_id,
+        )
         await schedule_chat_turn(
             session_id=session.session_id,
             user_id=claimed.user_id,
@@ -197,19 +198,26 @@ async def dispatch_task(task: WorkspaceTask) -> None:
         )
 
 
-async def _admit(user_id: str, provider: str) -> None:
+async def _admit(
+    user_id: str, provider: str, *, organization_id: str | None = None
+) -> None:
     if provider == "codex":
         await enforce_codex_access_http(user_id)
     elif provider == "platform":
-        await enforce_payment_paywall(user_id)
+        await enforce_entitlement(user_id, organization_id)
         config = ChatConfig()
-        daily, weekly, _ = await get_global_rate_limits(
+        daily, weekly, tier = await get_global_rate_limits(
             user_id,
             config.daily_cost_limit_microdollars,
             config.weekly_cost_limit_microdollars,
+            organization_id,
         )
         await check_rate_limit(
-            user_id=user_id, daily_cost_limit=daily, weekly_cost_limit=weekly
+            user_id=user_id,
+            daily_cost_limit=daily,
+            weekly_cost_limit=weekly,
+            expected_tier=tier,
+            org_id=organization_id,
         )
 
 

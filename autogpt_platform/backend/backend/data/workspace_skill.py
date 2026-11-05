@@ -22,7 +22,12 @@ from backend.data.skill_capacity import (
     skill_origin,
     skill_owner_folder,
 )
-from backend.data.workspace import WorkspaceFile, _workspace_scope_where
+from backend.data.workspace import (
+    WorkspaceFile,
+    _workspace_scope_where,
+    require_storage_room,
+)
+from backend.data.workspace_internal import is_internal_workspace_file
 from backend.util.json import SafeJson
 
 
@@ -59,6 +64,8 @@ class WorkspaceSkillWrite(BaseModel):
     # and paths the package no longer has.
     files: list[WorkspaceSkillFile] = Field(default_factory=list)
     removed_paths: list[str] = Field(default_factory=list)
+    # The owner's storage quota the whole package must fit; 0 for none.
+    storage_limit_bytes: int = 0
 
 
 class RetiredSkillFile(BaseModel):
@@ -107,6 +114,11 @@ async def publish_workspace_skill_file(
     if folder is None:
         raise ValueError("Skill publication requires a canonical SKILL.md path")
     _require_package_paths(write)
+    scope = _workspace_scope_where(
+        write.organization_id,
+        write.team_id,
+        user_global_config=write.user_global_config,
+    )
     async with _publication_transaction(write.workspace_id, folder) as tx:
         # Live rows only: since paths are unique among live files, a path holds
         # at most one, and retired roots left behind at it are history rather
@@ -116,11 +128,7 @@ async def publish_workspace_skill_file(
                 "workspaceId": write.workspace_id,
                 "path": write.path,
                 "isDeleted": False,
-                **_workspace_scope_where(
-                    write.organization_id,
-                    write.team_id,
-                    user_global_config=write.user_global_config,
-                ),
+                **scope,
             }
         )
         if existing and not write.overwrite:
@@ -151,6 +159,18 @@ async def publish_workspace_skill_file(
             >= MAX_SKILLS_PER_EXPERT
         ):
             return WorkspaceSkillPublication(status="capacity")
+        await require_storage_room(
+            tx,
+            write.workspace_id,
+            write.size_bytes + sum(f.size_bytes for f in write.files),
+            write.storage_limit_bytes,
+            replacing=[
+                write.path,
+                *(f.path for f in write.files),
+                *write.removed_paths,
+            ],
+            replacing_scope=scope,
+        )
         retired = await _swap_package_files(tx, write)
         record = (
             await _replace_root(tx, existing.id, write)
@@ -273,6 +293,9 @@ async def _swap_package_files(
                 "executionId": write.execution_id,
                 "scopeResolved": True,
                 "isUserGlobalConfig": write.user_global_config,
+                "isInternal": is_internal_workspace_file(
+                    name=file.name, path=file.path, metadata=file.metadata
+                ),
             }
         )
     return retired
@@ -388,6 +411,9 @@ async def _create_root(tx: Prisma, write: WorkspaceSkillWrite) -> UserWorkspaceF
             "executionId": write.execution_id,
             "scopeResolved": True,
             "isUserGlobalConfig": write.user_global_config,
+            "isInternal": is_internal_workspace_file(
+                name=write.name, path=write.path, metadata=write.metadata
+            ),
         }
     )
 

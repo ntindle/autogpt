@@ -15,10 +15,10 @@ export function WorkspaceView({
   return (
     <div className="space-y-7">
       <div className="pb-1">
-        <h2 className="text-xl font-semibold tracking-tight text-zinc-900">
+        <h2 className="text-xl text-zinc-900 font-semibold tracking-tight">
           {props.title}
         </h2>
-        <p className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600">
+        <p className="text-sm text-zinc-600 mt-2 max-w-2xl leading-relaxed">
           {props.description}
         </p>
       </div>
@@ -42,11 +42,11 @@ export function MetricView({
   props,
 }: ComponentRenderProps<z.infer<typeof catalog.Metric.props>>) {
   return (
-    <div className="min-w-0 rounded-xl border border-zinc-200 bg-white p-3.5">
-      <p className="text-xs font-medium text-zinc-600">{props.label}</p>
+    <div className="border-zinc-200 bg-white min-w-0 rounded-xl border p-3.5">
+      <p className="text-xs text-zinc-600 font-medium">{props.label}</p>
       <p
         className={cn(
-          "my-2 break-words font-semibold tracking-tight text-zinc-900",
+          "text-zinc-900 my-2 font-semibold tracking-tight break-words",
           (props.value?.length ?? 0) > 8 ? "text-base" : "text-2xl",
         )}
       >
@@ -54,7 +54,7 @@ export function MetricView({
       </p>
       <p
         className={cn(
-          "text-[11px] leading-snug text-zinc-500",
+          "text-zinc-500 text-[11px] leading-snug",
           props.tone === "positive" && "text-green-700",
           props.tone === "warning" && "text-orange-700",
         )}
@@ -71,7 +71,7 @@ export function InsightView({
   return (
     <div
       className={cn(
-        "flex gap-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4",
+        "border-zinc-200 bg-zinc-50 flex gap-3 rounded-xl border p-4",
         props.tone === "positive" && "border-green-100 bg-green-50/50",
         props.tone === "warning" && "border-orange-100 bg-orange-50",
       )}
@@ -79,11 +79,11 @@ export function InsightView({
       <Icon
         icon={Idea01Icon}
         size={20}
-        className="mt-0.5 shrink-0 text-zinc-600"
+        className="text-zinc-600 mt-0.5 shrink-0"
       />
       <div>
-        <h3 className="text-sm font-medium text-zinc-800">{props.title}</h3>
-        <p className="mt-1 text-sm leading-relaxed text-zinc-600">
+        <h3 className="text-sm text-zinc-800 font-medium">{props.title}</h3>
+        <p className="text-sm text-zinc-600 mt-1 leading-relaxed">
           {props.body}
         </p>
       </div>
@@ -104,7 +104,6 @@ export function ActionView({
       disabled={isStreaming || disabled}
       onClick={() => triggerAction(props.message)}
       rightIcon={<Icon icon={ArrowUpRight01Icon} size={16} />}
-      unmask={false}
     >
       {props.label}
     </Button>

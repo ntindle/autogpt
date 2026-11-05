@@ -61,7 +61,7 @@ def chat(mocker: pytest_mock.MockerFixture):
         new=AsyncMock(return_value=_session()),
     )
     mocks.paywall = mocker.patch.object(
-        continuation_routes, "enforce_payment_paywall", new=AsyncMock()
+        continuation_routes, "enforce_entitlement", new=AsyncMock()
     )
     mocks.codex_access = mocker.patch.object(
         continuation_routes, "enforce_codex_access_http", new=AsyncMock()
@@ -247,6 +247,14 @@ def stored(mocker: pytest_mock.MockerFixture, chat: MagicMock) -> MagicMock:
     async def session_lock(_session_id: str):
         yield True
 
+    # The live tenancy barrier reads memberships in a database transaction;
+    # the sync TestClient would run it on its own event loop, which leaves the
+    # shared Prisma client unusable for every later test in the process.
+    @asynccontextmanager
+    async def allowed(*_args, **_kwargs):
+        yield True
+
+    mocker.patch.object(executor_utils, "live_resource_access_barrier", new=allowed)
     mocker.patch.object(executor_utils, "acquire_turn_slot", new=acquire)
     io.dispatch = mocker.patch.object(executor_utils, "dispatch_turn", new=AsyncMock())
     mocker.patch.object(chat_model, "_get_session_lock", new=session_lock)

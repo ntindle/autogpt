@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Annotated
 
-from autogpt_libs.auth import get_user_id, requires_user
+from autogpt_libs.auth import get_request_context, get_user_id, requires_user
 from autogpt_libs.auth.models import RequestContext
 from autogpt_libs.auth.permissions import OrgAction
 from fastapi import APIRouter, Header, HTTPException, Query, Response, Security
@@ -13,7 +13,9 @@ from backend.api.live_auth import (
 from backend.api.model import RequestTopUp
 from backend.data.checkout_audience import schedule_checkout_opened
 from backend.data.credit import (
+    MAX_TOP_UP_AMOUNT,
     AutoTopUpConfig,
+    CardDeclinedError,
     InvoiceListItem,
     RefundRequest,
     TransactionHistory,
@@ -31,15 +33,31 @@ router = APIRouter(dependencies=[Security(requires_user)])
 # MANAGE_BILLING excludes org admins by design; personal-org membership rows
 # are always isOwner=True, so this gate is a no-op for personal orgs.
 #
-# Release ordering (SECRT-2449): the frontend never sends X-Org-Id, so the gate
-# is inert today. Forwarding it must not ship before the billing UI handles 403
-# for plain members — they would otherwise lose the nav Wallet (GET /credits)
-# and the settings billing page (/credits/transactions, /credits/refunds,
-# /credits/invoices).
+# The frontend sends the active organization as X-Org-Id on every request, so
+# in a team organization these routes serve its owner and billing managers and
+# answer a plain member with 403 (SECRT-2449). The billing UI expects that: a
+# plain member's nav Wallet (GET /credits) and settings billing page say the
+# owner and billing managers manage the organization's credits, instead of
+# showing its balance and history.
 BillingManagerContext = Annotated[
     RequestContext,
     requires_org_permission(OrgAction.MANAGE_BILLING),
 ]
+
+# A team organization's wallet has no checkout of its own yet: AutoGPT adds
+# its credits, so the Stripe steps that buy, refund and settle them refuse.
+TEAM_ORG_TOP_UP_REFUSED = (
+    "A team organization's credits are added by AutoGPT for now, so they "
+    "can't be bought here."
+)
+TEAM_ORG_REFUND_REFUSED = (
+    "A team organization's credits are added by AutoGPT for now, so contact "
+    "AutoGPT about a refund."
+)
+TEAM_ORG_CHECKOUT_REFUSED = (
+    "A team organization's credits are added by AutoGPT for now, so there's "
+    "no checkout to finish here."
+)
 
 
 @router.get(
@@ -71,12 +89,15 @@ async def request_top_up(
     country: ClientCountry = None,
 ):
     credit_model = await get_credit_model(user_id, ctx.org_id)
-    checkout_url = await credit_model.top_up_intent(
-        user_id,
-        request.credit_amount,
-        datafast_visitor_id=x_datafast_visitor_id,
-        datafast_session_id=x_datafast_session_id,
-    )
+    try:
+        checkout_url = await credit_model.top_up_intent(
+            user_id,
+            request.credit_amount,
+            datafast_visitor_id=x_datafast_visitor_id,
+            datafast_session_id=x_datafast_session_id,
+        )
+    except NotImplementedError as e:
+        raise HTTPException(status_code=409, detail=TEAM_ORG_TOP_UP_REFUSED) from e
     if checkout_url:
         await track_checkout_started(
             user_id=user_id, checkout_kind="top_up", surface=request.surface
@@ -96,7 +117,10 @@ async def refund_top_up(
     metadata: dict[str, str],
 ) -> int:
     credit_model = await get_credit_model(user_id, ctx.org_id)
-    return await credit_model.top_up_refund(user_id, transaction_key, metadata)
+    try:
+        return await credit_model.top_up_refund(user_id, transaction_key, metadata)
+    except NotImplementedError as e:
+        raise HTTPException(status_code=409, detail=TEAM_ORG_REFUND_REFUSED) from e
 
 
 @router.patch(
@@ -108,7 +132,10 @@ async def fulfill_checkout(
     ctx: BillingManagerContext,
 ):
     credit_model = await get_credit_model(user_id, ctx.org_id)
-    await credit_model.fulfill_checkout(user_id=user_id)
+    try:
+        await credit_model.fulfill_checkout(user_id=user_id)
+    except NotImplementedError as e:
+        raise HTTPException(status_code=409, detail=TEAM_ORG_CHECKOUT_REFUSED) from e
     return Response(status_code=200)
 
 
@@ -136,18 +163,44 @@ async def configure_user_auto_top_up(
         raise HTTPException(
             status_code=422, detail="Amount must be greater than or equal to threshold"
         )
+    if max(request.amount, request.threshold) > MAX_TOP_UP_AMOUNT:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Amount and threshold must be at most ${MAX_TOP_UP_AMOUNT // 100:,}",
+        )
 
     credit_model = await get_credit_model(user_id, ctx.org_id)
     current_balance = await credit_model.get_credits(user_id)
 
     try:
-        if current_balance < request.threshold:
+        # An amount of 0 turns auto top-up off: nothing to charge or check.
+        if request.amount and current_balance < request.threshold:
             await credit_model.top_up_credits(user_id, request.amount)
-        else:
+        elif request.amount:
             await credit_model.top_up_credits(user_id, 0)
     except NotImplementedError as e:
         raise HTTPException(
             status_code=501, detail="Auto top-up is not available in this context"
+        ) from e
+    except CardDeclinedError as e:
+        # The card's answer, not a fault on our side: 402 with Stripe's reason,
+        # as the subscription upgrade route does. Nothing was charged or saved,
+        # and _top_up_credits has already logged each declined card.
+        if e.needs_authentication:
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"{e} Your bank wants to approve each charge, which automatic"
+                    " top-ups can't do. Your auto top-up settings were not saved;"
+                    " please add a different card or contact support."
+                ),
+            ) from e
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"{e} Your auto top-up settings were not saved; please update"
+                " your payment method and try again."
+            ),
         ) from e
     except ValueError as e:
         known_messages = (
@@ -174,10 +227,7 @@ async def configure_user_auto_top_up(
 )
 async def get_user_auto_top_up(
     user_id: Annotated[str, Security(get_user_id)],
-    ctx: Annotated[
-        RequestContext,
-        requires_org_permission(OrgAction.MANAGE_BILLING),
-    ],
+    ctx: Annotated[RequestContext, Security(get_request_context)],
 ) -> AutoTopUpConfig:
     return await get_auto_top_up(user_id)
 

@@ -1,12 +1,14 @@
 from typing import Literal, Optional
 
 import autogpt_libs.auth as autogpt_auth_lib
-from fastapi import APIRouter, Body, HTTPException, Query, Security, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Security, status
 from fastapi.responses import Response
 
 import backend.api.features.library._get_many as get_many
 from backend.api.live_auth import live_dependency, requires_live_resource_permission
+from backend.data.entitlement import enforce_payment_paywall
 from backend.data.onboarding import OnboardingStep, complete_onboarding_step
+from backend.util.models import MAX_PAGE, MAX_PAGE_SIZE
 
 from .. import db as library_db
 from .. import model as library_model
@@ -40,11 +42,13 @@ async def list_library_agents(
     page: int = Query(
         1,
         ge=1,
+        le=MAX_PAGE,
         description="Page number to retrieve (must be >= 1)",
     ),
     page_size: int = Query(
         15,
         ge=1,
+        le=MAX_PAGE_SIZE,
         description="Number of agents per page (must be >= 1)",
     ),
     folder_id: Optional[str] = Query(
@@ -90,14 +94,19 @@ async def list_favorite_library_agents(
         autogpt_auth_lib.OrgAction.VIEW_RESOURCES,
         autogpt_auth_lib.TeamAction.VIEW_AGENTS,
     ),
+    search_term: Optional[str] = Query(
+        None, description="Search term to filter favorite agents"
+    ),
     page: int = Query(
         1,
         ge=1,
+        le=MAX_PAGE,
         description="Page number to retrieve (must be >= 1)",
     ),
     page_size: int = Query(
         15,
         ge=1,
+        le=MAX_PAGE_SIZE,
         description="Number of agents per page (must be >= 1)",
     ),
 ) -> library_model.LibraryAgentResponse:
@@ -106,6 +115,7 @@ async def list_favorite_library_agents(
     """
     return await library_db.list_favorite_library_agents(
         user_id=user_id,
+        search_term=search_term,
         page=page,
         page_size=page_size,
         organization_id=ctx.org_id,
@@ -202,7 +212,10 @@ async def get_library_agent_by_store_listing_version_id(
     "",
     summary="Add Marketplace Agent",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[live_dependency(require_live_library_create)],
+    dependencies=[
+        Depends(enforce_payment_paywall),
+        live_dependency(require_live_library_create),
+    ],
 )
 async def add_marketplace_agent_to_library(
     store_listing_version_id: str = Body(embed=True),
@@ -295,7 +308,10 @@ async def delete_library_agent(
 @router.post(
     "/{library_agent_id}/fork",
     summary="Fork Library Agent",
-    dependencies=[live_dependency(require_live_library_create)],
+    dependencies=[
+        Depends(enforce_payment_paywall),
+        live_dependency(require_live_library_create),
+    ],
 )
 async def fork_library_agent(
     library_agent_id: str,

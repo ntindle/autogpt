@@ -1,5 +1,5 @@
 import { useOrgTeamStore } from "@/services/org-team/store";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth/actions", () => ({
   getWebSocketToken: vi.fn(async () => ({ token: "test-token" })),
@@ -129,6 +129,53 @@ describe("BackendAPI._makeClientRequest 204 handling", () => {
   });
 });
 
+describe("BackendAPI.getUserCredit", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function answerCredits(status: number, body: unknown) {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  }
+
+  it("reports a team organization's 403 as forbidden, not as a failure", async () => {
+    const api = new BackendAPI("http://test", "ws://test").withTenantScope({
+      organizationId: "org-team",
+      teamId: null,
+    });
+    const fetchSpy = answerCredits(403, {
+      detail: "Missing org permission: MANAGE_BILLING",
+    });
+
+    await expect(api.getUserCredit()).resolves.toEqual({
+      credits: null,
+      forbidden: true,
+    });
+    expect(
+      new Headers(fetchSpy.mock.calls[0][1]?.headers).get(ORG_HEADER_NAME),
+    ).toBe("org-team");
+  });
+
+  it("still reports any other failure as an unknown balance", async () => {
+    const api = new BackendAPI("http://test", "ws://test");
+    answerCredits(500, { detail: "boom" });
+
+    await expect(api.getUserCredit()).resolves.toEqual({ credits: null });
+  });
+
+  it("keeps an unpinned (personal) 403 an unknown balance, as before", async () => {
+    const api = new BackendAPI("http://test", "ws://test");
+    answerCredits(403, { detail: "Organization access is inactive" });
+
+    await expect(api.getUserCredit()).resolves.toEqual({ credits: null });
+  });
+});
+
 describe("BackendAPI tenant scope", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -234,6 +281,77 @@ describe("BackendAPI tenant scope", () => {
     expect(requestHeaders.get(ORG_HEADER_NAME)).toBe("org-a");
     expect(requestHeaders.get(TEAM_HEADER_NAME)).toBe("team-a");
   });
+});
+
+describe("BackendAPI on a banned account", () => {
+  const banned = JSON.stringify({
+    detail: {
+      code: "account_banned",
+      message: "This account has been banned.",
+    },
+  });
+  let replace: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    replace = vi
+      .spyOn(window.location, "replace")
+      .mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(banned, {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    [
+      "a request",
+      (api: BackendAPI) => (api as any)._makeClientRequest("GET", "/x"),
+    ],
+    [
+      "an upload",
+      (api: BackendAPI) =>
+        (api as any)._uploadFile("/upload", new File(["x"], "x.txt")),
+    ],
+    [
+      "an upload with progress",
+      (api: BackendAPI) => api.uploadFile(new File(["x"], "x.txt")),
+    ],
+  ])("signs the user out when %s is refused", async (_, call) => {
+    vi.stubGlobal("XMLHttpRequest", RefusedXHR);
+
+    await expect(
+      call(new BackendAPI("http://test", "ws://test")),
+    ).rejects.toThrow();
+
+    expect(replace).toHaveBeenCalledWith("/logout?reason=banned");
+  });
+
+  class RefusedXHR {
+    status = 403;
+    responseText = banned;
+    withCredentials = false;
+    upload = { addEventListener() {} };
+    private onLoad: (() => void) | undefined;
+
+    addEventListener(type: string, listener: () => void) {
+      if (type === "load") this.onLoad = listener;
+    }
+
+    open() {}
+
+    setRequestHeader() {}
+
+    send() {
+      this.onLoad?.();
+    }
+  }
 });
 
 describe("BackendAPI WebSocket failure logging", () => {

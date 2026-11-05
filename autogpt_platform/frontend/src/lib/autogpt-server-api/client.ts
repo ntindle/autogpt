@@ -1,8 +1,13 @@
 import { getOrgContextHeaders } from "@/services/org-team/headers";
 import { IMPERSONATION_HEADER_NAME } from "@/lib/constants";
+import {
+  isAccountBannedResponse,
+  signOutBannedAccount,
+} from "@/lib/auth/account-banned";
 import { getWebSocketToken } from "@/lib/auth/actions";
 import { ImpersonationState } from "@/lib/impersonation";
 import { getDatafastAttribution } from "@/services/analytics/datafast-attribution";
+import { getPostHogSessionHeader } from "@/services/analytics/posthog-request-context";
 import { environment } from "@/services/environment";
 import { Key, storage } from "@/services/storage/local-storage";
 import {
@@ -81,6 +86,16 @@ export class LogoutInterruptError extends Error {
     super(message);
     this.name = "LogoutInterruptError";
   }
+}
+
+// ApiError lives in ./helpers, which this module may only import lazily, so
+// read the status the request layer put on the thrown error instead.
+function isApiErrorWithStatus(error: unknown, status: number): boolean {
+  return (
+    error instanceof Error &&
+    error.name === "ApiError" &&
+    (error as Error & { status?: unknown }).status === status
+  );
 }
 
 /**
@@ -162,19 +177,27 @@ export default class BackendAPI {
     return this._request("POST", "/auth/user", {});
   }
 
-  updateUserEmail(email: string): Promise<{ email: string }> {
-    return this._request("POST", "/auth/user/email", { email });
-  }
-
   ////////////////////////////////////////
   /////////////// CREDITS ////////////////
   ////////////////////////////////////////
 
-  async getUserCredit(): Promise<{ credits: number | null }> {
+  async getUserCredit(): Promise<{
+    credits: number | null;
+    forbidden?: boolean;
+  }> {
     try {
       const response = await this._get("/credits");
       return response ?? { credits: 0 };
     } catch (error) {
+      // A team organization's wallet is closed to members without billing
+      // rights; that is an answer, not a failure worth reporting. Unpinned
+      // (personal) requests keep reporting every failure as before.
+      if (
+        this.tenantScope?.organizationId &&
+        isApiErrorWithStatus(error, 403)
+      ) {
+        return { credits: null, forbidden: true };
+      }
       if (!(error instanceof LogoutInterruptError)) {
         Sentry.captureException(error);
       }
@@ -772,7 +795,11 @@ export default class BackendAPI {
     });
 
     if (!response.ok) {
-      throw await handleFetchError(response);
+      const error = await handleFetchError(response);
+      if (isAccountBannedResponse(error.status, error.response)) {
+        signOutBannedAccount();
+      }
+      throw error;
     }
 
     return await response.json();
@@ -837,6 +864,9 @@ export default class BackendAPI {
           let errorMessage = `Upload failed (${xhr.status})`;
           try {
             const errorData = JSON.parse(xhr.responseText);
+            if (isAccountBannedResponse(xhr.status, errorData)) {
+              signOutBannedAccount();
+            }
             if (errorData.detail) {
               if (
                 typeof errorData.detail === "string" &&
@@ -946,6 +976,7 @@ export default class BackendAPI {
     }
 
     Object.assign(headers, getDatafastAttribution());
+    Object.assign(headers, getPostHogSessionHeader());
 
     const response = await fetch(url, {
       method,
@@ -956,6 +987,9 @@ export default class BackendAPI {
 
     if (!response.ok) {
       const error = await handleFetchError(response);
+      if (isAccountBannedResponse(error.status, error.response)) {
+        signOutBannedAccount();
+      }
       if (
         isAuthenticationError(response, error.message) &&
         isLogoutInProgress()

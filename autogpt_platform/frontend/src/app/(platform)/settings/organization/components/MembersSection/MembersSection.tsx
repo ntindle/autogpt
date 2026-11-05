@@ -16,6 +16,7 @@ interface Props {
   members: OrgMemberResponse[];
   currentMember: OrgMemberResponse | null;
   isAdmin: boolean;
+  isOwner: boolean;
   onChanged: () => void;
 }
 
@@ -24,6 +25,7 @@ export function MembersSection({
   members,
   currentMember,
   isAdmin,
+  isOwner,
   onChanged,
 }: Props) {
   const {
@@ -40,10 +42,12 @@ export function MembersSection({
       <Text variant="h4" as="h2">
         Members ({members.length})
       </Text>
-      <ul className="flex flex-col divide-y divide-zinc-100">
+      <ul className="flex flex-col divide-y divide-separator">
         {members.map((member) => {
           const isSelf = member.user_id === currentMember?.user_id;
-          const canManage = isAdmin && !member.is_owner && !isSelf;
+          const canRemove = isAdmin && !member.is_owner && !isSelf;
+          // Only the owner hands out or takes away admin and billing manager.
+          const canChangeRole = isOwner && canRemove;
           const role = flagsToRole(member);
           return (
             <li
@@ -52,40 +56,41 @@ export function MembersSection({
               data-testid="org-member-row"
             >
               <Avatar className="size-8 shrink-0">
-                <AvatarFallback className="text-xs">
+                <AvatarFallback className="text-caption">
                   {(member.name || member.email).charAt(0).toUpperCase()}
                 </AvatarFallback>
               </Avatar>
               <div className="flex min-w-0 flex-1 flex-col">
-                <span className="truncate text-sm font-medium">
+                <span className="truncate text-body font-medium">
                   {member.name || member.email}
                   {isSelf ? " (you)" : ""}
                 </span>
-                <span className="truncate text-xs text-zinc-500">
+                <span className="truncate text-caption text-foreground-tertiary">
                   {member.email}
                 </span>
               </div>
               {member.is_owner ? (
                 <Badge variant="info">Owner</Badge>
-              ) : canManage ? (
-                <>
-                  <OrgRoleSelect
-                    id={`role-${member.user_id}`}
-                    ariaLabel={`Role for ${member.name || member.email}`}
-                    value={role}
-                    onChange={(nextRole) => handleRoleChange(member, nextRole)}
-                    disabled={isUpdatingRole}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="small"
-                    onClick={() => setMemberToRemove(member)}
-                  >
-                    Remove
-                  </Button>
-                </>
+              ) : canChangeRole ? (
+                <OrgRoleSelect
+                  id={`role-${member.user_id}`}
+                  ariaLabel={`Role for ${member.name || member.email}`}
+                  value={role}
+                  onChange={(nextRole) => handleRoleChange(member, nextRole)}
+                  disabled={isUpdatingRole}
+                />
               ) : role !== "member" ? (
                 <Badge variant="info">{roleLabel(role)}</Badge>
+              ) : null}
+              {canRemove ? (
+                <Button
+                  variant="ghost"
+                  size="small"
+                  aria-label={`Remove ${member.name || member.email}`}
+                  onClick={() => setMemberToRemove(member)}
+                >
+                  Remove
+                </Button>
               ) : null}
             </li>
           );

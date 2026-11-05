@@ -1,11 +1,12 @@
 "use client";
 
-import { MessageResponse } from "@/components/ai-elements/message";
+import { MessageResponse } from "@/components/organisms/Message/Message";
 import { resolveWorkspaceUrls } from "../../ChatMessagesContainer/helpers";
+import { Text } from "@/components/atoms/Text/Text";
 import { globalRegistry } from "@/components/contextual/OutputRenderers";
 import { codeRenderer } from "@/components/contextual/OutputRenderers/renderers/CodeRenderer";
 import { Suspense, useState } from "react";
-import { Skeleton } from "@/components/ui/skeleton";
+import { Skeleton } from "@/components/atoms/Skeleton/Skeleton";
 import type { ArtifactRef } from "../../../store";
 import type { ArtifactClassification } from "../helpers";
 import { ArtifactErrorBoundary } from "./ArtifactErrorBoundary";
@@ -51,14 +52,25 @@ function ArtifactContentLoader({
         role="alert"
         className="flex flex-col items-center justify-center gap-3 p-8 text-center"
       >
-        <p className="text-sm text-zinc-500">Failed to load content</p>
-        <p className="text-xs text-zinc-400">{error}</p>
+        <Text variant="body-tight" as="p" tone="muted">
+          Failed to load content
+        </Text>
+        <Text variant="small-tight" as="p" tone="subtle">
+          {error}
+        </Text>
         <button
           type="button"
           onClick={retry}
-          className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          className="rounded-md border border-border-base bg-surface px-3 py-1.5 shadow-sm transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-brand/60 focus-visible:outline-none"
         >
-          Try again
+          <Text
+            as="span"
+            variant="small-medium-tight"
+            tone="body"
+            className="block"
+          >
+            Try again
+          </Text>
         </button>
       </div>
     );
@@ -70,6 +82,7 @@ function ArtifactContentLoader({
         artifactID={artifact.id}
         artifactTitle={artifact.title}
         artifactType={classification.type}
+        content={content}
       >
         <ArtifactRenderer
           artifact={artifact}
@@ -104,7 +117,9 @@ function ArtifactImage({ src, alt }: { src: string; alt: string }) {
         role="alert"
         className="flex flex-col items-center justify-center gap-3 p-8 text-center"
       >
-        <p className="text-sm text-zinc-500">Failed to load image</p>
+        <Text variant="body-tight" as="p" tone="muted">
+          Failed to load image
+        </Text>
         <button
           type="button"
           onClick={() => {
@@ -112,9 +127,16 @@ function ArtifactImage({ src, alt }: { src: string; alt: string }) {
             setLoaded(false);
             setRetryNonce((n) => n + 1);
           }}
-          className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          className="rounded-md border border-border-base bg-surface px-3 py-1.5 shadow-sm transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-brand/60 focus-visible:outline-none"
         >
-          Try again
+          <Text
+            as="span"
+            variant="small-medium-tight"
+            tone="body"
+            className="block"
+          >
+            Try again
+          </Text>
         </button>
       </div>
     );
@@ -123,9 +145,12 @@ function ArtifactImage({ src, alt }: { src: string; alt: string }) {
   return (
     <div className="relative flex items-center justify-center p-4">
       {!loaded && (
-        <Skeleton className="absolute inset-4 h-[calc(100%-2rem)] w-[calc(100%-2rem)] rounded-md" />
+        <Skeleton
+          variant="translucent"
+          className="absolute inset-4 h-[calc(100%-2rem)] w-[calc(100%-2rem)] rounded-md"
+        />
       )}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
+      {/* eslint-disable-next-line @next/next/no-img-element -- an artifact URL with a cache-busting query, not an optimisable static asset */}
       <img
         src={withCacheBust(src, retryNonce)}
         alt={alt}
@@ -148,7 +173,9 @@ function ArtifactVideo({ src }: { src: string }) {
         role="alert"
         className="flex flex-col items-center justify-center gap-3 p-8 text-center"
       >
-        <p className="text-sm text-zinc-500">Failed to load video</p>
+        <Text variant="body-tight" as="p" tone="muted">
+          Failed to load video
+        </Text>
         <button
           type="button"
           onClick={() => {
@@ -156,9 +183,16 @@ function ArtifactVideo({ src }: { src: string }) {
             setLoaded(false);
             setRetryNonce((n) => n + 1);
           }}
-          className="rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 shadow-sm transition-colors hover:bg-zinc-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+          className="rounded-md border border-border-base bg-surface px-3 py-1.5 shadow-sm transition-colors hover:bg-surface-muted focus-visible:ring-2 focus-visible:ring-brand/60 focus-visible:outline-none"
         >
-          Try again
+          <Text
+            as="span"
+            variant="small-medium-tight"
+            tone="body"
+            className="block"
+          >
+            Try again
+          </Text>
         </button>
       </div>
     );
@@ -167,7 +201,10 @@ function ArtifactVideo({ src }: { src: string }) {
   return (
     <div className="relative flex items-center justify-center p-4">
       {!loaded && (
-        <Skeleton className="absolute inset-4 h-[calc(100%-2rem)] w-[calc(100%-2rem)] rounded-md" />
+        <Skeleton
+          variant="translucent"
+          className="absolute inset-4 h-[calc(100%-2rem)] w-[calc(100%-2rem)] rounded-md"
+        />
       )}
       <video
         src={withCacheBust(src, retryNonce)}
@@ -220,9 +257,8 @@ function ArtifactRenderer({
   }
 
   if (classification.type === "pdf" && pdfUrl) {
-    // No sandbox — Chrome/Edge block PDF rendering in sandboxed iframes
-    // (Chromium bug #413851). The blob URL has a null origin so it can't
-    // access the parent page regardless.
+    // Chromium does not render PDFs in sandboxed iframes. The fetch hook
+    // validates the response before creating this unsandboxed blob URL.
     return (
       <iframe src={pdfUrl} className="h-full w-full" title={artifact.title} />
     );
@@ -233,9 +269,16 @@ function ArtifactRenderer({
   // Source view: always show raw text
   if (isSourceView) {
     return (
-      <pre className="whitespace-pre-wrap break-words p-4 font-mono text-sm text-zinc-800">
-        {content}
-      </pre>
+      <div className="p-4">
+        <Text
+          variant="body-mono-tight"
+          as="pre"
+          tone="emphasis"
+          className="break-words whitespace-pre-wrap"
+        >
+          {content}
+        </Text>
+      </div>
     );
   }
 
@@ -344,9 +387,16 @@ function ArtifactRenderer({
 
   // Fallback: plain text
   return (
-    <pre className="whitespace-pre-wrap break-words p-4 font-mono text-sm text-zinc-800">
-      {content}
-    </pre>
+    <div className="p-4">
+      <Text
+        variant="body-mono-tight"
+        as="pre"
+        tone="emphasis"
+        className="break-words whitespace-pre-wrap"
+      >
+        {content}
+      </Text>
+    </div>
   );
 }
 

@@ -2,7 +2,20 @@ import { useGetWorkspaceTaskSessionScope } from "@/app/api/__generated__/endpoin
 import { okData } from "@/app/api/helpers";
 
 export function useTaskSessionScope(sessionId?: string | null) {
-  return useGetWorkspaceTaskSessionScope(sessionId ?? "", {
-    query: { enabled: Boolean(sessionId), select: okData, retry: false },
+  const query = useGetWorkspaceTaskSessionScope(sessionId ?? "", {
+    query: {
+      enabled: Boolean(sessionId),
+      select: okData,
+      retry: false,
+      staleTime: 0,
+      refetchOnMount: "always",
+    },
   });
+  return {
+    ...query,
+    data:
+      query.isFetchedAfterMount && !query.isFetching && !query.isError
+        ? query.data
+        : undefined,
+  };
 }

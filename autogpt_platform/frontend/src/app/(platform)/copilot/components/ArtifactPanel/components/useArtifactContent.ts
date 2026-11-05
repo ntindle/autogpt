@@ -5,6 +5,7 @@ import type { ArtifactRef } from "../../../store";
 import type { ArtifactClassification } from "../helpers";
 import { fetchArtifactResource } from "../artifactRequest";
 import { useAuthStore } from "@/lib/auth/hooks/useAuthStore";
+import { validatePDFBlob } from "./validatePDFBlob";
 
 // Cap on cached text artifacts. Long sessions with many large artifacts
 // would otherwise hold every opened one in memory.
@@ -150,6 +151,12 @@ export function getCachedArtifactContent(
   );
 }
 
+export function forgetArtifactContent(artifact: ArtifactCacheRef) {
+  contentCache.delete(
+    artifactContentCacheKey(artifact, useAuthStore.getState().user?.id),
+  );
+}
+
 export function clearContentCache() {
   contentCache.clear();
 }
@@ -160,6 +167,10 @@ export function useArtifactContent(
 ) {
   const ownerId = useAuthStore((state) => state.user?.id);
   const cacheKey = artifactContentCacheKey(artifact, ownerId);
+  const documentKey = artifactContentCacheKey(
+    { ...artifact, id: artifact.documentId ?? artifact.id },
+    ownerId,
+  );
   const [content, setContent] = useState<string | null>(null);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
@@ -169,6 +180,10 @@ export function useArtifactContent(
   const [retryNonce, setRetryNonce] = useState(0);
   const scrollPositions = useRef(new Map<string, number>());
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The document whose text is on screen. When Otto overwrites it, that text
+  // stays up until the new text lands, so the page keeps its scroll position
+  // instead of dropping to a skeleton.
+  const shownDocumentIdRef = useRef<string | null>(null);
 
   function retry() {
     // Drop any cached failure/content for this id so we actually re-fetch.
@@ -209,6 +224,7 @@ export function useArtifactContent(
       classification.type === "image" || classification.type === "video";
     const isTenantScoped = "organizationId" in artifact || "teamId" in artifact;
     if (isMedia && !isTenantScoped) {
+      shownDocumentIdRef.current = null;
       setContent(null);
       setPdfUrl(null);
       setMediaUrl(null);
@@ -218,7 +234,11 @@ export function useArtifactContent(
     }
 
     let cancelled = false;
-    setIsLoading(true);
+    const replacesShownText =
+      classification.type !== "pdf" &&
+      artifact.documentId != null &&
+      documentKey === shownDocumentIdRef.current;
+    setIsLoading(!replacesShownText);
     setError(null);
 
     if (isMedia) {
@@ -252,12 +272,14 @@ export function useArtifactContent(
 
     if (classification.type === "pdf") {
       let objectUrl: string | null = null;
+      shownDocumentIdRef.current = null;
       setContent(null);
       setPdfUrl(null);
       fetchArtifactResponse(artifact)
         .then((res) => res.blob())
-        .then((blob) => {
-          objectUrl = URL.createObjectURL(blob);
+        .then(async (blob) => {
+          const pdfBlob = await validatePDFBlob(blob);
+          objectUrl = URL.createObjectURL(pdfBlob);
           if (cancelled) {
             URL.revokeObjectURL(objectUrl);
             objectUrl = null;
@@ -286,6 +308,7 @@ export function useArtifactContent(
     if (cached !== undefined) {
       cache.delete(cacheKey);
       cache.set(cacheKey, cached);
+      shownDocumentIdRef.current = documentKey;
       setContent(cached);
       setIsLoading(false);
       return () => {
@@ -302,12 +325,14 @@ export function useArtifactContent(
             if (oldest !== undefined) cache.delete(oldest);
           }
           cache.set(cacheKey, text);
+          shownDocumentIdRef.current = documentKey;
           setContent(text);
           setIsLoading(false);
         }
       })
       .catch((err) => {
         if (!cancelled) {
+          shownDocumentIdRef.current = null;
           setError(err.message);
           setIsLoading(false);
         }
@@ -316,7 +341,13 @@ export function useArtifactContent(
     return () => {
       cancelled = true;
     };
-  }, [cacheKey, artifact.sourceUrl, classification.type, retryNonce]);
+  }, [
+    cacheKey,
+    documentKey,
+    artifact.sourceUrl,
+    classification.type,
+    retryNonce,
+  ]);
 
   return { content, pdfUrl, mediaUrl, isLoading, error, scrollRef, retry };
 }

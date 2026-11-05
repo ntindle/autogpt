@@ -133,3 +133,16 @@ async def test_successful_replacement_preserves_file_identity(replacement):
         .parts[1]
         == "file"
     )
+
+
+@pytest.mark.asyncio
+async def test_replacement_quota_uses_saved_organization(replacement, mocker):
+    manager, _, _, _ = replacement
+    manager.organization_id = "saved-org"
+    limit = mocker.patch(
+        "backend.util.workspace.get_workspace_storage_limit_bytes",
+        AsyncMock(return_value=4),
+    )
+    with pytest.raises(ValueError, match="Storage limit exceeded"):
+        await manager._enforce_replacement_limits(5, 3)
+    limit.assert_awaited_once_with("owner", "saved-org")

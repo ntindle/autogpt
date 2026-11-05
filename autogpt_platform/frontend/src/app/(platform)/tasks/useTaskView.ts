@@ -27,7 +27,7 @@ export function useTaskView(userID: string) {
   const key = `autogpt.tasks.view.v1:${userID}`;
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollPosition = useRef(0);
-  const pendingSave = useRef<ReturnType<typeof setTimeout>>();
+  const pendingSave = useRef<ReturnType<typeof setTimeout>>(undefined);
   const persist = useRef(() => {});
   useEffect(() => {
     let next = EMPTY_VIEW;

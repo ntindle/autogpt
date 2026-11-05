@@ -22,15 +22,19 @@ import { useInvitationsSection } from "./useInvitationsSection";
 interface Props {
   orgId: string;
   isAdmin: boolean;
+  // Only the owner may invite someone as an admin or billing manager; admins
+  // invite plain members.
+  isOwner?: boolean;
 }
 
-export function InvitationsSection({ orgId, isAdmin }: Props) {
+export function InvitationsSection({ orgId, isAdmin, isOwner = false }: Props) {
   const {
     form,
     invitations,
     assignableTeams,
     teamNameById,
     isInviting,
+    seatRefusal,
     revokingId,
     resendingId,
     handleInvite,
@@ -76,27 +80,35 @@ export function InvitationsSection({ orgId, isAdmin }: Props) {
               </FormItem>
             )}
           />
-          <FormField
-            control={form.control}
-            name="role"
-            render={({ field }) => (
-              <FormItem>
-                <FormControl>
-                  <OrgRoleSelect
-                    id="invite-role"
-                    ariaLabel="Role"
-                    value={field.value}
-                    onChange={field.onChange}
-                    size="medium"
-                  />
-                </FormControl>
-              </FormItem>
-            )}
-          />
+          {isOwner ? (
+            <FormField
+              control={form.control}
+              name="role"
+              render={({ field }) => (
+                <FormItem>
+                  <FormControl>
+                    <OrgRoleSelect
+                      id="invite-role"
+                      ariaLabel="Role"
+                      value={field.value}
+                      onChange={field.onChange}
+                      size="medium"
+                    />
+                  </FormControl>
+                </FormItem>
+              )}
+            />
+          ) : null}
           <Button type="submit" loading={isInviting}>
             Invite
           </Button>
         </div>
+
+        {seatRefusal ? (
+          <Text variant="small" tone="danger" role="alert">
+            {seatRefusal}
+          </Text>
+        ) : null}
 
         {assignableTeams.length > 0 ? (
           <FormField
@@ -104,7 +116,7 @@ export function InvitationsSection({ orgId, isAdmin }: Props) {
             name="teamIds"
             render={({ field }) => (
               <FormItem>
-                <FormLabel className="text-xs text-zinc-500">
+                <FormLabel className="text-caption text-foreground-tertiary">
                   Pre-assign to teams
                 </FormLabel>
                 <FormControl>
@@ -125,7 +137,7 @@ export function InvitationsSection({ orgId, isAdmin }: Props) {
       </Form>
 
       {invitations.length > 0 ? (
-        <ul className="flex flex-col divide-y divide-zinc-100">
+        <ul className="flex flex-col divide-y divide-separator">
           {invitations.map((invitation) => (
             <li
               key={invitation.id}
@@ -133,7 +145,7 @@ export function InvitationsSection({ orgId, isAdmin }: Props) {
               data-testid="org-invitation-row"
             >
               <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <span className="truncate text-sm font-medium">
+                <span className="truncate text-body font-medium">
                   {invitation.email}
                 </span>
                 {invitation.team_ids.length > 0 ? (
@@ -147,7 +159,7 @@ export function InvitationsSection({ orgId, isAdmin }: Props) {
                     )}
                   </div>
                 ) : null}
-                <span className="truncate text-xs text-zinc-500">
+                <span className="truncate text-caption text-foreground-tertiary">
                   Expires {new Date(invitation.expires_at).toLocaleDateString()}
                 </span>
               </div>
@@ -178,7 +190,7 @@ export function InvitationsSection({ orgId, isAdmin }: Props) {
           ))}
         </ul>
       ) : (
-        <Text variant="small" className="text-zinc-500">
+        <Text variant="small" className="text-foreground-tertiary">
           No pending invitations.
         </Text>
       )}

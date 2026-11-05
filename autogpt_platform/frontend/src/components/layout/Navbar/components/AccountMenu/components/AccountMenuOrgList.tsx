@@ -5,9 +5,11 @@ import Avatar, {
   AvatarImage,
 } from "@/components/atoms/Avatar/Avatar";
 import { Icon } from "@/components/atoms/Icon/Icon";
+import { Text } from "@/components/atoms/Text/Text";
 import { CreateOrgDialog } from "@/components/contextual/CreateOrgDialog/CreateOrgDialog";
 import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
 import { isProtectedOrgAvatarUrl } from "@/services/org-team/avatar";
+import { useCanCreateOrganization } from "@/services/org-team/useCanCreateOrganization";
 import { PlusSignIcon, Tick02Icon } from "@hugeicons/core-free-icons";
 import { useState } from "react";
 import { useOrgTeamSwitcher } from "../../OrgTeamSwitcher/useOrgTeamSwitcher";
@@ -19,6 +21,11 @@ interface Props {
 export function AccountMenuOrgList({ onSelect }: Props) {
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const canManageOrgs = useGetFlag(Flag.SHOW_ORG_SETTINGS);
+  // Access inherited through someone else's organization lets the account
+  // switch organizations, not create one: the backend would refuse it.
+  const canCreateOrganization = useCanCreateOrganization({
+    enabled: canManageOrgs === true,
+  });
   const { orgs, activeOrg, switchOrg, isLoaded } = useOrgTeamSwitcher();
 
   function handleSwitchOrg(orgId: string) {
@@ -30,10 +37,10 @@ export function AccountMenuOrgList({ onSelect }: Props) {
     return null;
   }
 
-  const createOrgButton = canManageOrgs ? (
+  const createOrgButton = canCreateOrganization ? (
     <button
       type="button"
-      className="flex w-full items-center gap-2 rounded-lg bg-neutral-100 px-2 py-1.5 text-sm text-neutral-700 hover:bg-neutral-200"
+      className="flex w-full items-center gap-2 rounded-lg bg-surface-hover px-2 py-1.5 text-body text-foreground-body hover:bg-surface-active"
       onClick={() => setIsCreateOpen(true)}
       data-testid="create-organization-button"
     >
@@ -44,7 +51,7 @@ export function AccountMenuOrgList({ onSelect }: Props) {
     </button>
   ) : null;
 
-  const createOrgDialog = canManageOrgs ? (
+  const createOrgDialog = canCreateOrganization ? (
     <CreateOrgDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
   ) : null;
 
@@ -52,7 +59,7 @@ export function AccountMenuOrgList({ onSelect }: Props) {
     return (
       <>
         <div className="flex flex-col gap-2 p-2">
-          <div className="px-2 py-1 text-sm text-neutral-500">
+          <div className="px-2 py-1 text-body text-foreground-tertiary">
             No organizations yet
           </div>
           {createOrgButton}
@@ -66,14 +73,14 @@ export function AccountMenuOrgList({ onSelect }: Props) {
     <>
       <div className="flex flex-col gap-2 p-2">
         <div className="flex flex-col gap-0.5">
-          <span className="px-2 py-1 text-xs font-medium uppercase text-neutral-400">
+          <span className="px-2 py-1 text-caption font-medium text-foreground-subtle uppercase">
             Organizations
           </span>
           {orgs.map((org) => (
             <button
               key={org.id}
               type="button"
-              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-neutral-700 hover:bg-neutral-100"
+              className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-body text-foreground-body hover:bg-surface-hover"
               aria-pressed={org.id === activeOrg?.id}
               onClick={() => handleSwitchOrg(org.id)}
             >
@@ -83,16 +90,18 @@ export function AccountMenuOrgList({ onSelect }: Props) {
                   alt=""
                   unoptimized={isProtectedOrgAvatarUrl(org.avatarUrl)}
                 />
-                <AvatarFallback className="text-xs">
+                <AvatarFallback className="text-caption">
                   {org.name.charAt(0)}
                 </AvatarFallback>
               </Avatar>
               <span className="flex-1 truncate text-left">{org.name}</span>
               {org.isPersonal && (
-                <span className="text-xs text-neutral-400">Personal</span>
+                <Text variant="small-tight" as="span" tone="subtle">
+                  Personal
+                </Text>
               )}
               {org.id === activeOrg?.id && (
-                <Icon icon={Tick02Icon} size={14} className="text-green-600" />
+                <Icon icon={Tick02Icon} size={14} tone="success" />
               )}
             </button>
           ))}

@@ -76,7 +76,7 @@ export function TaskRow({
       className={cn(
         "group grid min-h-16 grid-cols-[1rem_1.25rem_minmax(0,1fr)] items-center gap-2 rounded-lg px-1 py-2 hover:bg-muted/40 sm:grid-cols-[1rem_1.25rem_minmax(0,1fr)_auto] sm:gap-3 sm:px-2",
         task.accepted === false &&
-          "border border-dashed border-violet-300 bg-violet-50/30",
+          "border-violet-300 bg-violet-50/30 border border-dashed",
       )}
     >
       {parent ? (
@@ -85,7 +85,7 @@ export function TaskRow({
           onClick={onToggle}
           aria-label={`${collapsed ? "Expand" : "Collapse"} ${task.title}`}
           aria-expanded={!collapsed}
-          className="rounded focus-visible:ring-2 focus-visible:ring-ring"
+          className="focus-visible:ring-ring rounded focus-visible:ring-2"
         >
           {collapsed ? <CaretRight size={14} /> : <CaretDown size={14} />}
         </button>
@@ -110,7 +110,7 @@ export function TaskRow({
             })
           }
           aria-label={`${task.status === "done" ? "Reopen" : "Complete"} ${task.title}`}
-          className="size-4 cursor-pointer rounded accent-violet-600 focus-visible:ring-2 focus-visible:ring-ring"
+          className="accent-violet-600 focus-visible:ring-ring size-4 cursor-pointer rounded focus-visible:ring-2"
         />
       ) : (
         <button
@@ -118,7 +118,7 @@ export function TaskRow({
           onClick={onDetails}
           aria-label={`Inspect ${task.title}: ${label}`}
           className={cn(
-            "flex size-4 items-center justify-center rounded border border-muted-foreground/50 text-xs focus-visible:ring-2 focus-visible:ring-ring",
+            "text-xs focus-visible:ring-ring flex size-4 items-center justify-center rounded border border-muted-foreground/50 focus-visible:ring-2",
             task.status === "done" &&
               "border-green-700 bg-green-700 text-white",
             task.status === "working" && "border-violet-600",
@@ -128,7 +128,7 @@ export function TaskRow({
           {task.status === "done" ? (
             "✓"
           ) : task.status === "working" ? (
-            <span className="size-1.5 rounded-sm bg-violet-600 motion-safe:animate-pulse" />
+            <span className="bg-violet-600 size-1.5 rounded-sm motion-safe:animate-pulse" />
           ) : task.status === "needs_you" ? (
             "!"
           ) : parent && count.done > 0 ? (
@@ -139,11 +139,11 @@ export function TaskRow({
       <button
         type="button"
         onClick={onDetails}
-        className="min-w-0 rounded text-left focus-visible:ring-2 focus-visible:ring-ring"
+        className="focus-visible:ring-ring min-w-0 rounded text-left focus-visible:ring-2"
       >
         <span
           className={cn(
-            "block break-words text-sm leading-snug",
+            "text-sm block leading-snug break-words",
             parent && "font-semibold",
             task.status === "done" && "text-muted-foreground",
           )}
@@ -152,7 +152,7 @@ export function TaskRow({
         </span>
         <span
           className={cn(
-            "mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground",
+            "text-xs mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-muted-foreground",
             task.status === "working" && "text-violet-700",
           )}
         >
@@ -182,7 +182,7 @@ export function TaskRow({
           <button
             type="button"
             onClick={onDetails}
-            className="rounded-full bg-amber-100 px-2.5 py-1.5 text-xs font-medium text-amber-800"
+            className="bg-amber-100 text-xs text-amber-800 rounded-full px-2.5 py-1.5 font-medium"
           >
             {reviewWaitingReason(task, tasks)
               ? "Questions pending"
@@ -197,7 +197,7 @@ export function TaskRow({
             disabled={pending}
             onClick={() => onCommand({ operation: "start" })}
             aria-label={`Start ${task.title}`}
-            className="flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            className="text-xs focus-visible:ring-ring flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 hover:bg-muted focus-visible:ring-2"
           >
             <Play size={15} weight="fill" />
             Start
@@ -220,7 +220,7 @@ export function TaskRow({
               <TaskIdentity key={`${p.kind}:${p.id}`} assignee={p} />
             ))}
             {participants.length > 3 ? (
-              <span className="pl-2 text-xs">+{participants.length - 3}</span>
+              <span className="text-xs pl-2">+{participants.length - 3}</span>
             ) : null}
           </button>
         ) : null}
@@ -243,7 +243,7 @@ export function TaskRow({
             onClick={onBreakdown}
             disabled={pending}
             aria-label={`Break down ${task.title}`}
-            className="flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+            className="text-xs focus-visible:ring-ring flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 hover:bg-muted focus-visible:ring-2"
           >
             <TreeStructure size={15} />
             <span className="hidden lg:inline">Break down</span>
@@ -254,7 +254,7 @@ export function TaskRow({
           onClick={onChat}
           disabled={pending}
           aria-label={`Open chat for ${task.title}`}
-          className="flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 text-xs hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          className="text-xs focus-visible:ring-ring flex min-h-8 items-center gap-1.5 rounded-lg border border-border px-2 hover:bg-muted focus-visible:ring-2"
         >
           <ChatCircle size={15} />
           <span className="hidden md:inline">Open chat</span>
@@ -263,7 +263,7 @@ export function TaskRow({
           type="button"
           onClick={onDetails}
           aria-label={`Details for ${task.title}`}
-          className="hidden rounded p-1 text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:block"
+          className="focus-visible:ring-ring hidden rounded p-1 text-muted-foreground hover:bg-muted focus-visible:ring-2 sm:block"
         >
           <DotsThree size={18} />
         </button>

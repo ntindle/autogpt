@@ -8,10 +8,12 @@ import logging
 import mimetypes
 import posixpath
 import re
+from collections.abc import Collection
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 import pydantic
+from prisma import Prisma
 from prisma.errors import UniqueViolationError
 from prisma.models import ChatUIDraft, UserWorkspace, UserWorkspaceFile
 from prisma.types import UserWorkspaceFileWhereInput
@@ -83,6 +85,10 @@ class WorkspaceFile(pydantic.BaseModel):
     execution_id: Optional[str] = None
     scope_resolved: bool = True
     is_user_global_config: bool = False
+    is_internal: bool = False
+    # Not a column: on what WorkspaceManager.write_file returns, the live file
+    # this write replaced. Kept off every serialized form of the file.
+    replaced_file_id: Optional[str] = pydantic.Field(default=None, exclude=True)
 
     @staticmethod
     def from_db(file: "UserWorkspaceFile") -> "WorkspaceFile":
@@ -107,6 +113,7 @@ class WorkspaceFile(pydantic.BaseModel):
             execution_id=file.executionId,
             scope_resolved=file.scopeResolved,
             is_user_global_config=file.isUserGlobalConfig,
+            is_internal=file.isInternal,
         )
 
 
@@ -128,7 +135,10 @@ async def get_or_create_workspace(user_id: str) -> Workspace:
     """
     Get user's workspace, creating one if it doesn't exist.
 
-    Uses upsert to atomically handle concurrent creation attempts.
+    Reads first, because the workspace nearly always exists: an upsert with
+    nothing to update cost ~0.2 s a call in prod, against ~0.12 s for a
+    read. Two first calls racing to create it are settled by the unique
+    ``userId``: the one that loses reads the winner's row.
 
     Args:
         user_id: The user's ID
@@ -136,19 +146,16 @@ async def get_or_create_workspace(user_id: str) -> Workspace:
     Returns:
         Workspace instance
     """
-    try:
-        workspace = await UserWorkspace.prisma().upsert(
-            where={"userId": user_id},
-            data={
-                "create": {"userId": user_id},
-                "update": {},  # No-op update; workspace already exists
-            },
-        )
-    except UniqueViolationError:
-        # Defense-in-depth: should not happen with upsert, but handle gracefully
-        workspace = await UserWorkspace.prisma().find_unique(where={"userId": user_id})
-        if workspace is None:
-            raise
+    workspace = await UserWorkspace.prisma().find_unique(where={"userId": user_id})
+    if workspace is None:
+        try:
+            workspace = await UserWorkspace.prisma().create(data={"userId": user_id})
+        except UniqueViolationError:
+            workspace = await UserWorkspace.prisma().find_unique(
+                where={"userId": user_id}
+            )
+            if workspace is None:
+                raise
 
     return Workspace.from_db(workspace)
 
@@ -182,6 +189,9 @@ async def create_workspace_file(
     session_id: str | None = None,
     execution_id: str | None = None,
     user_global_config: bool = False,
+    is_internal: bool = False,
+    storage_limit_bytes: int = 0,
+    replacing_file_id: Optional[str] = None,
 ) -> WorkspaceFile:
     """
     Create a new workspace file record.
@@ -203,6 +213,12 @@ async def create_workspace_file(
         size_bytes: File size in bytes
         checksum: Optional SHA256 checksum
         metadata: Optional additional metadata
+        is_internal: Otto's own working file, left out of the user's lists
+        storage_limit_bytes: The owner's storage quota (0 for none); a row
+            that would not fit is refused with ``storage_limit_exceeded``
+        replacing_file_id: The live file at ``path`` this one replaces; it is
+            soft-deleted in the same transaction, so a refused write keeps it,
+            and only while it is still at ``path``
 
     Returns:
         Created WorkspaceFile instance
@@ -211,31 +227,148 @@ async def create_workspace_file(
     if not path.startswith("/"):
         path = f"/{path}"
 
-    file = await UserWorkspaceFile.prisma().create(
-        data={
-            "id": file_id,
-            "workspaceId": workspace_id,
-            "name": name,
-            "path": path,
-            "storagePath": storage_path,
-            "mimeType": mime_type,
-            "sizeBytes": size_bytes,
-            "checksum": checksum,
-            "metadata": SafeJson(metadata or {}),
-            "organizationId": organization_id,
-            "teamId": team_id,
-            "sessionId": session_id,
-            "executionId": execution_id,
-            "scopeResolved": True,
-            "isUserGlobalConfig": user_global_config,
-        }
+    # Only rows in the scope the file lands in hold its path, so only they
+    # are replaced; every other live file still counts toward the quota.
+    scope = _workspace_scope_where(
+        organization_id, team_id, user_global_config=user_global_config
     )
+    async with transaction() as tx:
+        await tx.execute_raw("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
+        await require_storage_room(
+            tx,
+            workspace_id,
+            size_bytes,
+            storage_limit_bytes,
+            replacing=[path],
+            replacing_scope=scope,
+        )
+        if replacing_file_id is not None:
+            retired = await tx.userworkspacefile.update_many(
+                where={
+                    "id": replacing_file_id,
+                    "workspaceId": workspace_id,
+                    "path": path,
+                    "isDeleted": False,
+                    **scope,
+                },
+                data={"isDeleted": True, "deletedAt": datetime.now(timezone.utc)},
+            )
+            if not retired:
+                # It left the path after the count: count again as the path is now.
+                await require_storage_room(
+                    tx,
+                    workspace_id,
+                    size_bytes,
+                    storage_limit_bytes,
+                    replacing=[path],
+                    replacing_scope=scope,
+                )
+        file = await tx.userworkspacefile.create(
+            data={
+                "id": file_id,
+                "workspaceId": workspace_id,
+                "name": name,
+                "path": path,
+                "storagePath": storage_path,
+                "mimeType": mime_type,
+                "sizeBytes": size_bytes,
+                "checksum": checksum,
+                "metadata": SafeJson(metadata or {}),
+                "organizationId": organization_id,
+                "teamId": team_id,
+                "sessionId": session_id,
+                "executionId": execution_id,
+                "scopeResolved": True,
+                "isUserGlobalConfig": user_global_config,
+                "isInternal": is_internal,
+            }
+        )
 
     logger.info(
         f"Created workspace file {file.id} at path {path} "
         f"in workspace {workspace_id}"
     )
     return WorkspaceFile.from_db(file)
+
+
+async def require_storage_room(
+    tx: Prisma,
+    workspace_id: str,
+    added_bytes: int,
+    limit_bytes: int,
+    replacing: Collection[str] = (),
+    *,
+    replacing_scope: UserWorkspaceFileWhereInput,
+) -> None:
+    """Refuse a write of ``added_bytes`` that would take the workspace past
+    ``limit_bytes`` (0 for none), counting the live files at ``replacing`` in
+    ``replacing_scope`` (the scope the write lands in) as gone. The quota is
+    the owner's, so the files of every other scope in the workspace count.
+    Holds the workspace's storage lock until ``tx`` ends, so writes racing for
+    the last free space are decided one at a time.
+
+    ``tx`` must be READ COMMITTED, so the count sees what the previous lock
+    holder committed, and must take no other advisory lock after this one.
+    """
+    if limit_bytes <= 0:
+        return
+    await tx.execute_raw(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        f"workspace-storage:{workspace_id}",
+    )
+    used = await _live_size(tx, workspace_id, replacing, replacing_scope)
+    if used + added_bytes > limit_bytes:
+        raise storage_limit_exceeded(used, limit_bytes)
+
+
+async def _live_size(
+    tx: Prisma,
+    workspace_id: str,
+    replacing: Collection[str],
+    replacing_scope: UserWorkspaceFileWhereInput,
+) -> int:
+    rows = await tx.query_raw(
+        'SELECT COALESCE(SUM("sizeBytes"), 0)::bigint AS used '
+        'FROM "UserWorkspaceFile" WHERE "workspaceId" = $1 AND NOT "isDeleted"',
+        workspace_id,
+    )
+    replaced = (
+        await tx.userworkspacefile.find_many(
+            where={
+                "workspaceId": workspace_id,
+                "isDeleted": False,
+                "path": {"in": list(replacing)},
+                **replacing_scope,
+            }
+        )
+        if replacing
+        else []
+    )
+    return max(0, int(rows[0]["used"]) - sum(f.sizeBytes for f in replaced))
+
+
+def storage_limit_exceeded(used_bytes: int, limit_bytes: int) -> ValueError:
+    """The refusal every quota check raises; callers map its prefix."""
+    return ValueError(
+        "Storage limit exceeded. "
+        f"You've used {format_bytes(used_bytes)} of your "
+        f"{format_bytes(limit_bytes)} quota. "
+        "Delete some files or upgrade your plan for more storage."
+    )
+
+
+def format_bytes(n: int) -> str:
+    """Format bytes as a human-readable string (e.g. 250 MB, 1.0 GB)."""
+    KB, MB, GB = 1024, 1024**2, 1024**3
+    if n < KB:
+        return f"{n} B"
+    if n < MB:
+        kb = round(n / KB)
+        return f"{n / MB:.1f} MB" if kb >= 1024 else f"{kb} KB"
+    if n < GB:
+        mb = round(n / MB)
+        return f"{n / GB:.1f} GB" if mb >= 1024 else f"{mb} MB"
+    return f"{n / GB:.1f} GB"
 
 
 async def get_workspace_file(
@@ -308,6 +441,21 @@ async def get_workspace_file_by_path(
     return WorkspaceFile.from_db(file) if file else None
 
 
+async def list_internal_file_ids(user_id: str, file_ids: list[str]) -> set[str]:
+    """Which of these files, in the user's own workspace, are Otto's working
+    files (``isInternal``). Soft-deleted rows still answer."""
+    if not file_ids:
+        return set()
+    rows = await UserWorkspaceFile.prisma().find_many(
+        where={
+            "id": {"in": file_ids},
+            "isInternal": True,
+            "Workspace": {"is": {"userId": user_id}},
+        }
+    )
+    return {row.id for row in rows}
+
+
 async def list_workspace_files(
     workspace_id: str,
     path_prefix: Optional[str] = None,
@@ -326,6 +474,9 @@ async def list_workspace_files(
     user_global_config: bool = False,
     allowed_path_prefixes: Optional[list[str]] = None,
     include_user_files: bool = False,
+    include_internal: bool = True,
+    created_after: Optional[datetime] = None,
+    created_before: Optional[datetime] = None,
 ) -> list[WorkspaceFile]:
     """
     List files in a workspace.
@@ -362,6 +513,13 @@ async def list_workspace_files(
         include_user_files: Widen ``allowed_path_prefixes`` with the owner's
             own files (see :func:`_scope_branches`). Ignored when the caller
             passes no prefixes, which already reaches the whole workspace.
+        include_internal: Whether to return Otto's own working files
+            (``isInternal``). Otto's tools read them, so it defaults to
+            ``True``; every list a person sees must pass ``False``.
+        created_after: Only files written at or after this instant.
+        created_before: Only files written before this instant. Both apply
+            in the query, ahead of ``limit``, so newer files cannot crowd
+            out the ones a window asks for.
 
     Returns:
         List of WorkspaceFile instances
@@ -380,6 +538,9 @@ async def list_workspace_files(
 
     if not include_deleted:
         where_clause["isDeleted"] = False
+
+    if not include_internal:
+        where_clause["isInternal"] = False
 
     if folder_id:
         where_clause["folderId"] = folder_id
@@ -413,6 +574,13 @@ async def list_workspace_files(
 
     if name_contains:
         where_clause["name"] = {"contains": name_contains, "mode": "insensitive"}
+
+    if created_after is not None and created_before is not None:
+        where_clause["createdAt"] = {"gte": created_after, "lt": created_before}
+    elif created_after is not None:
+        where_clause["createdAt"] = {"gte": created_after}
+    elif created_before is not None:
+        where_clause["createdAt"] = {"lt": created_before}
 
     if scope_branches:
         where_clause["AND"] = [{"OR": scope_branches}]
@@ -465,6 +633,7 @@ async def count_workspace_files(
     root_only: bool = False,
     allowed_path_prefixes: Optional[list[str]] = None,
     include_user_files: bool = False,
+    include_internal: bool = True,
 ) -> int:
     """
     Count files in a workspace.
@@ -478,6 +647,7 @@ async def count_workspace_files(
         root_only: See :func:`list_workspace_files`.
         allowed_path_prefixes: See :func:`list_workspace_files`.
         include_user_files: See :func:`list_workspace_files`.
+        include_internal: See :func:`list_workspace_files`.
 
     Returns:
         Number of files
@@ -496,6 +666,8 @@ async def count_workspace_files(
         )
     if not include_deleted:
         where_clause["isDeleted"] = False
+    if not include_internal:
+        where_clause["isInternal"] = False
 
     if folder_id:
         where_clause["folderId"] = folder_id
@@ -785,3 +957,15 @@ async def get_workspace_total_size(
         where.update(_workspace_scope_where(organization_id, team_id))
     files = await UserWorkspaceFile.prisma().find_many(where=where)
     return sum(f.sizeBytes for f in files)
+
+
+async def get_workspace_size_breakdown(workspace_id: str) -> tuple[int, int]:
+    """The workspace's total size and the part of it held by files the user's
+    lists leave out (``isInternal``: skill packages and Otto's working
+    files), from one scan. Internal files use the quota like any other."""
+    files = await UserWorkspaceFile.prisma().find_many(
+        where={"workspaceId": workspace_id, "isDeleted": False},
+    )
+    total = sum(f.sizeBytes for f in files)
+    internal = sum(f.sizeBytes for f in files if f.isInternal)
+    return total, internal

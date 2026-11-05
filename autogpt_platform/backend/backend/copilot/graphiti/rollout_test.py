@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from backend.api.features.orgs import rollout as org_rollout
 from backend.copilot.model import ChatSession
 from backend.copilot.prompting import get_graphiti_supplement
 from backend.copilot.sdk.tool_adapter import _build_input_schema
@@ -31,9 +32,12 @@ def _rollout_off(monkeypatch: pytest.MonkeyPatch, _enable_shared_memory_rollout)
 
 
 @pytest.mark.asyncio
-async def test_unavailable_flag_defaults_to_disabled():
+async def test_unavailable_flag_defaults_to_disabled(monkeypatch):
+    # The shared-memory gate is the organization gate; without an override
+    # or a grant it is the rollout flag.
+    monkeypatch.delenv("FORCE_FLAG_SHOW_ORG_SETTINGS")
     with patch.object(
-        rollout, "is_feature_enabled", AsyncMock(return_value=False)
+        org_rollout, "is_feature_enabled", AsyncMock(return_value=False)
     ) as flag:
         assert not await rollout.shared_memory_enabled("user-1")
         flag.assert_awaited_once_with(Flag.SHOW_ORG_SETTINGS, "user-1", default=False)
@@ -77,15 +81,9 @@ async def test_off_rejects_explicit_shared_search_and_store(tier):
     session = ChatSession.new(
         "user-1", dry_run=False, organization_id="org-1", team_id="team-1"
     )
-    with (
-        patch(
-            "backend.copilot.tools.graphiti_store.is_enabled_for_user",
-            AsyncMock(return_value=True),
-        ),
-        patch(
-            "backend.copilot.tools.graphiti_store.enqueue_episode", AsyncMock()
-        ) as enqueue,
-    ):
+    with patch(
+        "backend.copilot.tools.graphiti_store.enqueue_episode", AsyncMock()
+    ) as enqueue:
         result = await MemoryStoreTool()._execute(
             "user-1", session, name="Policy", content="A shared policy", tier=tier
         )
@@ -99,16 +97,10 @@ async def test_off_keeps_personal_store_in_personal_organization():
     session = ChatSession.new(
         "user-1", dry_run=False, organization_id="org-personal", team_id="team-personal"
     )
-    with (
-        patch(
-            "backend.copilot.tools.graphiti_store.is_enabled_for_user",
-            AsyncMock(return_value=True),
-        ),
-        patch(
-            "backend.copilot.tools.graphiti_store.enqueue_episode",
-            AsyncMock(return_value=True),
-        ) as enqueue,
-    ):
+    with patch(
+        "backend.copilot.tools.graphiti_store.enqueue_episode",
+        AsyncMock(return_value=True),
+    ) as enqueue:
         result = await MemoryStoreTool()._execute(
             "user-1", session, name="Preference", content="I prefer tea"
         )
@@ -136,7 +128,8 @@ async def test_off_rejects_shared_enqueue_and_drops_already_queued_work():
             name="Private",
             episode_body="Preference",
         )
-        assert enqueue.await_args.args[1] == "user_user-1"
+        assert enqueue.await_args.args[1]["group_id"] == "user_user-1"
+        assert enqueue.await_args.kwargs["shared_group_id"] is None
     with patch.object(ingest, "get_graphiti_client", AsyncMock()) as client:
         await ingest._process_ingestion_payload(
             "user-1",
@@ -155,13 +148,9 @@ async def test_off_rejects_shared_enqueue_and_drops_already_queued_work():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tool", [MemoryForgetSearchTool(), MemoryForgetConfirmTool()])
 async def test_off_shared_forget_does_not_offer_admin_features(tool):
-    with patch(
-        "backend.copilot.tools.graphiti_forget.is_enabled_for_user",
-        AsyncMock(return_value=True),
-    ):
-        result = await tool._execute(
-            "user-1", ChatSession.new("user-1", dry_run=False), tier="org"
-        )
+    result = await tool._execute(
+        "user-1", ChatSession.new("user-1", dry_run=False), tier="org"
+    )
     assert isinstance(result, ErrorResponse)
     assert "not enabled" in result.message
 

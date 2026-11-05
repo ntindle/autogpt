@@ -1,4 +1,5 @@
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Callable, Concatenate, ParamSpec, TypeVar, cast
 
@@ -41,12 +42,14 @@ from backend.api.features.library.triggers import (
     setup_triggered_preset,
     update_triggered_preset,
 )
+from backend.api.features.onboarding_dump import db as onboarding_dump_db
 from backend.api.features.orgs.db import (
     get_shared_memory_hold_buffer,
     get_shared_memory_org_access,
     get_user_default_team,
     list_shared_memory_team_access,
     resolve_default_tenancy,
+    resolve_member_tenancy,
 )
 from backend.api.features.search.embeddings import (
     cleanup_orphaned_embeddings,
@@ -69,13 +72,21 @@ from backend.api.features.store.db import (
 from backend.api.features.store.embeddings import backfill_missing_embeddings
 from backend.api.features.tasks import db as tasks_db
 from backend.api.features.tasks import lifecycle as tasks_lifecycle
+from backend.blocks import get_blocks
+from backend.copilot import background_task_db
 from backend.copilot import db as chat_db
 from backend.copilot.executor.utils import schedule_turn_if_live
+from backend.copilot.scheduled_chats.forget import forget_scheduled_chat
+from backend.copilot.scheduled_chats.service import record_scheduled_run
 from backend.copilot.sharing.db import link_new_execution_to_chat_share
 from backend.data import bot_analytics as bot_analytics_db
 from backend.data import bot_installs as bot_installs_db
 from backend.data import db
+from backend.data import dream_pass as dream_pass_db
+from backend.data import memory_schedule as memory_schedule_db
 from backend.data import memory_scope as memory_scope_db
+from backend.data import org_access as org_access_db
+from backend.data import org_plan as org_plan_db
 from backend.data import skill_deletion as skill_deletion_data
 from backend.data import skill_learning as skill_learning_data
 from backend.data import skill_publication as skill_publication_data
@@ -106,6 +117,7 @@ from backend.data.analytics import (
     get_marketplace_graphs_for_monitoring,
 )
 from backend.data.auth.oauth import cleanup_expired_oauth_tokens
+from backend.data.auth_ip_events import delete_expired_ip_events
 from backend.data.block import (
     get_blocks_needing_optimization,
     update_block_optimized_description,
@@ -166,11 +178,13 @@ from backend.data.graph import (
     get_graph_settings,
     get_node,
     get_store_listed_graphs,
+    is_graph_version_owner,
     validate_graph_execution_permissions,
 )
 from backend.data.human_review import (
     cancel_pending_reviews_for_execution,
     check_approval,
+    claim_approved_review,
     delete_review_by_node_exec_id,
     get_or_create_human_review,
     get_pending_reviews_for_chat_session,
@@ -179,6 +193,9 @@ from backend.data.human_review import (
     get_reviews_by_node_exec_ids,
     has_pending_reviews_for_graph_exec,
     process_all_reviews_for_execution,
+    record_gate_approval,
+    release_review_claim,
+    reopen_review,
     update_review_processed_status,
 )
 from backend.data.onboarding import increment_onboarding_runs
@@ -196,6 +213,7 @@ from backend.data.posthog_lifecycle_sync import (
     start_posthog_lifecycle_sweep,
 )
 from backend.data.pro_activation import get_usage_activation_state
+from backend.data.product_mail_audience import get_product_mail_standing
 from backend.data.push_subscription import (
     cleanup_failed_subscriptions,
     delete_push_subscription,
@@ -205,6 +223,7 @@ from backend.data.push_subscription import (
 from backend.data.stripe_reconciliation import reconcile_all_stripe_tiers
 from backend.data.subscription_trial import (
     get_subscription_trial,
+    list_trials_ending_unrenewed,
     record_subscription_trial_cost,
 )
 from backend.data.tenancy import (
@@ -250,6 +269,7 @@ from backend.data.user import (
     get_user_personal_organization_id,
     get_user_subscription_tier,
     heal_orphaned_auth_identities,
+    is_auth_user_banned,
     is_marketing_opted_out,
     release_welcome_email,
     set_user_credentials,
@@ -272,6 +292,7 @@ from backend.data.workspace_skill import (
     publish_workspace_skill_file,
     skill_root_has_room,
 )
+from backend.notifications.trial import send_trial_last_calls
 from backend.platform_linking import db as platform_linking_db
 from backend.util.service import (
     AppService,
@@ -375,6 +396,16 @@ class DatabaseManager(AppService):
             lease_database_owned = False
             try:
                 lease_database_owned = await connect_live_transaction_lease_database()
+
+                # Load the block registry before serving. The first RPC that needs a
+                # block loads it otherwise, on this event loop, and every RPC waits.
+                load_started = time.monotonic()
+                block_count = len(get_blocks())
+                logger.info(
+                    f"[{self.service_name}] Loaded {block_count} blocks in "
+                    f"{time.monotonic() - load_started:.1f}s"
+                )
+
                 logger.info(f"[{self.service_name}] ✅ Ready")
                 yield
             finally:
@@ -453,6 +484,7 @@ class DatabaseManager(AppService):
     get_graph_metadata = _(get_graph_metadata)
     get_graph_settings = _(get_graph_settings)
     get_store_listed_graphs = _(get_store_listed_graphs)
+    is_graph_version_owner = _(is_graph_version_owner)
 
     # ============ Credits ============ #
     spend_credits = _(_spend_credits, name="spend_credits")
@@ -468,11 +500,14 @@ class DatabaseManager(AppService):
     get_user_subscription_tier = _(get_user_subscription_tier)
     get_usage_activation_state = _(get_usage_activation_state)
     get_subscription_trial = _(get_subscription_trial)
+    list_trials_ending_unrenewed = _(list_trials_ending_unrenewed)
     sync_subscription_from_stripe = _(sync_subscription_from_stripe)
     record_subscription_trial_cost = _(record_subscription_trial_cost)
     # Exposed so Prisma-less workers (scheduler, copilot-executor) can build a
-    # full LaunchDarkly context — see backend/util/feature_flag.py.
+    # full flag context — see backend/util/feature_flag/__init__.py.
     get_auth_user_flag_fields = _(get_auth_user_flag_fields)
+    # Background work skips a banned owner in Prisma-less workers too.
+    is_auth_user_banned = _(is_auth_user_banned)
     # Exposed for the scheduler's auth-identity invariant monitor.
     heal_orphaned_auth_identities = _(heal_orphaned_auth_identities)
     get_user_integrations = _(get_user_integrations)
@@ -486,11 +521,13 @@ class DatabaseManager(AppService):
     get_active_user_ids_in_timerange = _(get_active_user_ids_in_timerange)
     get_user_email_by_id = _(get_user_email_by_id)
     get_user_email_verification = _(get_user_email_verification)
+    get_product_mail_standing = _(get_product_mail_standing)
     get_user_notification_preference = _(get_user_notification_preference)
 
     # ============ Human In The Loop ============ #
     cancel_pending_reviews_for_execution = _(cancel_pending_reviews_for_execution)
     check_approval = _(check_approval)
+    claim_approved_review = _(claim_approved_review)
     delete_review_by_node_exec_id = _(delete_review_by_node_exec_id)
     get_or_create_human_review = _(get_or_create_human_review)
     get_pending_reviews_for_execution = _(get_pending_reviews_for_execution)
@@ -499,6 +536,9 @@ class DatabaseManager(AppService):
     get_reviews_by_node_exec_ids = _(get_reviews_by_node_exec_ids)
     has_pending_reviews_for_graph_exec = _(has_pending_reviews_for_graph_exec)
     process_all_reviews_for_execution = _(process_all_reviews_for_execution)
+    record_gate_approval = _(record_gate_approval)
+    release_review_claim = _(release_review_claim)
+    reopen_review = _(reopen_review)
     update_review_processed_status = _(update_review_processed_status)
 
     # ============ Library ============ #
@@ -537,9 +577,15 @@ class DatabaseManager(AppService):
 
     # ============ Onboarding ============ #
     increment_onboarding_runs = _(increment_onboarding_runs)
+    clear_brain_dump_audio_paths = _(
+        onboarding_dump_db.clear_audio_paths, name="clear_brain_dump_audio_paths"
+    )
 
     # ============ OAuth ============ #
     cleanup_expired_oauth_tokens = _(cleanup_expired_oauth_tokens)
+
+    # ============ Sign-in IP log ============ #
+    delete_expired_ip_events = _(delete_expired_ip_events)
 
     # ============ Store ============ #
     get_store_agents = _(get_store_agents)
@@ -643,6 +689,7 @@ class DatabaseManager(AppService):
     reconcile_stripe_tier_for_user = _(reconcile_stripe_tier_for_user)
     start_posthog_lifecycle_sweep = _(start_posthog_lifecycle_sweep)
     request_posthog_lifecycle_sync = _(request_posthog_lifecycle_sync)
+    send_trial_last_calls = _(send_trial_last_calls)
 
     # ============ Platform Linking ============ #
     # ============ Orgs ============ #
@@ -651,6 +698,10 @@ class DatabaseManager(AppService):
         memory_scope_db.get_personal_memory_organization
     )
     register_memory_scope = _(memory_scope_db.register_memory_scope)
+    query_org_access = _(org_access_db.query_org_access)
+    query_own_org_access = _(org_access_db.query_own_org_access)
+    query_org_plan_snapshot = _(org_plan_db.query_org_plan_snapshot)
+    query_active_membership = _(org_plan_db.query_active_membership)
     list_memory_scopes = _(memory_scope_db.list_memory_scopes)
     resolve_default_tenancy = _(resolve_default_tenancy)
     has_live_tenancy = _(has_live_tenancy)
@@ -679,6 +730,7 @@ class DatabaseManager(AppService):
     get_shared_memory_org_access = _(get_shared_memory_org_access)
     list_shared_memory_team_access = _(list_shared_memory_team_access)
     get_shared_memory_hold_buffer = _(get_shared_memory_hold_buffer)
+    resolve_member_tenancy = _(resolve_member_tenancy)
 
     find_server_link_owner = _(platform_linking_db.find_server_link_owner)
     find_server_link_owner_for_sender = _(
@@ -713,6 +765,20 @@ class DatabaseManager(AppService):
     is_install_revoked = _(bot_installs_db.is_install_revoked)
     upsert_bot_install = _(bot_installs_db.upsert_bot_install)
     revoke_bot_install = _(bot_installs_db.revoke_bot_install)
+
+    # ============ Memory Scope Schedules ============ #
+    # Exposed so the Prisma-less scheduler (cron bodies) and copilot-executor
+    # (lazy registration on the first memory write) reach the registry via
+    # db_accessors.memory_schedule_db().
+    get_scope_schedule = _(memory_schedule_db.get_scope_schedule)
+    claim_scope_schedule = _(memory_schedule_db.claim_scope_schedule)
+    record_scope_jobs = _(memory_schedule_db.record_scope_jobs)
+    set_scope_state = _(memory_schedule_db.set_scope_state)
+    forget_scope_job = _(memory_schedule_db.forget_scope_job)
+    record_scope_run = _(memory_schedule_db.record_scope_run)
+    list_user_scope_schedules = _(memory_schedule_db.list_user_scope_schedules)
+    list_scope_schedules = _(memory_schedule_db.list_scope_schedules)
+    existing_user_ids = _(memory_schedule_db.existing_user_ids)
 
     # ============ Bot Analytics ============ #
     record_bot_event = _(bot_analytics_db.record_bot_event)
@@ -758,6 +824,8 @@ class DatabaseManager(AppService):
     list_experts = _(experts_db.list_experts)
     resolve_private_expert_tenancy = _(experts_db.resolve_private_expert_tenancy)
     get_autopilot_mode = _(experts_db.get_autopilot_mode)
+    list_expert_identities = _(experts_db.list_expert_identities)
+    owns_active_expert = _(experts_db.owns_active_expert)
     # The scheduler's fire path reads the routine behind a copilot-turn job to
     # find its durable thread and whether the owner granted it anything.
     create_routine = _(experts_db.create_routine)
@@ -849,6 +917,7 @@ class DatabaseManager(AppService):
     # Hire / raise from the copilot chat tools, plus the counts their
     # preview step uses to refuse a change that could never land.
     list_templates = _(experts_db.list_templates)
+    get_template = _(experts_db.get_template)
     with_bundled_skills = _(experts_db.with_bundled_skills)
     hire_expert = _(experts_db.hire_expert)
     expert_setup_status = _(experts_db.expert_setup_status)
@@ -866,6 +935,30 @@ class DatabaseManager(AppService):
     find_version_by_hash = _(marketplace_skill_db.find_version_by_hash)
 
     # ============ CoPilot Chat Sessions ============ #
+    get_background_task = _(background_task_db.get_background_task)
+    get_session_background_state = _(background_task_db.get_session_background_state)
+    create_background_task = _(background_task_db.create_background_task)
+    claim_background_turn = _(background_task_db.claim_background_turn)
+    finish_background_turn = _(background_task_db.finish_background_turn)
+    complete_background_task = _(background_task_db.complete_background_task)
+    list_background_tasks = _(background_task_db.list_background_tasks)
+    enqueue_background_followup = _(background_task_db.enqueue_background_followup)
+    suppress_background_followup = _(background_task_db.suppress_background_followup)
+    release_deleted_background_turn = _(
+        background_task_db.release_deleted_background_turn
+    )
+    release_abandoned_background_turn = _(
+        background_task_db.release_abandoned_background_turn
+    )
+    background_child_result = _(background_task_db.background_child_result)
+    has_open_handoffs = _(background_task_db.has_open_handoffs)
+    cancel_background_tasks = _(background_task_db.cancel_background_tasks)
+    cancel_queued_background_followup = _(
+        background_task_db.cancel_queued_background_followup
+    )
+    cancel_orphaned_background_tasks = _(
+        background_task_db.cancel_orphaned_background_tasks
+    )
     # NOTE: no eager-load `get_chat_session` here — callers go through
     # `get_chat_messages_paginated` (with `limit=MAX_LOADED_CHAT_MESSAGES`) so
     # tool-pair boundary expansion + visibility guarantees apply uniformly
@@ -888,6 +981,8 @@ class DatabaseManager(AppService):
     get_next_sequence = _(chat_db.get_next_sequence)
     update_tool_message_content = _(chat_db.update_tool_message_content)
     update_message_content_by_sequence = _(chat_db.update_message_content_by_sequence)
+    add_dream_narrative = _(chat_db.add_dream_narrative)
+    blank_dream_narratives = _(chat_db.blank_dream_narratives)
     update_chat_message_stamps = _(chat_db.update_chat_message_stamps)
     update_chat_message_tool_calls = _(chat_db.update_chat_message_tool_calls)
     update_chat_session_title = _(chat_db.update_chat_session_title)
@@ -901,13 +996,35 @@ class DatabaseManager(AppService):
     list_chat_sessions_by_status = _(chat_db.list_chat_sessions_by_status)
     update_chat_session_status = _(chat_db.update_chat_session_status)
     admit_chat_session_turn = _(chat_db.admit_chat_session_turn)
+    record_chat_session_turn = _(chat_db.record_chat_session_turn)
     get_chat_session_status = _(chat_db.get_chat_session_status)
     get_latest_user_message_in_session = _(chat_db.get_latest_user_message_in_session)
+
+    # ============ Dream Passes ============ #
+    # The scheduler (sync passes, the reaper, retention) and the batch
+    # executor (batch callbacks) keep no Prisma connection; the dream store
+    # reaches each pass's record through these via db_accessors.dream_db().
+    create_dream_pass = _(dream_pass_db.create_dream_pass)
+    update_dream_pass = _(dream_pass_db.update_dream_pass)
+    get_dream_pass = _(dream_pass_db.get_dream_pass)
+    get_dream_pass_for_user = _(dream_pass_db.get_dream_pass_for_user)
+    list_open_dream_passes = _(dream_pass_db.list_open_dream_passes)
+    list_dream_passes = _(dream_pass_db.list_dream_passes)
+    list_expired_dream_passes = _(dream_pass_db.list_expired_dream_passes)
+    list_dream_pass_cleanups = _(dream_pass_db.list_dream_pass_cleanups)
+    delete_old_dream_passes = _(dream_pass_db.delete_old_dream_passes)
+    erase_dream_passes = _(dream_pass_db.erase_dream_passes)
 
     # ============ Morning Briefing ============ #
     # Exposed so the Prisma-less scheduler process can compose, store and
     # post a briefing via db_accessors / the DatabaseManager RPC.
     append_plain_session_message = _(chat_db.append_plain_session_message)
+    # And to tell a scheduled chat why its run was skipped, in that chat.
+    append_session_message = _(chat_db.append_session_message)
+    # The copilot executor counts each scheduled run toward a failure streak,
+    # and drops a follow-up's streak when Otto deletes its schedule.
+    record_scheduled_run = _(record_scheduled_run)
+    forget_scheduled_chat = _(forget_scheduled_chat)
     create_briefing = _(create_briefing)
     get_briefing_for_date = _(get_briefing_for_date)
     get_latest_briefings = _(get_latest_briefings)
@@ -957,6 +1074,7 @@ class DatabaseManagerClient(AppServiceClient):
 
     # Graphs
     get_graph_metadata = _(d.get_graph_metadata)
+    get_node = _(d.get_node)
 
     # Credits
     spend_credits = _(d.spend_credits)
@@ -991,6 +1109,7 @@ class DatabaseManagerClient(AppServiceClient):
     get_shared_memory_org_access = _(d.get_shared_memory_org_access)
     list_shared_memory_team_access = _(d.list_shared_memory_team_access)
     get_shared_memory_hold_buffer = _(d.get_shared_memory_hold_buffer)
+    resolve_member_tenancy = _(d.resolve_member_tenancy)
 
     # Block error monitoring
     get_block_error_stats = _(d.get_block_error_stats)
@@ -1119,6 +1238,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_graph = d.get_graph
     get_graph_metadata = d.get_graph_metadata
     get_graph_settings = d.get_graph_settings
+    is_graph_version_owner = d.is_graph_version_owner
     get_node = d.get_node
     get_store_listed_graphs = d.get_store_listed_graphs
 
@@ -1128,9 +1248,11 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_user_subscription_tier = d.get_user_subscription_tier
     get_usage_activation_state = d.get_usage_activation_state
     get_subscription_trial = d.get_subscription_trial
+    list_trials_ending_unrenewed = d.list_trials_ending_unrenewed
     sync_subscription_from_stripe = d.sync_subscription_from_stripe
     record_subscription_trial_cost = d.record_subscription_trial_cost
     get_auth_user_flag_fields = d.get_auth_user_flag_fields
+    is_auth_user_banned = d.is_auth_user_banned
     heal_orphaned_auth_identities = d.heal_orphaned_auth_identities
     get_user_integrations = d.get_user_integrations
     update_user_integrations = d.update_user_integrations
@@ -1142,6 +1264,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     # ============ Human In The Loop ============ #
     cancel_pending_reviews_for_execution = d.cancel_pending_reviews_for_execution
     check_approval = d.check_approval
+    claim_approved_review = d.claim_approved_review
     delete_review_by_node_exec_id = d.delete_review_by_node_exec_id
     get_or_create_human_review = d.get_or_create_human_review
     get_pending_reviews_for_execution = d.get_pending_reviews_for_execution
@@ -1149,12 +1272,16 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_pending_reviews_for_user = d.get_pending_reviews_for_user
     get_reviews_by_node_exec_ids = d.get_reviews_by_node_exec_ids
     process_all_reviews_for_execution = d.process_all_reviews_for_execution
+    record_gate_approval = d.record_gate_approval
+    release_review_claim = d.release_review_claim
+    reopen_review = d.reopen_review
     update_review_processed_status = d.update_review_processed_status
 
     # ============ User Comms ============ #
     get_active_user_ids_in_timerange = d.get_active_user_ids_in_timerange
     get_user_email_by_id = d.get_user_email_by_id
     get_user_email_verification = d.get_user_email_verification
+    get_product_mail_standing = d.get_product_mail_standing
     get_user_notification_preference = d.get_user_notification_preference
 
     # ============ Store notifications ============ #
@@ -1200,6 +1327,9 @@ class DatabaseManagerAsyncClient(AppServiceClient):
 
     # ============ Morning Briefing ============ #
     append_plain_session_message = d.append_plain_session_message
+    append_session_message = d.append_session_message
+    record_scheduled_run = d.record_scheduled_run
+    forget_scheduled_chat = d.forget_scheduled_chat
     create_briefing = d.create_briefing
     get_briefing_for_date = d.get_briefing_for_date
     get_latest_briefings = d.get_latest_briefings
@@ -1242,9 +1372,13 @@ class DatabaseManagerAsyncClient(AppServiceClient):
 
     # ============ Onboarding ============ #
     increment_onboarding_runs = d.increment_onboarding_runs
+    clear_brain_dump_audio_paths = d.clear_brain_dump_audio_paths
 
     # ============ OAuth ============ #
     cleanup_expired_oauth_tokens = d.cleanup_expired_oauth_tokens
+
+    # ============ Sign-in IP log ============ #
+    delete_expired_ip_events = d.delete_expired_ip_events
 
     # ============ Store ============ #
     get_store_agents = d.get_store_agents
@@ -1316,6 +1450,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     reconcile_stripe_tier_for_user = d.reconcile_stripe_tier_for_user
     start_posthog_lifecycle_sweep = d.start_posthog_lifecycle_sweep
     request_posthog_lifecycle_sync = d.request_posthog_lifecycle_sync
+    send_trial_last_calls = d.send_trial_last_calls
 
     # ============ Platform Linking ============ #
     find_server_link_owner = d.find_server_link_owner
@@ -1323,6 +1458,10 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_user_default_team = d.get_user_default_team
     get_personal_memory_organization = d.get_personal_memory_organization
     register_memory_scope = d.register_memory_scope
+    query_org_access = d.query_org_access
+    query_own_org_access = d.query_own_org_access
+    query_org_plan_snapshot = d.query_org_plan_snapshot
+    query_active_membership = d.query_active_membership
     list_memory_scopes = d.list_memory_scopes
     resolve_default_tenancy = d.resolve_default_tenancy
     has_live_tenancy = d.has_live_tenancy
@@ -1351,6 +1490,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_shared_memory_org_access = d.get_shared_memory_org_access
     list_shared_memory_team_access = d.list_shared_memory_team_access
     get_shared_memory_hold_buffer = d.get_shared_memory_hold_buffer
+    resolve_member_tenancy = d.resolve_member_tenancy
     find_user_link_owner = d.find_user_link_owner
     acquire_platform_link_lease = d.acquire_platform_link_lease
     release_platform_link_lease = d.release_platform_link_lease
@@ -1377,6 +1517,17 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     upsert_bot_install = d.upsert_bot_install
     revoke_bot_install = d.revoke_bot_install
 
+    # ============ Memory Scope Schedules ============ #
+    get_scope_schedule = d.get_scope_schedule
+    claim_scope_schedule = d.claim_scope_schedule
+    record_scope_jobs = d.record_scope_jobs
+    set_scope_state = d.set_scope_state
+    forget_scope_job = d.forget_scope_job
+    record_scope_run = d.record_scope_run
+    list_user_scope_schedules = d.list_user_scope_schedules
+    list_scope_schedules = d.list_scope_schedules
+    existing_user_ids = d.existing_user_ids
+
     # ============ Bot Analytics ============ #
     record_bot_event = d.record_bot_event
     record_guild_joined = d.record_guild_joined
@@ -1390,6 +1541,8 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     list_experts = d.list_experts
     resolve_private_expert_tenancy = d.resolve_private_expert_tenancy
     get_autopilot_mode = d.get_autopilot_mode
+    list_expert_identities = d.list_expert_identities
+    owns_active_expert = d.owns_active_expert
     get_routine = d.get_routine
     record_routine_thread = d.record_routine_thread
     record_routine_fired = d.record_routine_fired
@@ -1470,6 +1623,7 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     revoke_expert_credential = d.revoke_expert_credential
     list_expert_credentials = d.list_expert_credentials
     list_templates = d.list_templates
+    get_template = d.get_template
     with_bundled_skills = d.with_bundled_skills
     hire_expert = d.hire_expert
     expert_setup_status = d.expert_setup_status
@@ -1480,6 +1634,22 @@ class DatabaseManagerAsyncClient(AppServiceClient):
 
     # ============ CoPilot Chat Sessions ============ #
     get_chat_session_metadata = d.get_chat_session_metadata
+    get_background_task = d.get_background_task
+    get_session_background_state = d.get_session_background_state
+    create_background_task = d.create_background_task
+    claim_background_turn = d.claim_background_turn
+    finish_background_turn = d.finish_background_turn
+    complete_background_task = d.complete_background_task
+    list_background_tasks = d.list_background_tasks
+    enqueue_background_followup = d.enqueue_background_followup
+    suppress_background_followup = d.suppress_background_followup
+    release_deleted_background_turn = d.release_deleted_background_turn
+    release_abandoned_background_turn = d.release_abandoned_background_turn
+    background_child_result = d.background_child_result
+    has_open_handoffs = d.has_open_handoffs
+    cancel_background_tasks = d.cancel_background_tasks
+    cancel_queued_background_followup = d.cancel_queued_background_followup
+    cancel_orphaned_background_tasks = d.cancel_orphaned_background_tasks
     get_chat_messages_paginated = d.get_chat_messages_paginated
     create_chat_session = d.create_chat_session
     claim_chat_session = d.claim_chat_session
@@ -1498,6 +1668,8 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     get_next_sequence = d.get_next_sequence
     update_tool_message_content = d.update_tool_message_content
     update_message_content_by_sequence = d.update_message_content_by_sequence
+    add_dream_narrative = d.add_dream_narrative
+    blank_dream_narratives = d.blank_dream_narratives
     update_chat_message_stamps = d.update_chat_message_stamps
     update_chat_message_tool_calls = d.update_chat_message_tool_calls
     update_chat_session_title = d.update_chat_session_title
@@ -1509,6 +1681,19 @@ class DatabaseManagerAsyncClient(AppServiceClient):
     list_chat_sessions_by_status = d.list_chat_sessions_by_status
     update_chat_session_status = d.update_chat_session_status
     admit_chat_session_turn = d.admit_chat_session_turn
+    record_chat_session_turn = d.record_chat_session_turn
     get_chat_session_status = d.get_chat_session_status
     get_latest_user_message_in_session = d.get_latest_user_message_in_session
     add_chat_message = d.add_chat_message
+
+    # ============ Dream Passes ============ #
+    create_dream_pass = d.create_dream_pass
+    update_dream_pass = d.update_dream_pass
+    get_dream_pass = d.get_dream_pass
+    get_dream_pass_for_user = d.get_dream_pass_for_user
+    list_open_dream_passes = d.list_open_dream_passes
+    list_dream_passes = d.list_dream_passes
+    list_expired_dream_passes = d.list_expired_dream_passes
+    list_dream_pass_cleanups = d.list_dream_pass_cleanups
+    delete_old_dream_passes = d.delete_old_dream_passes
+    erase_dream_passes = d.erase_dream_passes

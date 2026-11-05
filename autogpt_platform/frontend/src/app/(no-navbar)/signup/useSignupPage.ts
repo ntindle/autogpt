@@ -1,18 +1,23 @@
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useCaptureMarketingPrompt } from "@/hooks/useCaptureMarketingPrompt";
-import { sanitizeAuthNext } from "@/lib/auth-redirect";
+import {
+  getAuthDeepLink,
+  sanitizeAuthNext,
+  withAuthTracking,
+} from "@/lib/auth-redirect";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
-import { isTeamEmail } from "@/lib/auth/team-email";
 import { setMarketingOptOutFlag } from "@/services/analytics/marketing-opt-out-cookie";
 import { trackSignupMarketingOptOut } from "@/services/analytics/signup-analytics";
 import { environment } from "@/services/environment";
 import { LoginProvider, signupFormSchema } from "@/types/auth";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import z from "zod";
 import { signup as signupAction } from "./actions";
+import { isTeamEmail } from "@/lib/auth/team-email";
+import { clearImpersonationEverywhere } from "@/lib/impersonation";
 
 export function useSignupPage(allowTeamPassword: boolean) {
   useCaptureMarketingPrompt();
@@ -31,10 +36,24 @@ export function useSignupPage(allowTeamPassword: boolean) {
     null,
   );
   const isCloudEnv = environment.isCloud();
+  const loadingResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMounted = useRef(false);
 
   // Same-origin redirect target; off-site values are dropped so a crafted
   // `/signup?next=https://phishing.site` cannot redirect users elsewhere.
-  const nextUrl = sanitizeAuthNext(searchParams.get("next"));
+  const rawNext = searchParams.get("next");
+  const nextUrl = getAuthDeepLink(rawNext);
+  // Round trips (Google, the verification email) carry the whole safe `next`;
+  // /auth/callback decides from it, tracking params included.
+  const safeNext = sanitizeAuthNext(rawNext);
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      if (loadingResetTimer.current) clearTimeout(loadingResetTimer.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isUserLoading) {
@@ -77,11 +96,13 @@ export function useSignupPage(allowTeamPassword: boolean) {
   async function handleProviderSignup(provider: LoginProvider) {
     setIsGoogleLoading(true);
     setIsSigningUp(true);
+    // Leftover impersonation (expired admin session, pre-fix cookie) would 403 a non-admin.
+    clearImpersonationEverywhere();
 
     try {
       // Include next URL in OAuth flow if present
-      const callbackUrl = nextUrl
-        ? `/auth/callback?next=${encodeURIComponent(nextUrl)}`
+      const callbackUrl = safeNext
+        ? `/auth/callback?next=${encodeURIComponent(safeNext)}`
         : `/auth/callback`;
       const fullCallbackUrl = `${window.location.origin}${callbackUrl}`;
 
@@ -137,6 +158,7 @@ export function useSignupPage(allowTeamPassword: boolean) {
     }
 
     setIsSigningUp(true);
+    clearImpersonationEverywhere();
 
     try {
       const result = await signupAction(
@@ -144,7 +166,7 @@ export function useSignupPage(allowTeamPassword: boolean) {
         data.password,
         data.confirmPassword,
         data.marketingOptOut,
-        nextUrl,
+        safeNext,
       );
 
       if (!result.success) {
@@ -178,7 +200,8 @@ export function useSignupPage(allowTeamPassword: boolean) {
       }
 
       // Prefer the URL's next parameter, then result.next (for onboarding), then default
-      const redirectTo = nextUrl || result.next || "/";
+      const redirectTo =
+        nextUrl || withAuthTracking(result.next || "/", rawNext);
       router.replace(redirectTo);
     } catch (error) {
       setIsLoading(false);
@@ -191,9 +214,13 @@ export function useSignupPage(allowTeamPassword: boolean) {
         variant: "destructive",
       });
     } finally {
-      setTimeout(() => {
-        setIsLoading(false);
-      }, 3000);
+      if (loadingResetTimer.current) clearTimeout(loadingResetTimer.current);
+      // A signup that settles after unmount must not leave a timer behind.
+      if (isMounted.current) {
+        loadingResetTimer.current = setTimeout(() => {
+          setIsLoading(false);
+        }, 3000);
+      }
     }
   }
 
@@ -205,7 +232,7 @@ export function useSignupPage(allowTeamPassword: boolean) {
   return {
     form,
     feedback,
-    nextUrl,
+    nextUrl: safeNext,
     verificationEmail,
     isLoggedIn: !!user,
     hasInitializedAuth,

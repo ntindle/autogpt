@@ -17,7 +17,10 @@ import {
 } from "../../tools/clarifying-questions";
 import { QuestionMultiAnswerField } from "../ChainActionCard/QuestionMultiAnswerField";
 import { CopilotChatActionsContext } from "../CopilotChatActionsProvider/useCopilotChatActions";
-import { ChainActionsContext } from "../ToolChain/chainActions";
+import {
+  ChainActionsContext,
+  type ChainActionEntry,
+} from "../ToolChain/chainActions";
 import {
   buildAnswersMessage,
   buildQuestionsEntry,
@@ -31,6 +34,7 @@ import {
   type ClarifyingQuestion,
 } from "../../tools/clarifying-questions";
 import { isKey } from "@/lib/keyboard";
+import { Text } from "@/components/atoms/Text/Text";
 
 interface FormProps {
   dockId: string;
@@ -71,6 +75,7 @@ export function QuestionAnswerForm({
   const [renderedDockId, setRenderedDockId] = useState<string | null>(null);
   const inputRefs = useRef<Record<string, { focus: () => void } | null>>({});
   const formId = useId();
+  const owner = useId();
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -92,12 +97,15 @@ export function QuestionAnswerForm({
   // Proceed step — register readiness + message instead.
   useEffect(() => {
     if (!chainActions || dismissed) return;
-    chainActions.register(
+    function register(entry: ChainActionEntry) {
+      chainActions?.register(owner, entry);
+    }
+    register(
       buildQuestionsEntry({
         dockId,
         questions,
         answers,
-        register: chainActions.register,
+        register,
         setAnswers,
         dismiss: () => setDismissedId(dockId),
         isPending,
@@ -109,11 +117,12 @@ export function QuestionAnswerForm({
           : undefined,
       }),
     );
-    return () => chainActions.unregister(dockId);
+    return () => chainActions.unregister(owner);
   }, [
     chainActions,
     dismissed,
     dockId,
+    owner,
     answers,
     questions,
     isPending,
@@ -162,15 +171,18 @@ export function QuestionAnswerForm({
   }
 
   return (
-    <div className="animate-fade-up rounded-2xl bg-white p-3 shadow-[0_16px_40px_-24px_rgba(0,0,0,0.25)] ring-1 ring-zinc-200/70 motion-reduce:animate-none">
+    <div
+      // oxlint-disable-next-line design-system/no-arbitrary-values -- the floating card lift shadow; no shadow token has it
+      className="animate-fade-up rounded-2xl bg-surface p-3 shadow-[0_16px_40px_-24px_rgba(0,0,0,0.25)] ring-1 ring-border-base/70 motion-reduce:animate-none"
+    >
       <div className="flex items-center justify-between px-0.5 pb-2">
-        <span className="text-xs font-medium text-zinc-500">
+        <Text variant="small-medium-tight" as="span" tone="muted">
           {questions.length === 1 ? "Quick question" : "Quick questions"}
-        </span>
+        </Text>
         <button
           type="button"
           onClick={() => setDismissedId(dockId)}
-          className="rounded-full px-2 py-0.5 text-xs text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600"
+          className="rounded-full px-2 py-0.5 text-caption text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground-secondary"
         >
           Skip
         </button>
@@ -180,7 +192,7 @@ export function QuestionAnswerForm({
           <div key={q.keyword} className="flex flex-col gap-1">
             <span
               id={`${formId}-${q.keyword}`}
-              className="text-[13px] text-zinc-700"
+              className="text-body-sm leading-inherit text-foreground-body"
             >
               {q.question}
             </span>
@@ -221,7 +233,7 @@ export function QuestionAnswerForm({
                   placeholder={
                     q.example ? `e.g. ${q.example}` : "Type your answer"
                   }
-                  className="rounded-xl bg-zinc-50 px-2.5 py-1.5 text-[13px] text-zinc-800 ring-1 ring-zinc-200/70 transition-shadow placeholder:text-zinc-400 focus:outline-none focus:ring-zinc-400"
+                  className="rounded-xl bg-surface-muted px-2.5 py-1.5 text-body-sm leading-inherit text-foreground-emphasis ring-1 ring-border-base/70 transition-shadow placeholder:text-foreground-subtle focus:ring-foreground-subtle focus:outline-none"
                 />
               )
             ) : null}
@@ -229,7 +241,7 @@ export function QuestionAnswerForm({
         ))}
       </div>
       {error && (
-        <p role="alert" className="mt-2 text-sm text-destructive">
+        <p role="alert" className="text-sm text-destructive mt-2">
           {error}
         </p>
       )}
@@ -240,7 +252,7 @@ export function QuestionAnswerForm({
             onClick={handleSubmit}
             disabled={submitting}
             aria-disabled={!allAnswered || submitting}
-            className="rounded-full bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-white transition-opacity aria-disabled:opacity-40 hover:bg-zinc-700"
+            className="rounded-full bg-action-hover px-3.5 py-1.5 text-caption font-medium text-action-foreground transition-opacity hover:bg-action aria-disabled:opacity-40"
           >
             {submitting
               ? "Submitting…"

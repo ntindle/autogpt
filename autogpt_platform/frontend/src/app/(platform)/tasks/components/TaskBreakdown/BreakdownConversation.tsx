@@ -28,7 +28,7 @@ export function BreakdownConversation({
           event.preventDefault();
           void send();
         }}
-        className="flex items-end gap-2 rounded-2xl border border-border bg-background p-2.5 focus-within:ring-1 focus-within:ring-ring"
+        className="focus-within:ring-ring flex items-end gap-2 rounded-2xl border border-border bg-background p-2.5 focus-within:ring-1"
       >
         <textarea
           aria-label="Refine the breakdown"
@@ -43,13 +43,13 @@ export function BreakdownConversation({
               void send();
             }
           }}
-          className="min-w-0 flex-1 resize-y bg-transparent p-1 text-sm placeholder:text-muted-foreground focus:outline-none"
+          className="text-sm min-w-0 flex-1 resize-y bg-transparent p-1 placeholder:text-muted-foreground focus:outline-none"
         />
         <button
           type="submit"
           disabled={disabled || pending || !draft.trim()}
           aria-label="Send refinement"
-          className="flex size-8 shrink-0 items-center justify-center rounded-full bg-violet-600 text-white hover:bg-violet-700 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+          className="bg-violet-600 text-white hover:bg-violet-700 focus-visible:ring-ring flex size-8 shrink-0 items-center justify-center rounded-full focus-visible:ring-2 disabled:opacity-40"
         >
           {pending ? (
             <Spinner size={17} className="animate-spin" />
@@ -66,7 +66,7 @@ export function BreakdownConversation({
               type="button"
               disabled={pending || disabled || prompt.length > remaining}
               onClick={() => setDraft(prompt)}
-              className="rounded-full border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted disabled:opacity-40"
+              className="text-xs rounded-full border border-border px-2 py-1 text-muted-foreground hover:bg-muted disabled:opacity-40"
             >
               {prompt}
             </button>

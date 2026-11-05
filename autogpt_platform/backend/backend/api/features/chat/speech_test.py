@@ -9,10 +9,13 @@ import pytest
 import pytest_mock
 
 from backend.api.features.chat import speech as speech_routes
-from backend.api.rest_api import handle_internal_http_error
+from backend.api.utils.exceptions import add_exception_handlers
 from backend.copilot import speech as speech_module
 from backend.copilot.rate_limit import RateLimitExceeded, RateLimitUnavailable
+from backend.copilot.trial_cost_context import get_trial_cost_context
 from backend.copilot.usage_activation_fixtures import usage_snapshot
+from backend.data import entitlement
+from backend.data.org_plan import OrgPlanSnapshot
 from backend.util.exceptions import UserPaywalledError
 
 _usage_snapshot = usage_snapshot
@@ -21,7 +24,7 @@ app = fastapi.FastAPI()
 app.include_router(speech_routes.router)
 # The route lets ValueError through to the app's global handler; without this
 # the test app would 500 where production 400s.
-app.add_exception_handler(ValueError, handle_internal_http_error(400))
+add_exception_handlers(app)
 client = fastapi.testclient.TestClient(app)
 
 AUDIO = b"ID3-fake-mp3-bytes"
@@ -48,6 +51,32 @@ def test_speech_meters_the_synthesis_against_the_users_plan(
     )
     assert kwargs["extra_metadata"]["characters"] == len("Two sentences here.")
     assert kwargs["extra_metadata"]["surface"] == "voice_mode"
+
+
+def test_speech_in_a_team_org_counts_in_that_orgs_counters(
+    record_usage: AsyncMock, mocker: pytest_mock.MockerFixture, test_user_id: str
+) -> None:
+    """The route checks the allowance in the request's organization, so the
+    synthesis is recorded there too: in a team organization, the caller's own
+    counters there and not their personal trial."""
+    mocker.patch.object(
+        entitlement,
+        "get_org_plan_snapshot",
+        new=AsyncMock(
+            side_effect=lambda org_id: OrgPlanSnapshot(
+                org_id=org_id, exists=True, is_personal=False, is_live=True
+            )
+        ),
+    )
+    attributions = []
+    record_usage.side_effect = lambda **_kwargs: attributions.append(
+        get_trial_cost_context(test_user_id)
+    )
+
+    response = client.post("/speech", json={"text": "hello"})
+
+    assert response.status_code == 200
+    assert [(a.team_org_id, a.trial_id) for a in attributions] == [("test-org", None)]
 
 
 def test_speech_charges_per_character(record_usage: AsyncMock) -> None:
@@ -78,13 +107,13 @@ def test_speech_refuses_a_paywalled_caller_before_spending(
 ) -> None:
     mocker.patch.object(
         speech_routes,
-        "enforce_payment_paywall",
+        "enforce_entitlement",
         new=AsyncMock(side_effect=UserPaywalledError("no active subscription")),
     )
 
-    with pytest.raises(UserPaywalledError):
-        client.post("/speech", json={"text": "hello"})
+    response = client.post("/speech", json={"text": "hello"})
 
+    assert response.status_code == 402
     speech_module._speech_client.assert_not_called()
     record_usage.assert_not_awaited()
 
@@ -230,7 +259,7 @@ def setup_app_auth(mock_jwt_user, mocker: pytest_mock.MockerFixture):
         speech_routes, "is_feature_enabled", new=AsyncMock(return_value=True)
     )
     mocker.patch.object(
-        speech_routes, "enforce_payment_paywall", new=AsyncMock(return_value=None)
+        speech_routes, "enforce_entitlement", new=AsyncMock(return_value=None)
     )
     mocker.patch.object(
         speech_routes,
@@ -239,6 +268,17 @@ def setup_app_auth(mock_jwt_user, mocker: pytest_mock.MockerFixture):
     )
     mocker.patch.object(
         speech_routes, "check_rate_limit", new=AsyncMock(return_value=None)
+    )
+    # The request's organization is the caller's personal one unless a test
+    # says otherwise: its kind decides which counters the speech counts in.
+    mocker.patch.object(
+        entitlement,
+        "get_org_plan_snapshot",
+        new=AsyncMock(
+            side_effect=lambda org_id: OrgPlanSnapshot(
+                org_id=org_id, exists=True, is_personal=True, is_live=True
+            )
+        ),
     )
     yield
     app.dependency_overrides.clear()

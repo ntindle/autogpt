@@ -5,11 +5,7 @@ from autogpt_libs.auth.models import RequestContext
 from fastapi import HTTPException
 
 from backend.api.features.orgs import invitation_routes, rollout, routes
-from backend.api.features.orgs.model import (
-    AddMemberRequest,
-    CreateInvitationRequest,
-    CreateOrgRequest,
-)
+from backend.api.features.orgs.model import CreateInvitationRequest, CreateOrgRequest
 from backend.util.feature_flag import Flag
 
 
@@ -29,7 +25,7 @@ def owner_context():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "operation", ["create", "convert", "add_member", "invite", "resend", "accept"]
+    "operation", ["create", "convert", "invite", "resend", "accept"]
 )
 async def test_disabled_rollout_blocks_collaboration_before_database_access(
     operation, monkeypatch, mocker
@@ -47,9 +43,6 @@ async def test_disabled_rollout_blocks_collaboration_before_database_access(
     elif operation == "convert":
         mocker.patch.object(routes.org_db, "convert_personal_org", blocked)
         call = routes.convert_org("org", ctx)
-    elif operation == "add_member":
-        mocker.patch.object(routes.org_db, "add_org_member", blocked)
-        call = routes.add_member("org", AddMemberRequest(user_id="recipient"), ctx)
     elif operation == "invite":
         mocker.patch.object(invitation_routes, "_create_invitation_locked", blocked)
         call = invitation_routes.create_invitation(
@@ -106,21 +99,6 @@ async def test_rollout_uses_existing_literal_flag_key_and_defaults_closed(mocker
 
 
 @pytest.mark.asyncio
-async def test_direct_add_requires_recipient_to_be_in_the_rollout(mocker):
-    check = mocker.patch.object(
-        rollout, "is_feature_enabled", AsyncMock(side_effect=[True, False])
-    )
-    add = mocker.patch.object(routes.org_db, "add_org_member", AsyncMock())
-    with pytest.raises(HTTPException) as error:
-        await routes.add_member(
-            "org", AddMemberRequest(user_id="recipient"), owner_context()
-        )
-    assert error.value.status_code == 403
-    assert [call.args[1] for call in check.await_args_list] == ["owner", "recipient"]
-    add.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_enabled_rollout_reaches_org_creation(mocker):
     created = MagicMock()
     create = mocker.patch.object(
@@ -141,3 +119,89 @@ async def test_disabled_rollout_still_allows_removing_existing_members(
     remove = mocker.patch.object(routes.org_db, "remove_org_member", AsyncMock())
     await routes.remove_member("org", "recipient", owner_context())
     remove.assert_awaited_once_with("org", "recipient", requesting_user_id="owner")
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_org_access
+async def test_an_admins_grant_turns_organizations_on_without_the_flag(
+    mocker, monkeypatch
+):
+    monkeypatch.delenv("FORCE_FLAG_SHOW_ORG_SETTINGS", raising=False)
+    grants = AsyncMock(return_value=True)
+    mocker.patch.object(rollout, "has_org_access", grants)
+    flag = mocker.patch.object(
+        rollout, "is_feature_enabled", AsyncMock(return_value=False)
+    )
+
+    assert await rollout.org_collaboration_enabled("owner")
+    grants.assert_awaited_once_with("owner")
+    flag.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_org_access
+@pytest.mark.parametrize("forced", ["true", "false"])
+async def test_an_env_override_decides_before_any_grant(mocker, monkeypatch, forced):
+    """An installation that turns organizations on or off for everyone is not
+    overruled by one account's grant."""
+    monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", forced)
+    grants = AsyncMock(return_value=True)
+    mocker.patch.object(rollout, "has_org_access", grants)
+
+    assert await rollout.org_collaboration_enabled("owner") is (forced == "true")
+    assert await rollout.org_access_granted("owner") is False
+    grants.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_org_access
+@pytest.mark.parametrize(
+    "own_grant, inherited, flag, allowed",
+    [
+        (True, True, False, True),
+        (False, True, False, False),
+        (False, False, True, True),
+        (False, False, False, False),
+    ],
+    ids=["own-grant", "inherited-only", "rollout-flag", "nothing"],
+)
+async def test_only_the_accounts_own_access_lets_it_create_organizations(
+    mocker, monkeypatch, own_grant, inherited, flag, allowed
+):
+    """An invitee whose access comes from someone else's team organization
+    may join it, but may not create or convert one of its own."""
+    monkeypatch.delenv("FORCE_FLAG_SHOW_ORG_SETTINGS", raising=False)
+    mocker.patch.object(
+        rollout, "has_own_org_access", AsyncMock(return_value=own_grant)
+    )
+    mocker.patch.object(rollout, "has_org_access", AsyncMock(return_value=inherited))
+    mocker.patch.object(rollout, "is_feature_enabled", AsyncMock(return_value=flag))
+
+    assert await rollout.org_creation_enabled("invitee") is allowed
+    assert await rollout.org_collaboration_enabled("invitee") is (
+        inherited or own_grant or flag
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.real_org_access
+@pytest.mark.parametrize("operation", ["create", "convert"])
+async def test_inherited_access_cannot_create_or_convert(
+    operation, mocker, monkeypatch
+):
+    monkeypatch.delenv("FORCE_FLAG_SHOW_ORG_SETTINGS", raising=False)
+    mocker.patch.object(rollout, "has_own_org_access", AsyncMock(return_value=False))
+    mocker.patch.object(rollout, "has_org_access", AsyncMock(return_value=True))
+    mocker.patch.object(rollout, "is_feature_enabled", AsyncMock(return_value=False))
+    blocked = AsyncMock(side_effect=AssertionError("reached the database"))
+    if operation == "create":
+        mocker.patch.object(routes.org_db, "create_org", blocked)
+        call = routes.create_org(CreateOrgRequest(name="Mine", slug="mine"), "owner")
+    else:
+        mocker.patch.object(routes.org_db, "convert_personal_org", blocked)
+        call = routes.convert_org("org", owner_context())
+
+    with pytest.raises(HTTPException) as error:
+        await call
+    assert error.value.status_code == 403
+    blocked.assert_not_awaited()

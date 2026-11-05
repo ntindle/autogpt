@@ -29,7 +29,7 @@ export function TaskIdentity({ assignee }: Props) {
       ) : assignee?.kind === "auto" ? (
         <AutopilotAvatar size={26} />
       ) : (
-        <Avatar className="size-7 bg-zinc-100">
+        <Avatar className="bg-zinc-100 size-7">
           <AvatarImage
             src={assignee?.avatar_url ?? undefined}
             alt={assignee?.name ?? "Unassigned"}

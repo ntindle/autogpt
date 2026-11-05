@@ -22,12 +22,6 @@ def server():
     yield None
 
 
-@pytest.fixture(scope="session", autouse=True)
-def graph_cleanup():
-    """No-op — org tests don't create real graphs."""
-    yield
-
-
 @pytest.fixture(autouse=True)
 def mock_live_tenancy_boundaries(mocker, request):
     live_ctx = RequestContext(
@@ -83,7 +77,6 @@ def mock_live_tenancy_boundaries(mocker, request):
 
     cls_name = request.node.cls.__name__ if request.node.cls is not None else ""
     live_team_classes = {
-        "TestTeamManagementByTeamId",
         "TestTeamListVisibility",
         "TestTeamMembersVisibility",
     }
@@ -112,4 +105,21 @@ def mock_live_tenancy_boundaries(mocker, request):
     mocker.patch(
         "backend.api.features.orgs.invitation_routes.lock_live_org_permission_scope",
         new=AsyncMock(return_value=live_ctx),
+    )
+
+
+@pytest.fixture(autouse=True)
+def seats_and_invitation_rates_unchecked(mocker, request):
+    """Invitations aren't counted against seats or rate-limited unless a test
+    asks (``real_seat_checks``): both read the database or Redis, which these
+    Prisma-mocked tests don't have."""
+    if request.node.get_closest_marker("real_seat_checks"):
+        return
+    mocker.patch(
+        "backend.api.features.orgs.invitation_routes.assert_free_seat",
+        new=AsyncMock(),
+    )
+    mocker.patch(
+        "backend.api.features.orgs.invitation_routes.check_invitation_rate",
+        new=AsyncMock(),
     )

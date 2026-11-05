@@ -66,7 +66,7 @@ export function TaskDependencies({
             />
           ))
         ) : (
-          <p className="p-2 text-xs text-muted-foreground">
+          <p className="text-xs p-2 text-muted-foreground">
             No matching prerequisites
           </p>
         )}
@@ -95,11 +95,11 @@ function DependencyOption({
         checked={selected}
         aria-label={`Wait for ${title} (${project})`}
         onChange={(event) => onToggle(id, event.target.checked)}
-        className="mt-0.5 size-4 shrink-0 accent-violet-600"
+        className="accent-violet-600 mt-0.5 size-4 shrink-0"
       />
-      <span className="min-w-0 text-sm">
+      <span className="text-sm min-w-0">
         <span className="block break-words">{title}</span>
-        <span className="mt-0.5 block text-xs text-muted-foreground">
+        <span className="text-xs mt-0.5 block text-muted-foreground">
           {project} · {task ? statusLabel(task) : "Remove or replace this link"}
         </span>
       </span>

@@ -42,7 +42,7 @@ export function TaskAssigneePicker(props: Props) {
             <div className="flex gap-2">
               <Button
                 size="small"
-                className="min-h-11 min-w-0 flex-1 px-2 text-xs"
+                className="text-xs min-h-11 min-w-0 flex-1 px-2"
                 disabled={busy}
                 leftIcon={<Check size={15} aria-hidden />}
                 onClick={() => picker.assign(task.suggestion ?? null)}
@@ -56,7 +56,7 @@ export function TaskAssigneePicker(props: Props) {
               <Button
                 size="small"
                 variant="secondary"
-                className="min-h-11 min-w-0 px-2 text-xs"
+                className="text-xs min-h-11 min-w-0 px-2"
                 disabled={busy}
                 leftIcon={<X size={15} aria-hidden />}
                 onClick={() => picker.dismiss()}
@@ -91,12 +91,12 @@ export function TaskAssigneePicker(props: Props) {
               key={assignee.kind + ":" + assignee.id}
               disabled={busy}
               onClick={() => picker.assign(assignee)}
-              className="flex min-h-11 w-full items-center gap-3 rounded-lg p-2 text-left text-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+              className="text-sm focus-visible:ring-ring flex min-h-11 w-full items-center gap-3 rounded-lg p-2 text-left hover:bg-muted focus-visible:ring-2"
             >
               <TaskIdentity assignee={assignee} />
               <span>
                 {assignee.name}
-                <span className="block text-xs text-muted-foreground">
+                <span className="text-xs block text-muted-foreground">
                   {(assignee.id !== task.suggestion?.id
                     ? assignee.reason
                     : null) ||
@@ -124,7 +124,7 @@ export function TaskAssigneePicker(props: Props) {
         <button
           type="button"
           disabled={busy}
-          className="min-h-11 px-2 text-xs text-muted-foreground underline"
+          className="text-xs min-h-11 px-2 text-muted-foreground underline"
           onClick={() => (suggested ? picker.dismiss() : picker.assign(null))}
         >
           Leave unassigned

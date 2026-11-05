@@ -74,7 +74,7 @@ export function TaskBreakdownPanel({
       ref={ref}
       role="region"
       aria-label={`Breakdown for ${task.title}`}
-      className="mb-4 ml-2 max-w-4xl rounded-2xl border border-violet-200 bg-violet-50/30 p-3 sm:ml-9 sm:p-4"
+      className="border-violet-200 bg-violet-50/30 mb-4 ml-2 max-w-4xl rounded-2xl border p-3 sm:ml-9 sm:p-4"
     >
       <div className="mb-3 flex items-start gap-2">
         <TaskIdentity
@@ -82,7 +82,7 @@ export function TaskBreakdownPanel({
         />
         <div className="flex-1">
           <h3 className="text-sm font-medium">AutoPilot</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">
+          <p className="text-xs mt-0.5 text-muted-foreground">
             Here’s a first pass at the work. Edit a step, open its details, or
             tell me what to change.
           </p>
@@ -91,7 +91,7 @@ export function TaskBreakdownPanel({
           type="button"
           onClick={breakdown.close}
           aria-label="Close breakdown"
-          className="rounded p-1 text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+          className="focus-visible:ring-ring rounded p-1 text-muted-foreground hover:bg-muted focus-visible:ring-2"
         >
           <X size={16} />
         </button>
@@ -104,22 +104,22 @@ export function TaskBreakdownPanel({
           {messages.map((message, index) => (
             <p
               key={index}
-              className="max-w-[90%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-violet-100 px-3 py-2 text-sm"
+              className="bg-violet-100 text-sm max-w-[90%] rounded-2xl rounded-br-md px-3 py-2 whitespace-pre-wrap"
             >
-              <span className="mb-1 block text-xs text-violet-700">You</span>
+              <span className="text-xs text-violet-700 mb-1 block">You</span>
               {message}
             </p>
           ))}
         </div>
       ) : guidance ? (
-        <p className="mb-3 whitespace-pre-wrap rounded-xl bg-violet-100/60 px-3 py-2 text-xs text-muted-foreground">
+        <p className="bg-violet-100/60 text-xs mb-3 rounded-xl px-3 py-2 whitespace-pre-wrap text-muted-foreground">
           {guidance}
         </p>
       ) : null}
       {waiting ? (
         <p
           role="status"
-          className="mb-3 flex items-center gap-2 text-xs text-violet-700"
+          className="text-xs text-violet-700 mb-3 flex items-center gap-2"
         >
           <Spinner size={14} className="animate-spin" />
           {editor.steps.length
@@ -130,7 +130,7 @@ export function TaskBreakdownPanel({
       {breakdown.error ||
       task.breakdown?.error ||
       task.breakdown_refresh?.error ? (
-        <p role="alert" className="mb-3 text-sm text-destructive">
+        <p role="alert" className="text-sm text-destructive mb-3">
           {breakdown.error ||
             task.breakdown?.error ||
             task.breakdown_refresh?.error}
@@ -141,18 +141,18 @@ export function TaskBreakdownPanel({
           type="button"
           disabled={waiting || breakdown.accepting}
           onClick={() => refine("")}
-          className="mb-3 rounded border border-border px-3 py-1.5 text-xs"
+          className="text-xs mb-3 rounded border border-border px-3 py-1.5"
         >
           Try again
         </button>
       ) : null}
       {task.breakdown_refresh?.state === "pending" ? (
-        <p role="status" className="mb-3 text-xs text-muted-foreground">
+        <p role="status" className="text-xs mb-3 text-muted-foreground">
           Updating this suggestion with new context. Your edits are kept.
         </p>
       ) : null}
       {active ? (
-        <p role="status" className="mb-3 text-xs text-muted-foreground">
+        <p role="status" className="text-xs mb-3 text-muted-foreground">
           Work is running. Stop the attempt in task details before accepting a
           scope change.
         </p>
@@ -176,7 +176,7 @@ export function TaskBreakdownPanel({
         <button
           type="button"
           onClick={() => breakdown.generate(task)}
-          className="mb-3 rounded border border-border px-3 py-2 text-sm"
+          className="text-sm mb-3 rounded border border-border px-3 py-2"
         >
           Generate again
         </button>

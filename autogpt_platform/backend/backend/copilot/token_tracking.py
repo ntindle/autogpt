@@ -14,11 +14,17 @@ import logging
 import math
 import re
 import threading
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from openai.types.completion_usage import PromptTokensDetails
 
 from backend.copilot.credit_billing import credit_billed_turn, record_credit_billed_cost
-from backend.copilot.trial_cost_context import get_trial_cost_context
+from backend.copilot.org_cost_context import team_cost_context
+from backend.copilot.trial_cost_context import (
+    get_trial_cost_context,
+    restore_cost_context,
+)
 from backend.data.db_accessors import platform_cost_db
 from backend.data.platform_cost import PlatformCostEntry, usd_to_microdollars
 
@@ -130,6 +136,8 @@ async def persist_and_record_usage(
     credential_id_override: str | None = None,
     skip_daily: bool = False,
     execution_path: str = "sync",
+    expert_id: str | None = None,
+    org_id: str | None = None,
 ) -> int:
     """Persist token usage to session and record generation cost for rate limiting.
 
@@ -152,6 +160,11 @@ async def persist_and_record_usage(
             report a cost and rate limiting is skipped for this turn.
         model: Model identifier for cost log attribution.
         provider: Cost provider name (e.g. "anthropic", "open_router").
+        expert_id: The expert the spend is attributed to on the cost log
+            row (``PlatformCostLog.expertId``); ``None`` for the account's own.
+        org_id: The organization the cost was spent in, when there is no
+            chat session to read it from. Only work with no usage attribution
+            of its own reads it (or the session's).
 
     Returns:
         The computed total_tokens (prompt + completion; cache excluded).
@@ -227,17 +240,20 @@ async def persist_and_record_usage(
     cost_microdollars = usd_to_microdollars(cost_float)
 
     if cost_microdollars is not None and cost_microdollars > 0:
-        # A turn billed to credits is charged to the credit balance when it
-        # ends, and spends nothing from the plan's daily and weekly windows.
+        # A turn billed to credits is charged to the credit balance as its cost
+        # lands, and spends nothing from the plan's daily and weekly windows.
         if user_id and not await record_credit_billed_cost(user_id, cost_microdollars):
             # record_cost_usage() owns its fail-open handling for Redis/network
             # errors. Don't wrap with a broad except here — unexpected accounting
             # bugs should surface instead of being silently logged as warnings.
-            await record_cost_usage(
-                user_id=user_id,
-                cost_microdollars=cost_microdollars,
-                skip_daily=skip_daily,
-            )
+            async with _counted_in_org(
+                user_id, org_id or (session.organization_id if session else None)
+            ):
+                await record_cost_usage(
+                    user_id=user_id,
+                    cost_microdollars=cost_microdollars,
+                    skip_daily=skip_daily,
+                )
         # Same charge, second ledger: the tree this turn belongs to. A tree is
         # identified by its root turn, not by a user, so this must not sit
         # behind the user_id guard — an anonymous turn still spends its tree's
@@ -247,10 +263,11 @@ async def persist_and_record_usage(
             await charge_turn(envelope, cost_microdollars)
 
     # Log to PlatformCostLog for admin cost dashboard.
-    # Include entries where cost_usd is set even if token count is 0
-    # (e.g. fully-cached Anthropic responses where only cache tokens
-    # accumulate a charge without incrementing total_tokens).
-    if user_id and (total_tokens > 0 or cost_float is not None):
+    # Include entries whose only tokens are cache tokens, which total_tokens
+    # leaves out (e.g. a fully-cached response), with or without a cost:
+    # tokens the provider billed stay in the ledger even when nobody could
+    # price them.
+    if user_id and (not no_tokens or cost_float is not None):
         # A dream pass logs under its own id as graph_exec_id; only a chat's
         # usage names the chat.
         chat_session_id = chat_session_id_override or (
@@ -312,7 +329,25 @@ async def persist_and_record_usage(
                 tracking_type=tracking_type,
                 tracking_amount=tracking_amount,
                 metadata=metadata,
+                expert_id=expert_id,
             )
         )
 
     return total_tokens
+
+
+@asynccontextmanager
+async def _counted_in_org(user_id: str, org_id: str | None) -> AsyncIterator[None]:
+    """Usage with no attribution of its own (an MCP tool call, a dry run's
+    block) counts in the organization it was spent in: in a team
+    organization, the user's own counters there and not their personal trial.
+    Work that carries an attribution (a turn, a held call, a background job)
+    keeps the one it started under."""
+    team = None
+    if org_id is not None and get_trial_cost_context(user_id) is None:
+        team = await team_cost_context(user_id, org_id)
+    if team is None:
+        yield
+        return
+    with restore_cost_context(user_id, team):
+        yield

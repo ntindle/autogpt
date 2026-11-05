@@ -1,7 +1,6 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { MessageResponse } from "@/components/organisms/Message/Message";
 
 const ID = "d8ef4076-a348-49bc-9c6b-883a841f2fd4";
 afterEach(() => {
@@ -10,40 +9,31 @@ afterEach(() => {
 });
 
 test("the shared chat renderer links named and bare workspace references", async () => {
-  const open = vi.spyOn(window, "open").mockReturnValue(null);
   render(
     <MessageResponse mode="static">{`smart\\_car\\_platform\\_spec.md (v2) — workspace://${ID} — architecture.\n\nAlso workspace://${ID}.`}</MessageResponse>,
   );
   expect(
-    screen.getByRole("button", { name: "smart_car_platform_spec.md" }),
+    screen.getByRole("link", { name: "smart_car_platform_spec.md" }),
   ).toBeTruthy();
   expect(screen.getByText(/\(v2\)/)).toBeTruthy();
-  await userEvent.click(screen.getByRole("button", { name: "Open file" }));
-  await waitFor(() =>
-    expect(open).toHaveBeenCalledWith(
-      `/api/proxy/api/workspace/files/${ID}/download`,
-      "_blank",
-      "noreferrer",
-    ),
+  const link = screen.getByRole("link", { name: "Open file" });
+  expect(link.getAttribute("href")).toBe(
+    `/api/proxy/api/workspace/files/${ID}/download`,
   );
+  expect(link.getAttribute("target")).toBe("_blank");
+  expect(link.getAttribute("rel")).toBe("noopener noreferrer");
 });
 
 test("workspace links in shared chats retain the supplied public file route", async () => {
-  const open = vi.spyOn(window, "open").mockReturnValue(null);
   render(
     <MessageResponse
       mode="static"
       workspaceFileUrlBuilder={(id) => `/share/token/files/${id}`}
     >{`workspace://${ID}`}</MessageResponse>,
   );
-  await userEvent.click(screen.getByRole("button", { name: "Open file" }));
-  await waitFor(() =>
-    expect(open).toHaveBeenCalledWith(
-      `/share/token/files/${ID}`,
-      "_blank",
-      "noreferrer",
-    ),
-  );
+  expect(
+    screen.getByRole("link", { name: "Open file" }).getAttribute("href"),
+  ).toBe(`/share/token/files/${ID}`);
 });
 
 test("workspace links are not invented in code, partial IDs, or external links", async () => {
@@ -53,26 +43,20 @@ test("workspace links are not invented in code, partial IDs, or external links",
   await waitFor(() =>
     expect(container.querySelectorAll("code")).toHaveLength(2),
   );
-  expect(screen.queryByRole("button", { name: "Open file" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "Open file" })).toBeNull();
   expect(
     screen.getByRole("button", { name: `External workspace://${ID}` }),
   ).toBeTruthy();
 });
 
 test("existing Markdown workspace links retain their label and resolve once", async () => {
-  const open = vi.spyOn(window, "open").mockReturnValue(null);
   render(
     <MessageResponse mode="static">{`[Read the architecture](workspace://${ID}#text/markdown)`}</MessageResponse>,
   );
-  expect(screen.getAllByRole("button")).toHaveLength(1);
-  await userEvent.click(
-    screen.getByRole("button", { name: "Read the architecture" }),
-  );
-  await waitFor(() =>
-    expect(open).toHaveBeenCalledWith(
-      `/api/proxy/api/workspace/files/${ID}/download`,
-      "_blank",
-      "noreferrer",
-    ),
-  );
+  expect(screen.getAllByRole("link")).toHaveLength(1);
+  expect(
+    screen
+      .getByRole("link", { name: "Read the architecture" })
+      .getAttribute("href"),
+  ).toBe(`/api/proxy/api/workspace/files/${ID}/download`);
 });

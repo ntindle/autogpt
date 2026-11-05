@@ -20,10 +20,11 @@ from backend.data.org_credit import get_org_spend_by_team
 from backend.data.tenancy import live_org_permission_barrier
 
 from . import db as org_db
+from .member_runs import stop_member_runs
 from .model import (
-    AddMemberRequest,
     CreateAliasRequest,
     CreateOrgRequest,
+    DefaultOrgResponse,
     OrgAliasResponse,
     OrgMemberResponse,
     OrgResponse,
@@ -34,7 +35,12 @@ from .model import (
     UpdateOrgData,
     UpdateOrgRequest,
 )
-from .rollout import org_collaboration_enabled, require_org_collaboration
+from .rollout import (
+    org_collaboration_enabled,
+    org_creation_enabled,
+    require_org_collaboration,
+    require_org_creation,
+)
 
 router = APIRouter()
 
@@ -67,7 +73,9 @@ async def create_org(
     request: CreateOrgRequest,
     user_id: Annotated[str, Security(get_user_id)],
 ) -> OrgResponse:
-    await require_org_collaboration(user_id)
+    """Create a team organization owned by the caller. Needs organizations
+    turned on for the caller's own account, not only inherited access."""
+    await require_org_creation(user_id)
     return await org_db.create_org(
         name=request.name,
         slug=request.slug,
@@ -86,7 +94,7 @@ async def list_orgs(
     user_id: Annotated[str, Security(get_user_id)],
 ) -> list[OrgResponse]:
     if not await org_collaboration_enabled(user_id):
-        return [await get_default_org(user_id)]
+        return [await _personal_org(user_id)]
     return await org_db.list_user_orgs(user_id)
 
 
@@ -98,7 +106,17 @@ async def list_orgs(
 )
 async def get_default_org(
     user_id: Annotated[str, Security(get_user_id)],
-) -> OrgResponse:
+) -> DefaultOrgResponse:
+    """The caller's personal organization, and whether the caller may create
+    or convert organizations (``can_create_organization``)."""
+    org = await _personal_org(user_id)
+    return DefaultOrgResponse(
+        **org.model_dump(),
+        can_create_organization=await org_creation_enabled(user_id),
+    )
+
+
+async def _personal_org(user_id: str) -> OrgResponse:
     org_id, _ = await org_db.get_user_default_team(user_id)
     if org_id is None:
         raise HTTPException(503, detail="Personal workspace is temporarily unavailable")
@@ -313,11 +331,13 @@ async def convert_org(
     ],
 ) -> OrgResponse:
     _verify_org_path(ctx, org_id)
-    await require_org_collaboration(ctx.user_id)
+    await require_org_creation(ctx.user_id)
     return await org_db.convert_personal_org(org_id, ctx.user_id)
 
 
 # --- Members ---
+
+# A member joins only by accepting an invitation (invitation_routes.py).
 
 
 @router.get(
@@ -336,33 +356,6 @@ async def list_members(
     if ctx.org_id != org_id:
         raise HTTPException(403, detail="Not a member of this organization")
     return await org_db.list_org_members(org_id)
-
-
-@router.post(
-    "/{org_id}/members",
-    summary="Add member to organization",
-    tags=["orgs"],
-)
-async def add_member(
-    org_id: str,
-    request: AddMemberRequest,
-    ctx: Annotated[
-        RequestContext,
-        Security(requires_org_permission(OrgAction.MANAGE_MEMBERS)),
-    ],
-) -> OrgMemberResponse:
-    if request.user_id == ctx.user_id:
-        raise HTTPException(409, detail="You are already a member")
-    _verify_org_path(ctx, org_id)
-    await require_org_collaboration(ctx.user_id)
-    await require_org_collaboration(request.user_id)
-    return await org_db.add_org_member(
-        org_id=org_id,
-        user_id=request.user_id,
-        is_admin=request.is_admin,
-        is_billing_manager=request.is_billing_manager,
-        invited_by=ctx.user_id,
-    )
 
 
 @router.patch(
@@ -413,6 +406,7 @@ async def remove_member(
         )
     _verify_org_path(ctx, org_id)
     await org_db.remove_org_member(org_id, uid, requesting_user_id=ctx.user_id)
+    await stop_member_runs(org_id, uid)
 
 
 @router.post(

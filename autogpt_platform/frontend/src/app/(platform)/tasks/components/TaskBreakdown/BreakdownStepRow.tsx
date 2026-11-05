@@ -30,7 +30,7 @@ export function BreakdownStepRow({
           disabled={disabled}
           onChange={(event) => editor.toggle(step.id, event.target.checked)}
           aria-label={`Include step ${index + 1}`}
-          className="mt-2 size-3.5 accent-violet-600"
+          className="accent-violet-600 mt-2 size-3.5"
         />
         <div className="min-w-0">
           <input
@@ -41,7 +41,7 @@ export function BreakdownStepRow({
             onChange={(event) =>
               editor.edit(step.id, { title: event.target.value })
             }
-            className="w-full rounded border border-transparent bg-transparent px-1 py-1 text-sm hover:border-border focus:border-ring focus:outline-none disabled:opacity-70"
+            className="text-sm focus:border-ring w-full rounded border border-transparent bg-transparent px-1 py-1 hover:border-border focus:outline-none disabled:opacity-70"
           />
           <button
             type="button"
@@ -49,7 +49,7 @@ export function BreakdownStepRow({
             aria-expanded={expanded}
             aria-controls={`details-${step.id}`}
             aria-label={`${expanded ? "Hide" : "Show"} details for step ${index + 1}`}
-            className="flex items-center gap-1 rounded px-1 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+            className="text-xs focus-visible:ring-ring flex items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:text-foreground focus-visible:ring-2"
           >
             {expanded ? <CaretDown size={11} /> : <CaretRight size={11} />}
             {prerequisites.length
@@ -58,7 +58,7 @@ export function BreakdownStepRow({
             {expanded ? "Hide details" : "Details"}
           </button>
         </div>
-        <div className="col-start-2 mt-1 flex min-w-0 items-center gap-1 rounded-full border border-dashed border-violet-500 pl-0.5 pr-1 sm:col-start-auto sm:mt-0 sm:max-w-48">
+        <div className="border-violet-500 col-start-2 mt-1 flex min-w-0 items-center gap-1 rounded-full border border-dashed pr-1 pl-0.5 sm:col-start-auto sm:mt-0 sm:max-w-48">
           <TaskIdentity assignee={step.assignee} />
           <select
             aria-label={`Owner for step ${index + 1}`}
@@ -71,7 +71,7 @@ export function BreakdownStepRow({
                   null,
               })
             }
-            className="min-w-0 flex-1 rounded border border-transparent bg-transparent py-1 text-xs hover:border-border focus-visible:ring-2 focus-visible:ring-ring"
+            className="text-xs focus-visible:ring-ring min-w-0 flex-1 rounded border border-transparent bg-transparent py-1 hover:border-border focus-visible:ring-2"
           >
             <option value="">Leave unassigned</option>
             {assignees.map((owner) => (
@@ -87,7 +87,7 @@ export function BreakdownStepRow({
             id={`details-${step.id}`}
             className="col-start-2 mt-2 space-y-2 pb-1 sm:col-span-2"
           >
-            <label className="block text-xs text-muted-foreground">
+            <label className="text-xs block text-muted-foreground">
               Deliverable
               <textarea
                 aria-label={`Deliverable for step ${index + 1}`}
@@ -98,7 +98,7 @@ export function BreakdownStepRow({
                 onChange={(event) =>
                   editor.edit(step.id, { description: event.target.value })
                 }
-                className="mt-1 block w-full resize-y rounded border border-transparent bg-transparent p-1 text-sm text-foreground hover:border-border focus:border-ring focus:outline-none"
+                className="text-sm focus:border-ring mt-1 block w-full resize-y rounded border border-transparent bg-transparent p-1 text-foreground hover:border-border focus:outline-none"
               />
             </label>
             <p className="text-xs text-muted-foreground">

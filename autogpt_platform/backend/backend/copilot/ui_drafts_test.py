@@ -1,5 +1,6 @@
 import asyncio
 import json
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -22,6 +23,11 @@ from backend.data.openui_files import get_openui_file_state, move_chat_edits_to_
 from backend.data.workspace import OPENUI_MIME_TYPE, get_or_create_workspace
 from backend.util.workspace import WorkspaceManager
 from backend.util.workspace_storage import compute_file_checksum, get_workspace_storage
+
+
+@pytest.fixture(autouse=True)
+def fake_virus_scanner(monkeypatch):
+    monkeypatch.setattr("backend.util.workspace.scan_content_safe", AsyncMock())
 
 
 @pytest_asyncio.fixture(loop_scope="session")

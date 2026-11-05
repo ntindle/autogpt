@@ -22,6 +22,7 @@ from backend.data.subscription_lookup_cache import ACTIVE_SUBSCRIPTIONS
 from backend.data.subscription_lookup_unconfirmed import UnconfirmedInvalidations
 from backend.data.subscription_pending_cache import PENDING_CHANGES
 from backend.util.logging import configure_logging
+from backend.util.platform_payment import settings as platform_payment_settings
 from backend.util.tracing import traces_sampler
 
 load_dotenv()
@@ -86,6 +87,25 @@ async def server():
             yield server
 
 
+@pytest.fixture(autouse=True)
+def no_org_access_grants(request: pytest.FixtureRequest, monkeypatch):
+    """No account holds an admin's organization grant unless a test asks.
+
+    The grant is a database read on the organization gate's path; a unit
+    test without a database would wait on the DatabaseManager for it. A
+    test marked ``real_org_access`` reads the real grants.
+    """
+    if request.node.get_closest_marker("real_org_access"):
+        return
+    from backend.api.features.orgs import rollout
+
+    async def no_grant(_user_id: str) -> bool:
+        return False
+
+    monkeypatch.setattr(rollout, "org_access_granted", no_grant)
+    monkeypatch.setattr(rollout, "own_org_access_granted", no_grant)
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def no_leaked_db_transaction(request: pytest.FixtureRequest):
     """Fail a test that leaves a database transaction open.
@@ -138,6 +158,24 @@ def no_force_all_flags(monkeypatch: pytest.MonkeyPatch):
     flag-off test. Tests that want the switch on set it themselves."""
     monkeypatch.delenv("FORCE_ALL_FLAGS", raising=False)
     monkeypatch.delenv("NEXT_PUBLIC_FORCE_ALL_FLAGS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def platform_payment_off(set_platform_payment):
+    """Payment is off unless a test turns it on, whatever this machine's ``.env`` sets."""
+    set_platform_payment(False)
+
+
+@pytest.fixture
+def set_platform_payment(monkeypatch: pytest.MonkeyPatch):
+    """Turn ``ENABLE_PLATFORM_PAYMENT`` on or off for one test."""
+
+    def set_payment(enabled: bool) -> None:
+        monkeypatch.setattr(
+            platform_payment_settings.config, "enable_platform_payment", enabled
+        )
+
+    return set_payment
 
 
 @pytest.fixture(autouse=True)
@@ -217,11 +255,14 @@ async def _create_user_with_loop_retry(user_data: dict) -> None:
 
     See ``retry_once_on_closed_loop`` for why this guard exists and when it
     can be removed.
+
+    Uncached on purpose: the cached lookup is shared through Redis for five
+    minutes, so on a fresh database it can return a user without writing the row.
     """
-    from backend.data.user import get_or_create_user
+    from backend.data.user import get_or_create_user_with_status
     from backend.util.test import retry_once_on_closed_loop
 
-    await retry_once_on_closed_loop(lambda: get_or_create_user(user_data))
+    await retry_once_on_closed_loop(lambda: get_or_create_user_with_status(user_data))
 
 
 @pytest.fixture
@@ -291,6 +332,7 @@ async def _delete_test_graphs(
 ) -> None:
     from prisma.models import (
         AgentGraph,
+        AgentGraphExecution,
         AgentNodeExecutionInputOutput,
         AgentPreset,
         LibraryAgent,
@@ -298,12 +340,16 @@ async def _delete_test_graphs(
     )
 
     graph_ids = [graph_id for graph_id, _ in created_graphs]
-    # Listing versions, presets and every user's library entries hold the graph
-    # (onDelete: Restrict), so they go first. Deleting a listing cascades to
-    # its versions and their reviews; a preset's saved inputs would only be
-    # orphaned, so they are deleted with it.
+    # The delete route refuses (409) while a store listing or another user's
+    # library entry, preset or run references the graph, so those go first.
+    # Deleting a listing cascades to its versions and their reviews; a
+    # preset's saved inputs would only be orphaned, so they are deleted with
+    # it. The owner's own library entries are left for the route to delete.
     await StoreListing.prisma().delete_many(where={"id": {"in": listing_ids}})
-    await LibraryAgent.prisma().delete_many(where={"agentGraphId": {"in": graph_ids}})
+    for graph_id, user_id in created_graphs:
+        others: dict = {"agentGraphId": graph_id, "userId": {"not": user_id}}
+        await LibraryAgent.prisma().delete_many(where=others)
+        await AgentGraphExecution.prisma().delete_many(where=others)
     presets = await AgentPreset.prisma().find_many(
         where={"agentGraphId": {"in": graph_ids}}
     )

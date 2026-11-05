@@ -26,6 +26,7 @@ import inspect
 import sys
 import textwrap
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from typing import Any
 from unittest.mock import AsyncMock, Mock
 
@@ -175,6 +176,24 @@ class CreditStubs(pydantic.BaseModel):
     get_auto_top_up: AsyncMock
     set_auto_top_up: AsyncMock
     model: Mock
+
+
+@asynccontextmanager
+async def _live_access_held(*_args, **_kwargs):
+    yield True
+
+
+@pytest.fixture(autouse=True)
+def _live_access(monkeypatch):
+    """These tests check each route's permission rule; its live re-check of
+    the same permission reads the database, which a TestClient request would
+    reach from its own event loop on a client connected on the session's."""
+    for name in (
+        "live_org_permission_barrier",
+        "live_actor_org_permission_barrier",
+        "live_resource_permission_barrier",
+    ):
+        monkeypatch.setattr(f"backend.api.live_auth.{name}", _live_access_held)
 
 
 @pytest.fixture(autouse=True)
@@ -699,7 +718,11 @@ def _resolve_dotted(node: ast.Attribute, module_globals: dict) -> Any:
 
 
 def _org_member(
-    *, owner: bool = False, admin: bool = False, billing: bool = False
+    *,
+    owner: bool = False,
+    admin: bool = False,
+    billing: bool = False,
+    personal: bool = False,
 ) -> Mock:
     """A prisma ``OrgMember`` row as ``get_request_context`` expects it."""
     row = Mock()
@@ -707,7 +730,7 @@ def _org_member(
     row.isOwner = owner
     row.isAdmin = admin
     row.isBillingManager = billing
-    row.Org = Mock(deletedAt=None)
+    row.Org = Mock(deletedAt=None, isPersonal=personal)
     return row
 
 
@@ -731,16 +754,24 @@ def test_personal_org_owner_passes_real_context_resolution(
     tested is that the personal-org fallback yields owner rights, which a
     hand-built RequestContext could not prove.
     """
-    mock_prisma.orgmember.find_first = AsyncMock(return_value=Mock(orgId="personal-1"))
-    mock_prisma.orgmember.find_unique = AsyncMock(return_value=_org_member(owner=True))
+    personal_membership = _org_member(owner=True, personal=True)
+    personal_membership.orgId = "personal-1"
+    mock_prisma.orgmember.find_first = AsyncMock(return_value=personal_membership)
+    # A personal org's request acts in its default team.
+    mock_prisma.teammember.find_first = AsyncMock(
+        return_value=Mock(teamId="default-1", isAdmin=True, isBillingManager=False)
+    )
 
     resp = client.get("/api/credits")
 
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"credits": 1000}
-    # The personal-org fallback ran (no X-Org-Id header was supplied) and its
-    # org id is what the credit model was resolved against.
+    # The personal-org fallback ran (no X-Org-Id header was supplied), its
+    # membership row is the one validated, and its org id is what the credit
+    # model was resolved against.
     mock_prisma.orgmember.find_first.assert_awaited_once()
+    mock_prisma.orgmember.find_unique.assert_not_awaited()
+    mock_prisma.teammember.find_first.assert_awaited_once()
     assert credit_stubs.get_credit_model.await_args.args[1] == "personal-1"
 
 

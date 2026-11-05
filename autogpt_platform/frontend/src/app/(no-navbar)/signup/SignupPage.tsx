@@ -1,6 +1,7 @@
 "use client";
 
-import { Form, FormField } from "@/components/__legacy__/ui/form";
+import { FormProvider } from "react-hook-form";
+import { FormField } from "@/components/molecules/Form/Form";
 import { Button } from "@/components/atoms/Button/Button";
 import { Input } from "@/components/atoms/Input/Input";
 import { Link } from "@/components/atoms/Link/Link";
@@ -19,11 +20,11 @@ import { SignupLegalLine } from "./components/SignupLegalLine";
 import { SignupMarketingPanel } from "./components/SignupMarketingPanel";
 import { useSignupPage } from "./useSignupPage";
 
-interface Props {
+export function SignupPage({
+  allowTeamPassword,
+}: {
   allowTeamPassword: boolean;
-}
-
-export function SignupPage({ allowTeamPassword }: Props) {
+}) {
   const searchParams = useSearchParams();
   const nextUrl = searchParams.get("next");
   const loginHref = nextUrl
@@ -73,10 +74,10 @@ export function SignupPage({ allowTeamPassword }: Props) {
   return (
     <AuthSplitLayout marketing={<SignupMarketingPanel />}>
       <div className="mb-8">
-        <Text variant="h3" as="h1" className="!text-slate-950">
+        <Text variant="h3" as="h1" tone="primary">
           Create your account
         </Text>
-        <Text variant="body" className="mt-1 !text-slate-500">
+        <Text variant="body" tone="muted" className="mt-1">
           Already a member?{" "}
           <Link href={loginHref} variant="secondary">
             Log in
@@ -84,7 +85,7 @@ export function SignupPage({ allowTeamPassword }: Props) {
         </Text>
       </div>
 
-      <Form {...form}>
+      <FormProvider {...form}>
         <form onSubmit={handleSubmit} className="flex w-full flex-col gap-1">
           <FormField
             control={form.control}
@@ -165,7 +166,7 @@ export function SignupPage({ allowTeamPassword }: Props) {
           isError={!!feedback}
           behaveAs={environment.getBehaveAs()}
         />
-      </Form>
+      </FormProvider>
 
       <MobileWarningBanner />
       <EmailNotAllowedModal

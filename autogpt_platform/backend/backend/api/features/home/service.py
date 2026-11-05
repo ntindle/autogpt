@@ -10,34 +10,31 @@ from pydantic import BaseModel, ValidationError
 
 from backend.api.features.experts import experts_db
 from backend.api.features.experts.models import Expert
-from backend.api.features.graph_executions.activity_gate import (
-    hide_activity_summaries_if_disabled,
-)
 from backend.api.features.graph_executions.review.model import PendingHumanReviewModel
 from backend.api.features.library import db as library_db
 from backend.copilot import db as chat_db
 from backend.copilot.briefing.models import BriefingContent
 from backend.copilot.model import ChatSessionInfo
+from backend.copilot.scheduled_chats import service as scheduled_chats
+from backend.copilot.scheduled_chats.service import PausedScheduledChat
 from backend.data import activity_event as activity_db
 from backend.data import briefing as briefing_db
 from backend.data import execution as execution_db
 from backend.data import human_review as review_db
 from backend.data import user as user_db
+from backend.data import workspace as workspace_db
 from backend.data.credit import get_credit_model
 from backend.data.execution import GraphExecutionMeta
 from backend.data.execution_cost_summary import (
     UserExecutionCostSummary,
     get_user_cost_summary,
 )
-from backend.data.org_credit import get_personal_org_owner
-from backend.data.tenancy import get_user_team_ids
+from backend.data.tenancy import get_user_team_ids, is_own_personal_org
 from backend.executor.scheduler import CopilotTurnJobInfo, GraphExecutionJobInfo
 from backend.util.clients import get_scheduler_client
-from backend.util.feature_flag import Flag, is_feature_enabled
 from backend.util.settings import Settings
 from backend.util.timezone_utils import get_user_timezone_or_utc
 
-from .briefing import without_summaries
 from .compose import compose_home_dashboard
 from .models import HomeDashboardResponse
 
@@ -61,6 +58,7 @@ class HomeSourceData(BaseModel):
     credits_balance: int | None
     questions: list[ChatSessionInfo]
     work_events: list[activity_db.ActivityEvent]
+    paused_chats: list[PausedScheduledChat]
     timezone_name: str
 
 
@@ -73,10 +71,12 @@ async def build_home_dashboard(
 ) -> HomeDashboardResponse:
     now = datetime.now(timezone.utc)
     week_start = now - timedelta(days=7)
+    personal_workspace = await _is_personal_workspace(user_id, organization_id)
     data = await _load_home_source_data(
         user_id=user_id,
         organization_id=organization_id,
         team_id=team_id,
+        personal_workspace=personal_workspace,
         ctx=ctx,
         now=now,
         week_start=week_start,
@@ -101,7 +101,7 @@ async def build_home_dashboard(
         ),
         _persisted_briefing(
             user_id=user_id,
-            organization_id=organization_id,
+            personal_workspace=personal_workspace,
             timezone_name=data.timezone_name,
             now=now,
         ),
@@ -122,13 +122,33 @@ async def build_home_dashboard(
         persisted_briefing=persisted_briefing,
         work_events=data.work_events,
         session_titles=session_titles,
+        paused_chats=data.paused_chats,
     )
+
+
+async def _is_personal_workspace(user_id: str, organization_id: str | None) -> bool:
+    """Whether this Home is the caller's own: no org, or their own personal org.
+
+    The stored briefing and the activity log belong to the user, untagged by
+    org, so a team org's Home leaves both out. A check that cannot answer
+    leaves them out too: it costs those two cards, not the page.
+    """
+    if organization_id is None:
+        return True
+    try:
+        return await is_own_personal_org(user_id, organization_id)
+    except Exception:
+        logger.warning(
+            "Home could not check the workspace for user %s",
+            user_id[:_LOG_ID_CHARS],
+        )
+        return False
 
 
 async def _persisted_briefing(
     *,
     user_id: str,
-    organization_id: str | None,
+    personal_workspace: bool,
     timezone_name: str,
     now: datetime,
 ) -> BriefingContent | None:
@@ -151,16 +171,8 @@ async def _persisted_briefing(
     card would then look up tomorrow's row for a dashboard composed against
     yesterday.
     """
-    if organization_id is not None:
-        try:
-            if await get_personal_org_owner(organization_id) != user_id:
-                return None
-        except Exception:
-            logger.warning(
-                "Home could not verify briefing scope for user %s",
-                user_id[:_LOG_ID_CHARS],
-            )
-            return None
+    if not personal_workspace:
+        return None
     briefing_date = now.astimezone(ZoneInfo(timezone_name)).date()
     try:
         record = await briefing_db.get_briefing_for_date(user_id, briefing_date)
@@ -180,9 +192,7 @@ async def _persisted_briefing(
             record.id,
         )
         return None
-    if await is_feature_enabled(Flag.AI_ACTIVITY_STATUS, user_id):
-        return content
-    return without_summaries(content)
+    return content
 
 
 async def _load_home_source_data(
@@ -190,6 +200,7 @@ async def _load_home_source_data(
     user_id: str,
     organization_id: str | None,
     team_id: str | None,
+    personal_workspace: bool,
     ctx: RequestContext | None,
     now: datetime,
     week_start: datetime,
@@ -258,7 +269,14 @@ async def _load_home_source_data(
     )
     work_events_task = asyncio.create_task(
         _get_work_events(
-            user_id=user_id, since=week_start, organization_id=organization_id
+            user_id=user_id, since=week_start, personal_workspace=personal_workspace
+        )
+    )
+    paused_chats_task = asyncio.create_task(
+        _get_paused_chats(
+            user_id=user_id,
+            organization_id=organization_id,
+            team_ids=team_ids,
         )
     )
     user_task = asyncio.create_task(user_db.get_user_by_id(user_id))
@@ -273,21 +291,21 @@ async def _load_home_source_data(
         credits_task,
         questions_task,
         work_events_task,
+        paused_chats_task,
         user_task,
     ]
     await asyncio.gather(*started)
     user = user_task.result()
     return HomeSourceData(
         experts=experts_task.result(),
-        executions=await hide_activity_summaries_if_disabled(
-            executions_task.result(), user_id
-        ),
+        executions=executions_task.result(),
         reviews=reviews_task.result(),
         cost_summary=cost_summary_task.result(),
         schedules=schedules_task.result(),
         credits_balance=credits_task.result(),
         questions=questions_task.result(),
         work_events=work_events_task.result(),
+        paused_chats=paused_chats_task.result(),
         timezone_name=get_user_timezone_or_utc(user.timezone if user else None),
     )
 
@@ -317,6 +335,41 @@ async def _get_schedules(
         return []
 
 
+async def _get_paused_chats(
+    *,
+    user_id: str,
+    organization_id: str | None,
+    team_ids: list[str],
+) -> list[PausedScheduledChat]:
+    # Fail-soft like schedules: a broken read costs these items, not the page.
+    try:
+        paused = await scheduled_chats.list_paused_scheduled_chats(user_id)
+        if organization_id is None or not paused:
+            return paused
+        # Only the chats that run in this workspace, read like the schedules
+        # above but with paused jobs, since a streak's pause stopped them.
+        jobs = await asyncio.wait_for(
+            get_scheduler_client().get_execution_schedules(
+                user_id=user_id,
+                kind="copilot_turn",
+                organization_id=organization_id,
+                team_ids=team_ids,
+                include_paused=True,
+            ),
+            timeout=settings.config.schedule_read_timeout_seconds,
+        )
+    except Exception:
+        logger.warning(
+            "Home could not load paused scheduled chats for user %s",
+            user_id[:_LOG_ID_CHARS],
+        )
+        return []
+    in_scope = {
+        job.routine_id or job.id for job in jobs if isinstance(job, CopilotTurnJobInfo)
+    }
+    return [chat for chat in paused if chat.schedule_key in in_scope]
+
+
 async def _get_pending_questions(
     *,
     user_id: str,
@@ -326,10 +379,6 @@ async def _get_pending_questions(
     # Fail-soft like schedules and credits: a chat that was deleted or whose
     # metadata no longer parses must cost the user one row, not the page.
     try:
-        # Question items ship with the expert-team surface; without the flag
-        # the Home page stays exactly what it was.
-        if not await is_feature_enabled(Flag.HIRE_EXPERTS, user_id, default=False):
-            return []
         return await chat_db.get_sessions_with_pending_question(
             user_id,
             organization_id=organization_id,
@@ -344,20 +393,14 @@ async def _get_pending_questions(
 
 
 async def _get_work_events(
-    *, user_id: str, since: datetime, organization_id: str | None = None
+    *, user_id: str, since: datetime, personal_workspace: bool
 ) -> list[activity_db.ActivityEvent]:
+    if not personal_workspace:
+        return []
     # Fail-soft like schedules and credits: a broken audit read costs the
-    # Recent work card, not the page. Ships with the expert-team surface,
-    # so it is gated exactly like pending questions.
+    # Recent work card, not the page.
     try:
-        if not await is_feature_enabled(Flag.HIRE_EXPERTS, user_id, default=False):
-            return []
-        if (
-            organization_id is not None
-            and await get_personal_org_owner(organization_id) != user_id
-        ):
-            return []
-        return await activity_db.list_activity_events(
+        events = await activity_db.list_activity_events(
             user_id,
             since=since,
             categories=["FILE", "INTEGRATION", "SCHEDULE"],
@@ -368,6 +411,29 @@ async def _get_work_events(
             "Home could not load work events for user %s", user_id[:_LOG_ID_CHARS]
         )
         return []
+    try:
+        return await _without_working_files(user_id, events)
+    except Exception:
+        logger.warning(
+            "Home could not check work files for user %s", user_id[:_LOG_ID_CHARS]
+        )
+        # An unchecked file row may be one of Otto's own; the rest still show.
+        return [event for event in events if event.category != "FILE"]
+
+
+async def _without_working_files(
+    user_id: str, events: list[activity_db.ActivityEvent]
+) -> list[activity_db.ActivityEvent]:
+    """Drop the FILE rows logged for Otto's own working files before writes
+    stopped logging them. The migration marks the files (``isInternal``), not
+    these log rows, so the mark is read through each row's file id."""
+    file_ids = [e.object_id for e in events if e.category == "FILE" and e.object_id]
+    internal = await workspace_db.list_internal_file_ids(user_id, file_ids)
+    return [
+        event
+        for event in events
+        if not (event.category == "FILE" and event.object_id in internal)
+    ]
 
 
 async def _get_session_titles(

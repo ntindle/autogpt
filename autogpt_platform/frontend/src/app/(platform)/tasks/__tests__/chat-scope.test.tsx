@@ -1,5 +1,7 @@
 import { server } from "@/mocks/mock-server";
-import { render, screen, waitFor } from "@/tests/integrations/test-utils";
+import { getGetWorkspaceTaskSessionScopeQueryKey } from "@/app/api/__generated__/endpoints/tasks/tasks";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { useOrgTeamStore } from "@/services/org-team/store";
 import { isProtectedPage } from "@/lib/auth/helpers";
 import { http, HttpResponse } from "msw";
@@ -7,6 +9,13 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import TaskChatPage from "../chat/[sessionId]/page";
 
 const { router } = vi.hoisted(() => ({ router: { replace: vi.fn() } }));
+function renderPage(queryClient = new QueryClient()) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <TaskChatPage />
+    </QueryClientProvider>,
+  );
+}
 vi.mock("next/navigation", () => ({
   useRouter: () => router,
   useParams: () => ({ sessionId: "saved-session" }),
@@ -22,7 +31,10 @@ beforeEach(() => {
     isLoaded: true,
   });
 });
-afterEach(() => useOrgTeamStore.getState().clearContext());
+afterEach(() => {
+  cleanup();
+  useOrgTeamStore.getState().clearContext();
+});
 
 test.each([
   {
@@ -45,7 +57,7 @@ test.each([
         HttpResponse.json({ organization_id, team_id }),
       ),
     );
-    render(<TaskChatPage />);
+    renderPage();
     await waitFor(() =>
       expect(router.replace).toHaveBeenCalledWith(
         `/copilot?sessionId=saved-session&organizationId=${organization}&teamId=${team}`,
@@ -61,7 +73,27 @@ test("an unavailable conversation does not fall back to the selected organizatio
       HttpResponse.json({ detail: "Conversation not found" }, { status: 404 }),
     ),
   );
-  render(<TaskChatPage />);
+  renderPage();
+  await screen.findByText("This conversation is not available.");
+  expect(router.replace).not.toHaveBeenCalled();
+});
+
+test("cached scope cannot reopen a conversation after access is revoked", async () => {
+  const queryClient = new QueryClient();
+  queryClient.setQueryData(
+    getGetWorkspaceTaskSessionScopeQueryKey("saved-session"),
+    {
+      data: { organization_id: "saved-org", team_id: "saved-team" },
+      status: 200,
+      headers: new Headers(),
+    },
+  );
+  server.use(
+    http.get("/api/proxy/api/tasks/conversation/saved-session/scope", () =>
+      HttpResponse.json({ detail: "Conversation not found" }, { status: 404 }),
+    ),
+  );
+  renderPage(queryClient);
   await screen.findByText("This conversation is not available.");
   expect(router.replace).not.toHaveBeenCalled();
 });

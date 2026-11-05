@@ -3,7 +3,7 @@ import Link from "next/link";
 import type { TaskAssignee } from "@/app/api/__generated__/models/taskAssignee";
 import type { TaskQuestionItem } from "@/app/api/__generated__/models/taskQuestionItem";
 import type { WorkspaceTask } from "@/app/api/__generated__/models/workspaceTask";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { MessageResponse } from "@/components/organisms/Message/Message";
 import { resolveWorkspaceUrls } from "../../copilot/components/ChatMessagesContainer/helpers";
 
 interface Props {
@@ -59,7 +59,7 @@ export function TaskQuestionRecipient({
   return (
     <div className="mb-3 space-y-2">
       {question.answer ? (
-        <div className="space-y-1 text-sm">
+        <div className="text-sm space-y-1">
           <p className="text-xs text-muted-foreground">Answered by {name}</p>
           <MessageResponse>
             {resolveWorkspaceUrls(question.answer)}
@@ -67,14 +67,14 @@ export function TaskQuestionRecipient({
         </div>
       ) : (
         <>
-          <label className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <label className="text-xs flex flex-wrap items-center gap-2 text-muted-foreground">
             Answer from
             <select
               aria-label={`Who should answer: ${question.question}`}
               value={target ? `${target.kind}:${target.id}` : ""}
               disabled={pending || humanOnly || !candidates.length}
               onChange={(event) => void route(event.target.value)}
-              className="min-h-11 max-w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground"
+              className="text-sm min-h-11 max-w-full rounded-lg border border-border bg-background px-3 text-foreground"
             >
               {target &&
               !candidates.some(

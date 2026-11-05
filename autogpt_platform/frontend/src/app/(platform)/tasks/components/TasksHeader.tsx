@@ -18,10 +18,10 @@ export function TasksHeader({ page }: Props) {
     ),
   );
   return (
-    <header className="shrink-0 border-b border-border px-4 pb-3 pt-7 sm:px-8">
+    <header className="shrink-0 border-b border-border px-4 pt-7 pb-3 sm:px-8">
       <div className="mb-4 flex items-start justify-between gap-4">
         <div>
-          <h1 className="flex items-baseline gap-2.5 text-3xl font-semibold tracking-tight">
+          <h1 className="text-3xl flex items-baseline gap-2.5 font-semibold tracking-tight">
             Tasks{" "}
             <span className="text-sm font-normal text-muted-foreground">
               {
@@ -57,7 +57,7 @@ export function TasksHeader({ page }: Props) {
               aria-pressed={page.view.filter === filter}
               onClick={() => page.view.update({ filter })}
               className={cn(
-                "shrink-0 whitespace-nowrap rounded-full px-2 py-2 text-xs text-muted-foreground hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring sm:px-3",
+                "text-xs focus-visible:ring-ring shrink-0 rounded-full px-2 py-2 whitespace-nowrap text-muted-foreground hover:bg-muted focus-visible:ring-2 sm:px-3",
                 page.view.filter === filter &&
                   "bg-muted font-medium text-foreground",
               )}
@@ -79,7 +79,7 @@ export function TasksHeader({ page }: Props) {
           <div className="relative">
             <MagnifyingGlass
               size={14}
-              className="absolute left-2.5 top-2.5 text-muted-foreground"
+              className="absolute top-2.5 left-2.5 text-muted-foreground"
             />
             <Input
               id="task-search"
@@ -92,7 +92,7 @@ export function TasksHeader({ page }: Props) {
               onChange={(event) =>
                 page.view.update({ search: event.target.value })
               }
-              className="h-8 w-36 rounded-full pl-8 text-xs"
+              className="text-xs h-8 w-36 rounded-full pl-8"
             />
           </div>
           <select
@@ -101,7 +101,7 @@ export function TasksHeader({ page }: Props) {
             onChange={(event) =>
               page.view.update({ project: event.target.value })
             }
-            className="h-8 max-w-36 rounded-full border border-border bg-background px-3 text-xs text-muted-foreground"
+            className="text-xs h-8 max-w-36 rounded-full border border-border bg-background px-3 text-muted-foreground"
           >
             <option value="">All projects</option>
             {projects.map((project) => (

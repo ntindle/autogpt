@@ -10,14 +10,15 @@ import inspect
 import logging
 import mimetypes
 import posixpath
+import re
 import uuid
 from collections.abc import Collection, Sequence
+from datetime import datetime
 from typing import TYPE_CHECKING, Awaitable, Optional, TypeVar
 
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel
 
-from backend.copilot.rate_limit import get_workspace_storage_limit_bytes
 from backend.data.db_accessors import (
     LiveResourceAccessRevoked,
     live_resource_lease,
@@ -26,9 +27,11 @@ from backend.data.db_accessors import (
     workspace_folder_db,
     workspace_skill_db,
 )
+from backend.data.entitlement_limits import get_workspace_storage_limit_bytes
 from backend.data.skill_capacity import skill_owner_folder
 from backend.data.tenancy import ResourceAccess
-from backend.data.workspace import WorkspaceFile
+from backend.data.workspace import WorkspaceFile, storage_limit_exceeded
+from backend.data.workspace_internal import is_internal_workspace_file
 from backend.data.workspace_scope import (
     EXPERT_FILE_ACCESS_DENIED,
     SHARED_ROOTS,
@@ -51,20 +54,6 @@ from backend.util.workspace_storage import (
 
 if TYPE_CHECKING:
     from backend.data.workspace_folder import WorkspaceFolder
-
-
-def format_bytes(n: int) -> str:
-    """Format bytes as a human-readable string (e.g. 250 MB, 1.0 GB)."""
-    KB, MB, GB = 1024, 1024**2, 1024**3
-    if n < KB:
-        return f"{n} B"
-    if n < MB:
-        kb = round(n / KB)
-        return f"{n / MB:.1f} MB" if kb >= 1024 else f"{kb} KB"
-    if n < GB:
-        mb = round(n / MB)
-        return f"{n / GB:.1f} GB" if mb >= 1024 else f"{mb} MB"
-    return f"{n / GB:.1f} GB"
 
 
 logger = logging.getLogger(__name__)
@@ -137,32 +126,33 @@ class WorkspaceManager:
             "user_global_config": self.user_global_config,
         }
 
-    def _matches_session(self, file: WorkspaceFile | None) -> bool:
-        return file is not None and (
-            self.session_id is None or file.session_id == self.session_id
-        )
-
     async def _run_scoped(self, action: Awaitable[T]) -> T:
         if self.user_global_config or self.organization_id is None:
             return await action
-        async with live_resource_lease(
-            self.user_id,
-            self.organization_id,
-            self.team_id,
-            self.access,
-        ) as guard:
-            if not guard:
-                if inspect.iscoroutine(action):
-                    action.close()
-                raise LiveResourceAccessRevoked("workspace_access_revoked")
-            if self.session_id is not None:
-                await require_exact_chat_session_scope(
-                    self.session_id,
-                    self.user_id,
-                    self.organization_id,
-                    self.team_id,
-                )
-            return await guard.run(action)
+        handed_off = False
+        try:
+            async with live_resource_lease(
+                self.user_id,
+                self.organization_id,
+                self.team_id,
+                self.access,
+            ) as guard:
+                if not guard:
+                    raise LiveResourceAccessRevoked("workspace_access_revoked")
+                if self.session_id is not None:
+                    await require_exact_chat_session_scope(
+                        self.session_id,
+                        self.user_id,
+                        self.organization_id,
+                        self.team_id,
+                    )
+                handed_off = True
+                return await guard.run(action)
+        finally:
+            # A refused action never starts; close it rather than leave it
+            # unawaited. Once handed off, guard.run owns it.
+            if not handed_off and inspect.iscoroutine(action):
+                action.close()
 
     def _authorize_path(self, path: str, *, write: bool = False) -> None:
         if self.scope is not None and not self.scope.allows_path(path, write=write):
@@ -216,11 +206,6 @@ class WorkspaceManager:
         Returns:
             Resolved path with session prefix if applicable
         """
-        # Explicit session paths must stay inside the manager's persisted session.
-        if path.startswith("/sessions/"):
-            if self.session_path and not path.startswith(self.session_path + "/"):
-                raise ValueError("Cross-session workspace paths are not allowed")
-            return path
         if path.startswith(SHARED_ROOTS):
             return path
 
@@ -247,8 +232,6 @@ class WorkspaceManager:
         Returns:
             Effective path prefix for database query
         """
-        if include_all_sessions and self.session_id is not None:
-            raise ValueError("Session-scoped managers cannot access other sessions")
         if include_all_sessions:
             # Normalize path to ensure leading slash (stored paths are normalized)
             if path is not None and not path.startswith("/"):
@@ -292,9 +275,8 @@ class WorkspaceManager:
             resolved_path,
             **self._scope_kwargs(),
         )
-        if not self._matches_session(file):
+        if file is None:
             raise FileNotFoundError(f"File not found at path: {resolved_path}")
-        assert file is not None
 
         storage = await get_workspace_storage()
         return await storage.retrieve(file.storage_path)
@@ -321,13 +303,34 @@ class WorkspaceManager:
             self.workspace_id,
             **self._scope_kwargs(),
         )
-        if not self._matches_session(file):
+        if file is None:
             raise FileNotFoundError(f"File not found: {file_id}")
-        assert file is not None
         self._authorize_file(file)
 
         storage = await get_workspace_storage()
         return await storage.retrieve(file.storage_path)
+
+    async def read_file_head_by_id(self, file_id: str, max_bytes: int) -> bytes:
+        """Read at most ``max_bytes`` from the start of a file, by file ID.
+
+        For a preview or a slice near the start, so a large file is not
+        loaded whole. Authorized exactly as ``read_file_by_id``.
+        """
+        return await self._run_scoped(self._read_file_head_by_id(file_id, max_bytes))
+
+    async def _read_file_head_by_id(self, file_id: str, max_bytes: int) -> bytes:
+        db = workspace_db()
+        file = await db.get_workspace_file(
+            file_id,
+            self.workspace_id,
+            **self._scope_kwargs(),
+        )
+        if file is None:
+            raise FileNotFoundError(f"File not found: {file_id}")
+        self._authorize_file(file)
+
+        storage = await get_workspace_storage()
+        return await storage.retrieve_partial(file.storage_path, max_bytes)
 
     async def write_file(
         self,
@@ -338,6 +341,7 @@ class WorkspaceManager:
         overwrite: bool = False,
         metadata: Optional[dict] = None,
         scanned_checksums: Collection[str] = (),
+        rename_on_conflict: bool = False,
     ) -> WorkspaceFile:
         return await self._run_scoped(
             self._write_file(
@@ -348,6 +352,7 @@ class WorkspaceManager:
                 overwrite=overwrite,
                 metadata=metadata,
                 scanned_checksums=scanned_checksums,
+                rename_on_conflict=rename_on_conflict,
             )
         )
 
@@ -360,6 +365,7 @@ class WorkspaceManager:
         overwrite: bool = False,
         metadata: Optional[dict] = None,
         scanned_checksums: Collection[str] = (),
+        rename_on_conflict: bool = False,
     ) -> WorkspaceFile:
         """
         Write file to workspace.
@@ -373,10 +379,14 @@ class WorkspaceManager:
             path: Virtual path (defaults to "/{filename}", session-scoped if session_id set)
             mime_type: MIME type (auto-detected if not provided)
             overwrite: Whether to overwrite existing file at path
-            metadata: Optional metadata dict (e.g., origin tracking)
+            metadata: Optional metadata dict (e.g., origin tracking). A
+                ``purpose`` of ``tool-output`` or ``working-file`` marks the
+                file as Otto's own; see ``is_internal_workspace_file``.
             scanned_checksums: SHA-256s of bytes the server has already
                 scanned clean; content hashing to one of them is not scanned
                 again. Never pass hashes a client supplied.
+            rename_on_conflict: When the path is taken, store beside it as
+                ``name (n).ext`` instead of failing or replacing the file.
 
         Returns:
             Created WorkspaceFile instance
@@ -409,46 +419,41 @@ class WorkspaceManager:
         # Resolve path with session prefix
         path = self._resolve_path(path)
         self._authorize_path(path, write=True)
-
-        # Enforce per-user workspace storage quota (tier-based).
-        # For overwrites, subtract the existing file's size so replacing a file
-        # with a same-size or smaller file is not rejected near the cap.
-        storage_limit, current_usage = await asyncio.gather(
-            get_workspace_storage_limit_bytes(self.user_id),
-            workspace_db().get_workspace_total_size(self.workspace_id, all_scopes=True),
+        requested_path = path
+        if rename_on_conflict:
+            path = await self._free_path(requested_path)
+            if path != requested_path:
+                filename = posixpath.basename(path)
+        is_internal = is_internal_workspace_file(
+            name=filename, path=path, metadata=metadata
         )
-        if overwrite:
-            db = workspace_db()
-            existing = await db.get_workspace_file_by_path(
-                self.workspace_id,
-                path,
-                **self._scope_kwargs(),
+
+        # Both refusals come before virus scanning, so a cheap check isn't
+        # blocked by a potentially slow or unavailable scanner. The quota one
+        # is early only: the row's own transaction holds it against concurrent
+        # writes. An overwrite does not count the file it replaces.
+        db = workspace_db()
+        storage_limit, current_usage = await asyncio.gather(
+            get_workspace_storage_limit_bytes(self.user_id, self.organization_id),
+            # The quota is the user's: their files in every scope count.
+            db.get_workspace_total_size(self.workspace_id, all_scopes=True),
+        )
+        # A renamed write replaces nothing, even a file that took its free name since.
+        existing = (
+            None
+            if rename_on_conflict
+            else await db.get_workspace_file_by_path(
+                self.workspace_id, path, **self._scope_kwargs()
             )
-            if existing is not None:
-                current_usage = max(0, current_usage - existing.size_bytes)
+        )
+        if existing is not None and not overwrite:
+            raise ValueError(f"File already exists at path: {path}")
+        if existing is not None:
+            current_usage = max(0, current_usage - existing.size_bytes)
 
         projected_usage = current_usage + len(content)
         if storage_limit > 0 and projected_usage > storage_limit:
-            raise ValueError(
-                f"Storage limit exceeded. "
-                f"You've used {format_bytes(current_usage)} of your "
-                f"{format_bytes(storage_limit)} quota. "
-                f"Delete some files or upgrade your plan for more storage."
-            )
-
-        # Check if file exists at path (only error for non-overwrite case).
-        # Done before virus scanning so a cheap duplicate-path check isn't
-        # blocked by a potentially slow or unavailable scanner.
-        db = workspace_db()
-
-        if not overwrite:
-            existing = await db.get_workspace_file_by_path(
-                self.workspace_id,
-                path,
-                **self._scope_kwargs(),
-            )
-            if existing is not None:
-                raise ValueError(f"File already exists at path: {path}")
+            raise storage_limit_exceeded(current_usage, storage_limit)
 
         # Scan here — callers must NOT duplicate this scan.
         # WorkspaceManager owns virus scanning for all persisted files.
@@ -476,17 +481,20 @@ class WorkspaceManager:
         # Create database record - handle race condition where another request
         # created a file at the same path between our check and create
         async def _persist_db_record(
-            retries: int = 2 if overwrite else 0,
-        ) -> WorkspaceFile:
-            """Create DB record, retrying on conflict if overwrite=True.
-
-            Cleans up the orphaned storage file on any failure.
-            """
+            path: str,
+            name: str,
+            replacing: WorkspaceFile | None,
+            retries: int = 2 if overwrite or rename_on_conflict else 0,
+        ) -> tuple[WorkspaceFile, WorkspaceFile | None]:
+            """Create DB record at ``path`` in place of ``replacing``. On
+            conflict, retry at the next free name when renaming, else against
+            the file then at the path if overwrite=True. Returns the record
+            and the file it replaced."""
             try:
-                return await db.create_workspace_file(
+                file = await db.create_workspace_file(
                     workspace_id=self.workspace_id,
                     file_id=file_id,
-                    name=filename,
+                    name=name,
                     path=path,
                     storage_path=storage_path,
                     mime_type=mime_type,
@@ -498,27 +506,33 @@ class WorkspaceManager:
                     session_id=self.session_id,
                     execution_id=self.execution_id,
                     user_global_config=self.user_global_config,
+                    is_internal=is_internal,
+                    storage_limit_bytes=storage_limit,
+                    replacing_file_id=replacing.id if replacing else None,
                 )
             except UniqueViolationError:
-                if retries > 0:
-                    # Delete conflicting file and retry
-                    existing = await db.get_workspace_file_by_path(
-                        self.workspace_id,
-                        path,
-                        **self._scope_kwargs(),
+                if retries > 0 and rename_on_conflict:
+                    # Another write took the free name after we looked.
+                    free = await self._free_path(requested_path)
+                    return await _persist_db_record(
+                        free, posixpath.basename(free), None, retries - 1
                     )
-                    if existing:
-                        await self.delete_file(existing.id)
-                    return await _persist_db_record(retries=retries - 1)
+                if retries > 0:
+                    current = await db.get_workspace_file_by_path(
+                        self.workspace_id, path, **self._scope_kwargs()
+                    )
+                    return await _persist_db_record(path, name, current, retries - 1)
                 if overwrite:
                     raise ValueError(
                         f"Unable to overwrite file at path: {path} "
                         f"(concurrent write conflict)"
                     ) from None
                 raise ValueError(f"File already exists at path: {path}")
+            return file, replacing
 
         replaced_storage_path: str | None = None
         replaced_file_id: str | None = None
+        replaced: WorkspaceFile | None = None
         try:
             if skill_owner_folder(path) is not None:
                 write = WorkspaceSkillWrite(
@@ -535,6 +549,7 @@ class WorkspaceManager:
                     overwrite=overwrite,
                     checksum=checksum,
                     metadata=metadata,
+                    storage_limit_bytes=storage_limit,
                 )
                 publication = await workspace_skill_db().publish_workspace_skill_file(
                     write
@@ -547,7 +562,10 @@ class WorkspaceManager:
                 replaced_storage_path = publication.replaced_storage_path
                 replaced_file_id = publication.replaced_file_id
             else:
-                file = await _persist_db_record()
+                file, replaced = await _persist_db_record(path, filename, existing)
+                if replaced is not None:
+                    replaced_storage_path = replaced.storage_path
+                    replaced_file_id = replaced.id
         except Exception:
             try:
                 await storage.delete(storage_path)
@@ -555,13 +573,17 @@ class WorkspaceManager:
                 logger.warning(f"Failed to clean up orphaned storage file: {e}")
             raise
 
+        if replaced is not None and not await self._was_retired(replaced.id):
+            replaced_storage_path = replaced_file_id = None
+
         if replaced_storage_path and replaced_storage_path != storage_path:
             try:
                 await storage.delete(replaced_storage_path)
             except Exception:
-                logger.warning("Failed to clean up replaced skill blob", exc_info=True)
+                logger.warning("Failed to clean up replaced blob", exc_info=True)
 
         if replaced_file_id and replaced_file_id != file.id:
+            file = file.model_copy(update={"replaced_file_id": replaced_file_id})
             try:
                 from backend.api.features.workspace.embeddings import (
                     delete_workspace_file_embedding,
@@ -571,16 +593,49 @@ class WorkspaceManager:
                     file_id=replaced_file_id, user_id=self.user_id
                 )
             except Exception:
-                logger.warning(
-                    "Failed to clean up replaced skill embedding", exc_info=True
-                )
+                logger.warning("Failed to clean up replaced embedding", exc_info=True)
 
         logger.info(
-            f"Wrote file {file.id} ({filename}) to workspace {self.workspace_id} "
-            f"at path {path}, size={len(content)} bytes"
+            f"Wrote file {file.id} ({file.name}) to workspace {self.workspace_id} "
+            f"at path {file.path}, size={len(content)} bytes"
         )
 
         return file
+
+    async def _free_path(self, path: str) -> str:
+        """``path`` if no live file holds it, else the next ``name (n).ext``
+        beside it."""
+        db = workspace_db()
+        if (
+            await db.get_workspace_file_by_path(
+                self.workspace_id, path, **self._scope_kwargs()
+            )
+            is None
+        ):
+            return path
+        stem, ext = posixpath.splitext(path)
+        prefix = f"{stem} ("
+        numbered = re.compile(re.escape(prefix) + r"(\d+)\)" + re.escape(ext))
+        taken = [
+            int(match.group(1))
+            for file in await db.list_workspace_files(
+                self.workspace_id, path_prefix=prefix, **self._scope_kwargs()
+            )
+            if (match := numbered.fullmatch(file.path))
+        ]
+        return f"{prefix}{max(taken, default=0) + 1}){ext}"
+
+    async def _was_retired(self, file_id: str) -> bool:
+        """Whether the replaced file is gone: one renamed away before the
+        insert is still live, and keeps its blob. Unknown counts as live."""
+        try:
+            live = await workspace_db().get_workspace_file(
+                file_id, self.workspace_id, **self._scope_kwargs()
+            )
+        except Exception:
+            logger.warning("Failed to check the replaced file", exc_info=True)
+            return False
+        return live is None
 
     async def write_skill_package(
         self,
@@ -588,9 +643,13 @@ class WorkspaceManager:
         files: Sequence[SkillPackageFile],
         removed_paths: Collection[str],
         scanned_checksums: Collection[str] = (),
+        *,
+        config: Config | None = None,
     ) -> WorkspaceFile:
         return await self._run_scoped(
-            self._write_skill_package(root, files, removed_paths, scanned_checksums)
+            self._write_skill_package(
+                root, files, removed_paths, scanned_checksums, config=config
+            )
         )
 
     async def _write_skill_package(
@@ -599,6 +658,8 @@ class WorkspaceManager:
         files: Sequence[SkillPackageFile],
         removed_paths: Collection[str],
         scanned_checksums: Collection[str] = (),
+        *,
+        config: Config | None = None,
     ) -> WorkspaceFile:
         """Write a skill package as one change: ``root`` is its SKILL.md,
         ``files`` the other files that changed, and ``removed_paths`` the
@@ -615,13 +676,16 @@ class WorkspaceManager:
         removed = [self._resolve_path(path) for path in removed_paths]
         for path in [*(item.path for item in package), *removed]:
             self._authorize_path(path, write=True)
-        await self._require_package_room(package, removed)
+        config = config if config is not None else Config()
+        storage_limit = await self._require_package_room(
+            package, removed, config.max_file_size_mb
+        )
         for item in package:
             if compute_file_checksum(item.content) not in scanned_checksums:
                 await scan_content_safe(
                     item.content, filename=posixpath.basename(item.path)
                 )
-        storage = await get_workspace_storage()
+        storage = await get_workspace_storage(config=config)
         stored: list[WorkspaceSkillFile] = []
         try:
             for item in package:
@@ -634,6 +698,7 @@ class WorkspaceManager:
                 overwrite=True,
                 files=stored[1:],
                 removed_paths=removed,
+                storage_limit_bytes=storage_limit,
                 **stored[0].model_dump(),
             )
             publication = await workspace_skill_db().publish_workspace_skill_file(write)
@@ -653,8 +718,12 @@ class WorkspaceManager:
             f"Wrote skill package {publication.file.path} ({len(stored)} files, "
             f"{len(removed)} removed) to workspace {self.workspace_id}"
         )
+        # Package files are the skills registry's, not the user's to find.
         for blob in stored:
-            self._schedule_embedding(blob.file_id, blob.name, blob.path)
+            if not is_internal_workspace_file(
+                name=blob.name, path=blob.path, metadata=blob.metadata
+            ):
+                self._schedule_embedding(blob.file_id, blob.name, blob.path)
         return publication.file
 
     async def _discard_unpublished(
@@ -684,18 +753,20 @@ class WorkspaceManager:
                 logger.warning("Failed to clean up unpublished skill blob")
 
     async def _require_package_room(
-        self, package: list[SkillPackageFile], removed: list[str]
-    ) -> None:
-        max_file_size = Config().max_file_size_mb * 1024 * 1024
+        self, package: list[SkillPackageFile], removed: list[str], max_file_size_mb: int
+    ) -> int:
+        """Refuse a package that cannot fit before its blobs are scanned and
+        stored, and return the quota its publication enforces."""
+        max_file_size = max_file_size_mb * 1024 * 1024
         for item in package:
             if len(item.content) > max_file_size:
                 raise ValueError(
                     f"File too large: {len(item.content)} bytes exceeds "
-                    f"{Config().max_file_size_mb}MB limit"
+                    f"{max_file_size_mb}MB limit"
                 )
         db = workspace_db()
         storage_limit, current_usage = await asyncio.gather(
-            get_workspace_storage_limit_bytes(self.user_id),
+            get_workspace_storage_limit_bytes(self.user_id, self.organization_id),
             db.get_workspace_total_size(self.workspace_id, all_scopes=True),
         )
         for path in {item.path for item in package} | set(removed):
@@ -707,12 +778,8 @@ class WorkspaceManager:
         current_usage = max(0, current_usage)
         projected = current_usage + sum(len(item.content) for item in package)
         if storage_limit > 0 and projected > storage_limit:
-            raise ValueError(
-                f"Storage limit exceeded. "
-                f"You've used {format_bytes(current_usage)} of your "
-                f"{format_bytes(storage_limit)} quota. "
-                f"Delete some files or upgrade your plan for more storage."
-            )
+            raise storage_limit_exceeded(current_usage, storage_limit)
+        return storage_limit
 
     async def _store_package_blob(
         self, storage: WorkspaceStorageBackend, item: SkillPackageFile
@@ -798,7 +865,7 @@ class WorkspaceManager:
         file = await db.get_workspace_file(
             file_id, self.workspace_id, **self._scope_kwargs()
         )
-        if file is None or not self._matches_session(file):
+        if file is None:
             raise FileNotFoundError(f"File not found: {file_id}")
         self._authorize_file(file, write=True)
         if skill_owner_folder(file.path) is not None:
@@ -867,16 +934,12 @@ class WorkspaceManager:
                 f"{Config().max_file_size_mb}MB limit"
             )
         storage_limit, current_usage = await asyncio.gather(
-            get_workspace_storage_limit_bytes(self.user_id),
+            get_workspace_storage_limit_bytes(self.user_id, self.organization_id),
             workspace_db().get_workspace_total_size(self.workspace_id, all_scopes=True),
         )
         projected = max(0, current_usage - replaced_size) + size
         if storage_limit > 0 and projected > storage_limit:
-            raise ValueError(
-                f"Storage limit exceeded. You've used {format_bytes(current_usage)} "
-                f"of your {format_bytes(storage_limit)} quota. "
-                "Delete some files or upgrade your plan for more storage."
-            )
+            raise storage_limit_exceeded(current_usage, storage_limit)
 
     async def list_folders(self) -> list["WorkspaceFolder"]:
         """The folder tree; empty for a scope without the owner's files, whose
@@ -906,6 +969,9 @@ class WorkspaceManager:
         root_only: bool = False,
         allowed_path_prefixes: Optional[list[str]] = None,
         include_user_files: bool = False,
+        include_internal: bool = True,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> list[WorkspaceFile]:
         """
         List files in workspace.
@@ -941,6 +1007,11 @@ class WorkspaceManager:
             include_user_files: Also list the owner's own files. A scoped
                 manager takes this from its scope instead
                 (see :meth:`_include_user_files`).
+            include_internal: Whether to list Otto's own working files. Lists
+                the user sees pass ``False``.
+            created_after: Only files written at or after this instant.
+            created_before: Only files written before this instant. Both
+                apply in the query, ahead of ``limit``.
 
         Returns:
             List of WorkspaceFile instances
@@ -960,6 +1031,9 @@ class WorkspaceManager:
                 metadata_not_equals=metadata_not_equals,
                 folder_id=folder_id,
                 root_only=root_only,
+                include_internal=include_internal,
+                created_after=created_after,
+                created_before=created_before,
             )
         )
 
@@ -978,6 +1052,9 @@ class WorkspaceManager:
         metadata_not_equals: Optional[dict] = None,
         folder_id: Optional[str] = None,
         root_only: bool = False,
+        include_internal: bool = True,
+        created_after: Optional[datetime] = None,
+        created_before: Optional[datetime] = None,
     ) -> list[WorkspaceFile]:
         effective_path = self._get_effective_path(
             path,
@@ -1003,6 +1080,9 @@ class WorkspaceManager:
             **self._scope_kwargs(),
             allowed_path_prefixes=self._allowed_prefixes(allowed_path_prefixes),
             include_user_files=self._include_user_files(include_user_files),
+            include_internal=include_internal,
+            created_after=created_after,
+            created_before=created_before,
         )
 
     async def delete_file(self, file_id: str) -> bool:
@@ -1024,9 +1104,8 @@ class WorkspaceManager:
             self.workspace_id,
             **self._scope_kwargs(),
         )
-        if not self._matches_session(file):
+        if file is None:
             return False
-        assert file is not None
         self._authorize_file(file, write=True)
 
         # Delete from storage
@@ -1085,9 +1164,8 @@ class WorkspaceManager:
             self.workspace_id,
             **self._scope_kwargs(),
         )
-        if not self._matches_session(file):
+        if file is None:
             raise FileNotFoundError(f"File not found: {file_id}")
-        assert file is not None
         self._authorize_file(file)
 
         storage = await get_workspace_storage()
@@ -1119,9 +1197,8 @@ class WorkspaceManager:
             self.workspace_id,
             **self._scope_kwargs(),
         )
-        if not self._matches_session(file):
+        if file is None:
             return None
-        assert file is not None
         self._authorize_file(file)
         return file
 
@@ -1144,12 +1221,11 @@ class WorkspaceManager:
         db = workspace_db()
         resolved_path = self._resolve_path(path)
         self._authorize_path(resolved_path)
-        file = await db.get_workspace_file_by_path(
+        return await db.get_workspace_file_by_path(
             self.workspace_id,
             resolved_path,
             **self._scope_kwargs(),
         )
-        return file if self._matches_session(file) else None
 
     async def get_file_count(
         self,

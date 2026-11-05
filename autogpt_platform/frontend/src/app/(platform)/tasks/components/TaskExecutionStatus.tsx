@@ -12,9 +12,9 @@ export function TaskExecutionStatus({ task, tasks, onChat }: Props) {
   const hold = planningHoldSource(task, tasks);
   const prerequisites = unmetPrerequisites(task, tasks);
   return (
-    <div className="space-y-3 text-sm">
+    <div className="text-sm space-y-3">
       {task.accepted === false ? (
-        <p className="rounded-lg border border-dashed border-violet-300 bg-violet-50 p-3">
+        <p className="border-violet-300 bg-violet-50 rounded-lg border border-dashed p-3">
           Proposed work. Accept this task to add it to the agreed scope.
         </p>
       ) : hold ? (
@@ -33,7 +33,7 @@ export function TaskExecutionStatus({ task, tasks, onChat }: Props) {
         </p>
       ) : null}
       {task.status === "blocked" && task.dispatch_state === "finished" ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-amber-900">
+        <div className="border-amber-200 bg-amber-50 text-amber-900 rounded-lg border p-3">
           <p>
             <WarningCircle size={15} className="mr-1 inline" />
             The last attempt stopped before producing an accepted result. The
@@ -42,7 +42,7 @@ export function TaskExecutionStatus({ task, tasks, onChat }: Props) {
           <button
             type="button"
             onClick={onChat}
-            className="mt-2 rounded underline focus-visible:ring-2 focus-visible:ring-ring"
+            className="focus-visible:ring-ring mt-2 rounded underline focus-visible:ring-2"
           >
             Open attempt details
           </button>

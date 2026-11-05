@@ -79,14 +79,13 @@ export function FormView({
   return (
     <FormNameContext.Provider value={props.name}>
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
-        <h3 className="text-sm font-semibold text-zinc-800">{props.title}</h3>
+        <h3 className="text-sm text-zinc-800 font-semibold">{props.title}</h3>
         {renderNode(props.fields?.slice(0, 6))}
         <Button
           type="submit"
           size="small"
           disabled={isStreaming || disabled}
           rightIcon={<Icon icon={ArrowRight01Icon} size={16} />}
-          unmask={false}
         >
           {props.submitLabel}
         </Button>

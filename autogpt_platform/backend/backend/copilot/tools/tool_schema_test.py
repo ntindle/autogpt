@@ -258,6 +258,14 @@ from ._test_data import make_session
 # The margin is deliberate and is the same exception the wire budget's #14476
 # note names: this is queued while dev is still moving, and a measured-plus-one
 # ceiling reds the queue's merge ref on the next reworded description.
+# Bumped 77_014 -> 77_401 for memory_forget_search's `include_forgotten`
+# argument (#14972): a soft forget left a fact the chat could no longer find,
+# so it could never be made permanent with hard_delete. No tool was added.
+# Measured on this branch merged with dev 8432f734f5:
+#     merged tree, before                         76,975 (89 tools)
+#     + include_forgotten              +126       77,101 (89 tools)
+#     + headroom                       +300       77,401
+# The same deliberate margin as the line above, for the same reason.
 # Bumped 77_014 -> 77_176 for connect_integration's managed `ayrshare`
 # provider (SECRT-2878): the enum entry, its place in the supported list, one
 # sentence telling the model it returns the account-linking link (never a key
@@ -271,7 +279,8 @@ from ._test_data import make_session
 # (12,505 chars, one tool). Measured 89,729 (90 tools) after merging dev
 # b92c8bdf24; plus the same 300-char margin.
 # Mainline combines Tasks, Orgs and OpenUI: 98,120 chars, plus 300 headroom.
-_CHAR_BUDGET = 98_420
+# Pinned dev 78749c15 plus Tasks/Orgs/OpenUI: 98,844 chars, with 300 headroom.
+_CHAR_BUDGET = 99_144
 
 
 @pytest.fixture(scope="module")
@@ -468,7 +477,8 @@ def test_total_schema_char_budget() -> None:
 #     + headroom                       +300       69,788
 # Count only the eager tools actually registered by tool_adapter.
 # Combined Tasks/Orgs/OpenUI eager wire schema: 19,790, plus 300 headroom.
-_SESSION_WIRE_BUDGET = 20_090
+# The merged eager session declares 20,883 characters, with 300 headroom.
+_SESSION_WIRE_BUDGET = 21_183
 
 
 def test_largest_declared_session_wire_budget() -> None:

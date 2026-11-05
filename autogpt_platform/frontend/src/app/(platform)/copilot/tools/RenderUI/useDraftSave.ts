@@ -31,7 +31,7 @@ export function useDraftSave(args: Args) {
   const busy = useRef(false);
   const inFlight = useRef<Promise<boolean> | null>(null);
   const mounted = useRef(true);
-  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const [failure, setFailure] = useState<Failure | null>(null);
   const [saving, setSaving] = useState(false);
 

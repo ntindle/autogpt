@@ -1,16 +1,19 @@
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import FastAPI, Security
+from fastapi import FastAPI, HTTPException, Security
 from httpx import ASGITransport, AsyncClient
 from prisma.enums import APIKeyPermission, APIKeyStatus
 
 from backend.api import org_rollout
 from backend.api.external import middleware
+from backend.api.external.v2 import tenancy as v2_tenancy
 from backend.api.features.orgs import db as org_db
 from backend.data.auth.api_key import APIKeyInfo
+from backend.data.auth.base import APIAuthorizationInfo
 from backend.data.auth.oauth import OAuthAccessTokenInfo, OAuthApplicationInfo
+from backend.util.exceptions import NotAuthorizedError
 
 
 @pytest.mark.asyncio
@@ -24,10 +27,13 @@ from backend.data.auth.oauth import OAuthAccessTokenInfo, OAuthApplicationInfo
         (False, "personal", "default-team", 200),
         (False, "personal", None, 200),
         (False, None, None, 200),
-        (True, "shared", "shared-team", 200),
+        # Credentials stay personal even where organizations are on.
+        (True, "shared", "shared-team", 403),
+        (True, "shared", None, 403),
+        (True, "personal", None, 200),
     ],
 )
-async def test_external_auth_preserves_personal_scope_and_rejects_shared(
+async def test_external_auth_acts_in_the_personal_default_team_only(
     credential_type, enabled, org, team, status, monkeypatch, mocker
 ):
     monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", str(enabled).lower())
@@ -97,14 +103,41 @@ async def test_external_auth_preserves_personal_scope_and_rejects_shared(
     validation.assert_awaited_once()
     assert principal.model_dump() == before
     if status == 200:
-        assert response.json() == {
-            "org": org if org is not None else "personal",
-            "team": team if org is not None else "default-team",
-        }
+        assert response.json() == {"org": "personal", "team": "default-team"}
     else:
         assert "not enabled" in response.json()["detail"]
-    if not enabled:
-        default.assert_awaited_once_with("owner")
+    default.assert_awaited_once_with("owner")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "org,team",
+    [(None, None), ("personal", None), (None, "default-team")],
+)
+async def test_personal_scope_fills_in_the_default_team(mocker, org, team):
+    mocker.patch.object(
+        org_rollout,
+        "get_user_default_team",
+        AsyncMock(return_value=("personal", "default-team")),
+    )
+
+    assert await org_rollout.require_personal_scope("owner", org, team) == (
+        "personal",
+        "default-team",
+    )
+
+
+@pytest.mark.asyncio
+async def test_personal_scope_refuses_an_account_without_a_personal_org(mocker):
+    mocker.patch.object(
+        org_rollout, "get_user_default_team", AsyncMock(return_value=(None, None))
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await org_rollout.require_personal_scope("owner", None, None)
+
+    assert refused.value.status_code == 403
+    assert "No organization context" in refused.value.detail
 
 
 @pytest.mark.asyncio
@@ -112,9 +145,7 @@ async def test_invalid_api_key_stays_unauthorized_before_rollout(mocker):
     validation = mocker.patch.object(
         middleware, "validate_api_key", AsyncMock(return_value=None)
     )
-    gate = mocker.patch.object(
-        middleware, "require_personal_scope_without_collaboration", AsyncMock()
-    )
+    gate = mocker.patch.object(middleware, "require_personal_scope", AsyncMock())
     app = FastAPI()
 
     @app.get("/resource")
@@ -128,3 +159,78 @@ async def test_invalid_api_key_stays_unauthorized_before_rollout(mocker):
     assert response.status_code == 401
     validation.assert_awaited_once_with("invalid-key")
     gate.assert_not_awaited()
+
+
+@pytest.fixture
+def v2_membership(mocker):
+    """Every membership v2 checks is active, so only the rollout gate decides."""
+    default = AsyncMock(return_value=("personal", "default-team"))
+    mocker.patch.object(org_rollout, "get_user_default_team", default)
+    mocker.patch.object(org_db, "get_user_default_team", default)
+    membership = mocker.patch.object(v2_tenancy, "prisma")
+    membership.orgmember.find_unique = AsyncMock(
+        return_value=MagicMock(status="ACTIVE", Org=MagicMock(deletedAt=None))
+    )
+    return membership
+
+
+def _v2_credential(org: str | None, team: str | None) -> APIAuthorizationInfo:
+    return APIAuthorizationInfo(
+        user_id="owner",
+        scopes=[APIKeyPermission.READ_GRAPH],
+        type="api_key",
+        created_at=datetime.now(UTC),
+        organization_id=org,
+        team_id_restriction=team,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "enabled,org,team,header,allowed",
+    [
+        (False, "shared", None, None, False),
+        (False, "shared", "shared-team", None, False),
+        (False, "personal", "another-team", None, False),
+        (False, "personal", None, "another-team", False),
+        (False, None, None, "another-team", False),
+        (False, "personal", "default-team", None, True),
+        (False, "personal", None, "default-team", True),
+        (False, None, None, "default-team", True),
+        (False, "personal", None, None, True),
+        (False, None, None, None, True),
+        # Credentials stay personal even where organizations are on.
+        (True, "shared", "shared-team", None, False),
+        (True, "personal", None, "another-team", False),
+        (True, None, None, None, True),
+    ],
+)
+async def test_v2_tenant_is_the_personal_default_team_only(
+    enabled, org, team, header, allowed, monkeypatch, v2_membership
+):
+    monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", str(enabled).lower())
+    v2_membership.teammember.find_unique = AsyncMock(
+        return_value=MagicMock(status="ACTIVE", Team=MagicMock(orgId=org or "personal"))
+    )
+    credential = _v2_credential(org, team)
+
+    if not allowed:
+        with pytest.raises(NotAuthorizedError, match="not enabled"):
+            await v2_tenancy.resolve_tenant(credential, requested_team=header)
+        return
+    tenant = await v2_tenancy.resolve_tenant(credential, requested_team=header)
+    assert (tenant.organization_id, tenant.team_id) == ("personal", "default-team")
+
+
+@pytest.mark.asyncio
+async def test_v2_mcp_credential_tenancy_rejects_shared_scope(
+    monkeypatch, v2_membership
+):
+    """The MCP server resolves its tenant outside `resolve_tenant`."""
+    monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "true")
+
+    with pytest.raises(NotAuthorizedError, match="not enabled"):
+        await v2_tenancy.resolve_credential_tenancy(_v2_credential("shared", None))
+    assert await v2_tenancy.resolve_credential_tenancy(
+        _v2_credential("personal", None)
+    ) == ("personal", "default-team")

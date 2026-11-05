@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import pytest_asyncio
-from autogpt_libs.auth import RequestContext, get_request_context
+from autogpt_libs.auth import RequestContext, get_request_context, get_user_id
 from fastapi import FastAPI, Request
 from pydantic import SecretStr
 
@@ -22,6 +22,8 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 @pytest_asyncio.fixture(loop_scope="session")
 async def owner():
+    # The client is shared with the rest of the session: leave it as found.
+    connected_here = not db.is_connected()
     await db.connect()
     owner_id = str(uuid.uuid4())
     await db.prisma.user.create(
@@ -44,7 +46,8 @@ async def owner():
         for org_id in orgs:
             await db.prisma.organization.delete(where={"id": org_id})
         await db.prisma.user.delete(where={"id": owner_id})
-        await db.disconnect()
+        if connected_here:
+            await db.disconnect()
 
 
 def key(title: str) -> APIKeyCredentials:
@@ -67,6 +70,14 @@ async def client(owner, monkeypatch):
         )
 
     app.dependency_overrides[get_request_context] = context
+    # Dev's paywall dependency reads the signed-in user from the token, and this
+    # owner has no plan: sign them in and treat them as paid, as the API
+    # tests' conftest does.
+    app.dependency_overrides[get_user_id] = lambda: owner_id
+    monkeypatch.setattr(
+        "backend.copilot.rate_limit.is_user_paywalled", AsyncMock(return_value=False)
+    )
+    monkeypatch.setattr(routes, "is_user_paywalled", AsyncMock(return_value=False))
     monkeypatch.setattr(routes, "_ensure_managed_credentials_bounded", AsyncMock())
     monkeypatch.setattr(
         routes.product_analytics, "track_integration_connected", lambda **_: None
@@ -297,7 +308,9 @@ async def test_token_and_mcp_discovery_caches_do_not_cross_orgs(owner, monkeypat
     ]:
         with credential_scope(org):
             assert (
-                await integration_creds.get_provider_token(owner_id, "github")
+                await integration_creds.get_provider_token(
+                    owner_id, "github", allowed_ids=None
+                )
                 == expected
             )
             found = await auto_lookup_mcp_credential(
@@ -307,7 +320,7 @@ async def test_token_and_mcp_discovery_caches_do_not_cross_orgs(owner, monkeypat
     with credential_scope(business):
         assert (
             await integration_creds.get_provider_token(
-                owner_id, "github", credential_id=a.id
+                owner_id, "github", credential_id=a.id, allowed_ids=None
             )
             is None
         )
