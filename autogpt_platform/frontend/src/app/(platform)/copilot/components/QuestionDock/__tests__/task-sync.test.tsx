@@ -84,7 +84,7 @@ vi.mock("../../SetupRequirementsCard/SetupRequirementsCard", async () => {
     const chain = useContext(ChainActionsContext);
     useEffect(() => {
       if (!chain) return;
-      chain.register({
+      chain.register("connector", {
         id: "connector",
         ready: true,
         justConnected: true,

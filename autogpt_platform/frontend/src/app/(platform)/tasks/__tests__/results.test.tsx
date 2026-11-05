@@ -253,10 +253,11 @@ test("bare workspace references open inline previews without leaving the review"
   );
   const result = await screen.findByRole("region", { name: "Task result" });
   await screen.findByRole("region", { name: "Deliverable files" });
-  const links = within(result).getAllByRole("button", {
+  const links = within(result).getAllByRole("link", {
     name: filename,
   });
-  expect(links).toHaveLength(2);
+  expect(links).toHaveLength(1);
+  expect(within(result).getByRole("button", { name: filename })).toBeTruthy();
   expect(result.textContent).not.toContain("workspace://");
   expect(result.textContent).toContain("(v2)");
   await userEvent.click(links[0]);
@@ -266,10 +267,12 @@ test("bare workspace references open inline previews without leaving the review"
       name: "Autonomy architecture",
     }),
   ).toBeTruthy();
-  const code = preview.querySelector("pre > code");
-  expect(code?.textContent).toContain("[sensing] -> [planning]");
-  expect(code?.textContent).toContain("                 |");
-  expect(code?.textContent).toContain("              [control]");
+  await waitFor(() => {
+    const code = preview.querySelector("pre code");
+    expect(code?.textContent).toContain("[sensing] -> [planning]");
+    expect(code?.textContent).toContain("                 |");
+    expect(code?.textContent).toContain("              [control]");
+  });
   await userEvent.click(
     within(preview).getByRole("button", { name: "Back to review" }),
   );

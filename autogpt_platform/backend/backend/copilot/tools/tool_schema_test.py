@@ -258,6 +258,14 @@ from ._test_data import make_session
 # The margin is deliberate and is the same exception the wire budget's #14476
 # note names: this is queued while dev is still moving, and a measured-plus-one
 # ceiling reds the queue's merge ref on the next reworded description.
+# Bumped 77_014 -> 77_401 for memory_forget_search's `include_forgotten`
+# argument (#14972): a soft forget left a fact the chat could no longer find,
+# so it could never be made permanent with hard_delete. No tool was added.
+# Measured on this branch merged with dev 8432f734f5:
+#     merged tree, before                         76,975 (89 tools)
+#     + include_forgotten              +126       77,101 (89 tools)
+#     + headroom                       +300       77,401
+# The same deliberate margin as the line above, for the same reason.
 # Bumped 77_014 -> 77_176 for connect_integration's managed `ayrshare`
 # provider (SECRT-2878): the enum entry, its place in the supported list, one
 # sentence telling the model it returns the account-linking link (never a key
@@ -268,7 +276,8 @@ from ._test_data import make_session
 #     + this PR's connect_integration  +200       77,175 (89 tools)
 # Plus one.
 # Tasks adds durable task management and question-routing arguments.
-_CHAR_BUDGET = 84_600
+# Pinned dev 78749c15 plus Tasks: measured 85,191 chars, with 300 headroom.
+_CHAR_BUDGET = 85_491
 
 
 @pytest.fixture(scope="module")
@@ -464,7 +473,8 @@ def test_total_schema_char_budget() -> None:
 #     merged tree                                 69,488
 #     + headroom                       +300       69,788
 # Includes manage_tasks and the task question-routing arguments.
-_SESSION_WIRE_BUDGET = 77_000
+# Pinned dev 78749c15 plus Tasks: measured 77,318 chars, with 300 headroom.
+_SESSION_WIRE_BUDGET = 77_618
 
 
 def test_largest_declared_session_wire_budget() -> None:

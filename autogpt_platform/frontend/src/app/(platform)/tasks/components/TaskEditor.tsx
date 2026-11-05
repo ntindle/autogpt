@@ -1,6 +1,6 @@
 import { Button } from "@/components/atoms/Button/Button";
 import { Input } from "@/components/atoms/Input/Input";
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@/components/atoms/Textarea/Textarea";
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
 import { TaskDependencies } from "./TaskDependencies/TaskDependencies";
 import { useTaskEditor } from "./useTaskEditor";
@@ -17,7 +17,7 @@ export function TaskEditor({ task, tasks, pending, onCommand }: Props) {
   const editor = useTaskEditor(task, onCommand);
   return (
     <form className="space-y-4" onSubmit={editor.save}>
-      <label className="block space-y-1.5 text-xs font-medium">
+      <label className="text-xs block space-y-1.5 font-medium">
         Task
         <Input
           id="task-title"
@@ -29,7 +29,7 @@ export function TaskEditor({ task, tasks, pending, onCommand }: Props) {
           maxLength={500}
         />
       </label>
-      <label className="block space-y-1.5 text-xs font-medium">
+      <label className="text-xs block space-y-1.5 font-medium">
         What does done look like?
         <Textarea
           aria-label="Task description"
@@ -39,7 +39,7 @@ export function TaskEditor({ task, tasks, pending, onCommand }: Props) {
           placeholder="Context, constraints, and the outcome you need."
         />
       </label>
-      <label className="block space-y-1.5 text-xs font-medium">
+      <label className="text-xs block space-y-1.5 font-medium">
         Project
         <Input
           id="task-project"

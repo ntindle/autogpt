@@ -37,8 +37,8 @@ export function ClarificationQuestion({
       className={cn(
         "relative rounded-lg border border-dotted p-3",
         hasAnswer
-          ? "border-green-500 bg-green-50/50"
-          : "border-slate-100 bg-slate-50/50",
+          ? "border-success bg-success-surface/50"
+          : "border-separator bg-surface-muted/50",
       )}
     >
       <div className="mb-2 flex items-start gap-2">
@@ -46,10 +46,10 @@ export function ClarificationQuestion({
           <Icon
             icon={CheckmarkCircle02Icon}
             size={20}
-            className="mt-0.5 text-green-500"
+            className="mt-0.5 text-success"
           />
         ) : (
-          <div className="mt-0 flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 font-mono">
+          <div className="mt-0 flex h-6 w-6 items-center justify-center rounded-full border border-border-strong font-mono">
             {index + 1}
           </div>
         )}
@@ -57,12 +57,13 @@ export function ClarificationQuestion({
           <Text
             variant="h5"
             id={labelID}
-            className="mb-2 font-semibold text-slate-900"
+            tone="primary"
+            className="mb-2 font-semibold"
           >
             {question.question}
           </Text>
           {question.example && !question.options?.length && (
-            <Text variant="body" className="mb-2 italic text-slate-500">
+            <Text variant="body" tone="muted" className="mb-2 italic">
               Example: {question.example}
             </Text>
           )}

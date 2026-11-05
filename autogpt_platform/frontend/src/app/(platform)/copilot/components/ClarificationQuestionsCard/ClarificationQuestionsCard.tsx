@@ -135,19 +135,20 @@ export function ClarificationQuestionsCard({
       >
         <div className="flex w-full max-w-3xl gap-3">
           <div className="flex-shrink-0">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-green-500">
+            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-success">
               <Icon
                 icon={CheckmarkCircle02Icon}
-                className="h-4 w-4 text-white"
+                tone="inverse"
+                className="h-4 w-4"
               />
             </div>
           </div>
           <div className="flex min-w-0 flex-1 flex-col">
             <Card className="p-4">
-              <Text variant="h4" className="mb-1 text-slate-900">
+              <Text tone="primary" variant="h4" className="mb-1">
                 Answers submitted
               </Text>
-              <Text variant="small" className="text-slate-600">
+              <Text tone="secondary" variant="small">
                 Processing your responses...
               </Text>
             </Card>
@@ -170,11 +171,11 @@ export function ClarificationQuestionsCard({
             <div>
               <div className="flex gap-3">
                 <Icon icon={Chatting01Icon} className="size-6" />
-                <Text variant="h4" className="mb-1 text-slate-900">
+                <Text tone="primary" variant="h4" className="mb-1">
                   I need more information
                 </Text>
               </div>
-              <Text variant="body" className="text-slate-600">
+              <Text tone="secondary" variant="body">
                 {message}
               </Text>
             </div>

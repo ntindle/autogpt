@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type MouseEvent, useState } from "react";
 import { useListWorkspaceFiles } from "@/app/api/__generated__/endpoints/workspace/workspace";
 import { okData } from "@/app/api/helpers";
 import type { ArtifactRef } from "../../copilot/store";
@@ -9,11 +9,7 @@ import {
 } from "../../copilot/components/ChatMessagesContainer/helpers";
 import { fileItemToArtifactRef } from "../../copilot/components/ContextPanel/components/FilesTab/helpers";
 
-import {
-  ExternalLinkModal,
-  isSameOriginLink,
-  MessageResponse,
-} from "@/components/ai-elements/message";
+import { MessageResponse } from "@/components/organisms/Message/Message";
 import { TaskResultPreview } from "./TaskResultPreview";
 
 interface Props {
@@ -54,28 +50,19 @@ export function TaskResultContent({ result, sessionId }: Props) {
     }
   }
 
+  function handleResultClick(event: MouseEvent<HTMLDivElement>) {
+    if (!(event.target instanceof Element)) return;
+    const href = event.target.closest("a")?.getAttribute("href");
+    const file = href ? fileForUrl(href) : null;
+    if (!file) return;
+    event.preventDefault();
+    setSelected(file);
+  }
+
   return (
     <>
-      <div className="min-w-0 break-words text-sm">
-        <MessageResponse
-          linkSafety={{
-            enabled: true,
-            onLinkCheck: (url) => !fileForUrl(url) && isSameOriginLink(url),
-            renderModal: (props) => {
-              const file = fileForUrl(props.url);
-              return file ? (
-                <TaskResultPreview
-                  artifact={props.isOpen ? file : null}
-                  onClose={props.onClose}
-                />
-              ) : (
-                <ExternalLinkModal {...props} />
-              );
-            },
-          }}
-        >
-          {resolveWorkspaceUrls(result)}
-        </MessageResponse>
+      <div className="text-sm min-w-0 break-words" onClick={handleResultClick}>
+        <MessageResponse>{resolveWorkspaceUrls(result)}</MessageResponse>
       </div>
       {(artifacts.size > 0 || files.isError) && (
         <section className="space-y-2" aria-label="Deliverable files">
@@ -101,14 +88,14 @@ export function TaskResultContent({ result, sessionId }: Props) {
             >
               <button
                 type="button"
-                className="min-h-11 min-w-0 break-all text-left text-sm font-medium underline underline-offset-4"
+                className="text-sm min-h-11 min-w-0 text-left font-medium break-all underline underline-offset-4"
                 onClick={() => setSelected(artifact)}
               >
                 {artifact.title}
               </button>
               <a
                 href={artifact.sourceUrl ?? undefined}
-                className="flex min-h-11 items-center text-xs underline"
+                className="text-xs flex min-h-11 items-center underline"
                 download
               >
                 Download

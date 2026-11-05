@@ -1,6 +1,6 @@
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
 import { Button } from "@/components/atoms/Button/Button";
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@/components/atoms/Textarea/Textarea";
 import { useId } from "react";
 import type { Task } from "../../helpers";
 import { useTaskResultSubmission } from "./useTaskResultSubmission";
@@ -36,7 +36,7 @@ export function TaskResultSubmission({ task, pending, onCommand }: Props) {
         void form.submit();
       }}
     >
-      <label htmlFor={inputID} className="block text-sm font-semibold">
+      <label htmlFor={inputID} className="text-sm block font-semibold">
         Your result
       </label>
       <p className="text-xs text-muted-foreground">

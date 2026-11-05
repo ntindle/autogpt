@@ -1,6 +1,6 @@
 import { TaskResultContent } from "./TaskResultContent";
 import { Button } from "@/components/atoms/Button/Button";
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@/components/atoms/Textarea/Textarea";
 import type { TaskCommand } from "@/app/api/__generated__/models/taskCommand";
 import { useState } from "react";
 import type { Task } from "../helpers";
@@ -47,7 +47,7 @@ export function TaskResult({ task, tasks, pending, onCommand }: Props) {
       {unanswered ? (
         <p
           role="status"
-          className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900"
+          className="bg-amber-50 text-sm text-amber-900 rounded-lg p-3"
         >
           This draft has outstanding questions. Resolve them above before
           accepting the result.

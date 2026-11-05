@@ -1,3 +1,4 @@
+import { toastIfPlanRequired } from "@/components/contextual/PaywallToast/helpers";
 import useCredentials from "@/hooks/useCredentials";
 import { useBackendAPI } from "@/lib/autogpt-server-api/context";
 import {
@@ -279,6 +280,7 @@ export function useCredentialsInput({
           cancelUrl: cancel_url,
           preOpenedWindow,
           timeout: provider === "codex" ? 15 * 60 * 1000 : undefined,
+          sameOriginFlow: provider === "codex",
           // Always enable BroadcastChannel + localStorage listeners — they are
           // the only path that works when the popup is blocked and we fall back
           // to a new tab (window.opener can be severed by cross-origin COOP).
@@ -356,6 +358,10 @@ export function useCredentialsInput({
       }
       // A superseded flow must not surface its errors over the newer flow.
       if (flowId !== oauthFlowIdRef.current) return;
+      if (
+        toastIfPlanRequired(error, "Connecting a service needs an active plan")
+      )
+        return;
       const message = error instanceof Error ? error.message : String(error);
       if (
         message === OAUTH_ERROR_WINDOW_CLOSED ||

@@ -1,5 +1,5 @@
 import { Button } from "@/components/atoms/Button/Button";
-import { Textarea } from "@/components/ui/textarea";
+import { Textarea } from "@/components/atoms/Textarea/Textarea";
 import { isKey } from "@/lib/keyboard";
 import type { useTasksPage } from "../useTasksPage";
 
@@ -12,7 +12,7 @@ export function TaskCapture({ page }: Props) {
   return (
     <div className="shrink-0 border-t border-border px-4 py-4 sm:px-8">
       {parent ? (
-        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="text-xs mb-2 flex items-center gap-2 text-muted-foreground">
           Add a step to {parent.title}
           <button
             type="button"
@@ -28,7 +28,7 @@ export function TaskCapture({ page }: Props) {
           event.preventDefault();
           page.capture();
         }}
-        className="flex items-end gap-3 rounded-xl border border-border bg-background p-2 pl-3 shadow-sm focus-within:ring-1 focus-within:ring-violet-500"
+        className="focus-within:ring-violet-500 flex items-end gap-3 rounded-xl border border-border bg-background p-2 pl-3 shadow-sm focus-within:ring-1"
       >
         <Textarea
           disabled={page.isCapturing}
@@ -50,7 +50,7 @@ export function TaskCapture({ page }: Props) {
               ? Math.min(page.draft.split("\n").length, 5)
               : 1
           }
-          className="min-h-8 resize-none border-0 bg-transparent p-1 text-sm shadow-none focus-visible:ring-0"
+          className="text-sm min-h-8 resize-none border-0 bg-transparent p-1 shadow-none focus-visible:ring-0"
         />
         <Button
           type="submit"

@@ -4,7 +4,7 @@ import {
   SheetHeader,
   SheetTitle,
   SheetDescription,
-} from "@/components/ui/sheet";
+} from "@/components/molecules/Sheet/Sheet";
 import Link from "next/link";
 import type { Task } from "../helpers";
 import {
@@ -148,14 +148,14 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
       />
       {participants.length > 1 ? (
         <section>
-          <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+          <h3 className="text-xs mb-2 font-medium text-muted-foreground">
             Participants
           </h3>
           <div className="flex flex-wrap gap-3">
             {participants.map((person) => (
               <span
                 key={`${person.kind}:${person.id}`}
-                className="flex items-center gap-2 text-xs"
+                className="text-xs flex items-center gap-2"
               >
                 <TaskIdentity assignee={person} />
                 {person.name}
@@ -166,14 +166,14 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
       ) : null}
       {task.previous_session_ids?.length ? (
         <section>
-          <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+          <h3 className="text-xs mb-2 font-medium text-muted-foreground">
             Previous conversations
           </h3>
           {task.previous_session_ids.map((id, index) => (
             <Link
               key={id}
               href={`/copilot?sessionId=${encodeURIComponent(id)}`}
-              className="mr-3 text-sm underline"
+              className="text-sm mr-3 underline"
             >
               Conversation {index + 1}
             </Link>
@@ -181,14 +181,14 @@ function TaskDetailsBody({ task, page }: { task: Task; page: Props["page"] }) {
         </section>
       ) : null}
       <section>
-        <h3 className="mb-3 text-xs font-medium text-muted-foreground">
+        <h3 className="text-xs mb-3 font-medium text-muted-foreground">
           Activity
         </h3>
         <ol className="space-y-3">
           {[...(task.events ?? [])].reverse().map((event) => (
             <li
               key={event.id}
-              className="border-l-2 border-border pl-3 text-xs"
+              className="text-xs border-l-2 border-border pl-3"
             >
               <span>{event.text}</span>
               <span className="mt-1 block text-muted-foreground">
