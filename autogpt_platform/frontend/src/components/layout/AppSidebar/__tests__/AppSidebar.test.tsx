@@ -171,7 +171,7 @@ describe("AppSidebar", () => {
     expect(screen.getByText("Recent chats")).toBeDefined();
   });
 
-  it("always shows Team and Files when the flag provider returns false", () => {
+  it("always shows Tasks, Team, and Files when the flag provider returns false", () => {
     renderSidebar();
     expect(screen.getByText("Workspace")).toBeDefined();
     expect(
