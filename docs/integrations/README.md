@@ -121,6 +121,8 @@ Below is a comprehensive list of all available blocks, categorized by their prim
 | [Exa Get New Items](block-integrations/exa/websets_items.md#exa-get-new-items) | Get items added since a cursor - enables incremental processing without reprocessing |
 | [Exa List Imports](block-integrations/exa/websets_import_export.md#exa-list-imports) | List all imports with pagination support |
 | [File Read](block-integrations/data.md#file-read) | Reads a file and returns its content as a string, with optional chunking by delimiter and size limits |
+| [Firecrawl Find Data Tools](block-integrations/firecrawl/alexandria.md#firecrawl-find-data-tools) | Finds structured-data tools in Firecrawl Alexandria, free of charge: people and company search and enrichment (work emails, job titles, firmographics via Apollo, People Data Labs, FullEnrich), jobs, finance and filings, public records, places, retail and thousands more |
+| [Firecrawl Run Data Tool](block-integrations/firecrawl/alexandria.md#firecrawl-run-data-tool) | Runs a Firecrawl Alexandria data tool and returns its typed, sourced records: find people by title and company, get verified work emails, enrich a company from its domain, and thousands more |
 | [Google Calendar Read Events](block-integrations/google/calendar.md#google-calendar-read-events) | Retrieves upcoming events from a Google Calendar with filtering options |
 | [Google Docs Append Markdown](block-integrations/google/docs.md#google-docs-append-markdown) | Append Markdown content to the end of a Google Doc with full formatting - ideal for LLM/AI output |
 | [Google Docs Append Plain Text](block-integrations/google/docs.md#google-docs-append-plain-text) | Append plain text to the end of a Google Doc (no formatting applied) |
@@ -340,6 +342,8 @@ Below is a comprehensive list of all available blocks, categorized by their prim
 | [Hacker News Get Stories](block-integrations/hacker_news/stories.md#hacker-news-get-stories) | Get the top (front page), new, best, Ask HN, Show HN or job stories from Hacker News, in the order Hacker News ranks them |
 | [Hacker News Get User](block-integrations/hacker_news/users.md#hacker-news-get-user) | Get a Hacker News user's profile by username: karma, when the account was created, the about text and how many items they have posted |
 | [Hacker News Search](block-integrations/hacker_news/search.md#hacker-news-search) | Search Hacker News stories and comments by keyword, author, date, points or linked domain, sorted by relevance or newest first |
+| [Parallel Ask Many Decisions](block-integrations/parallel/ask_many.md#parallel-ask-many-decisions) | Ask several yes/no, choice and score questions about one subject in a single Parallel request, answered from shared current web evidence |
+| [Parallel Score Decision](block-integrations/parallel/score.md#parallel-score-decision) | Rate something on an ordered scale you define, using current web evidence from Parallel |
 | [Search Filter Typeahead](block-integrations/dataforb2b/typeahead.md#search-filter-typeahead) | Resolve the exact filter value (company, industry, job title, skill, school, investor, location, category) for people and company searches with DataForB2B |
 | [Search Organizations](block-integrations/apollo/organization.md#search-organizations) | Search for organizations in Apollo |
 | [Search People](block-integrations/apollo/people.md#search-people) | Search for people in Apollo |
@@ -530,6 +534,7 @@ Below is a comprehensive list of all available blocks, categorized by their prim
 | [Gmail Reply](block-integrations/google/gmail.md#gmail-reply) | Reply to Gmail threads with automatic HTML detection and proper text formatting |
 | [Gmail Send](block-integrations/google/gmail.md#gmail-send) | Send emails via Gmail with automatic HTML detection and proper text formatting |
 | [Hub Spot Engagement](block-integrations/hubspot/engagement.md#hub-spot-engagement) | Manages HubSpot engagements - sends emails and tracks engagement metrics |
+| [Send Email To Me](block-integrations/communication.md#send-email-to-me) | Email yourself: sends a message to your own inbox, at your account's email address, from the platform, with no email account to sign in to |
 
 ## Developer Tools
 
@@ -637,11 +642,13 @@ Below is a comprehensive list of all available blocks, categorized by their prim
 | Block Name | Description |
 |------------|-------------|
 | [Google Calendar Create Event](block-integrations/google/calendar.md#google-calendar-create-event) | This block creates a new event in Google Calendar with customizable parameters |
+| [Notion Append To Page](block-integrations/notion/append_to_page.md#notion-append-to-page) | Add content to the end of an existing Notion page |
 | [Notion Create Page](block-integrations/notion/create_page.md#notion-create-page) | Create a new page in Notion |
 | [Notion Read Database](block-integrations/notion/read_database.md#notion-read-database) | Query a Notion database with optional filtering and sorting, returning structured entries |
 | [Notion Read Page](block-integrations/notion/read_page.md#notion-read-page) | Read a Notion page by its ID and return its raw JSON |
 | [Notion Read Page Markdown](block-integrations/notion/read_page_markdown.md#notion-read-page-markdown) | Read a Notion page and convert it to Markdown format with proper formatting for headings, lists, links, and rich text |
 | [Notion Search](block-integrations/notion/search.md#notion-search) | Search your Notion workspace for pages and databases by text query |
+| [Notion Update Page Properties](block-integrations/notion/update_page_properties.md#notion-update-page-properties) | Update an existing Notion page's properties, its title among them, its icon or cover, or whether it is in the trash |
 | [Todoist Close Task](block-integrations/todoist/tasks.md#todoist-close-task) | Closes a task in Todoist |
 | [Todoist Create Comment](block-integrations/todoist/comments.md#todoist-create-comment) | Creates a new comment on a Todoist task or project |
 | [Todoist Create Label](block-integrations/todoist/labels.md#todoist-create-label) | Creates a new label in Todoist, It will not work if same name already exists |
@@ -682,6 +689,8 @@ Below is a comprehensive list of all available blocks, categorized by their prim
 | [Data Sampling](block-integrations/logic.md#data-sampling) | This block samples data from a given dataset using various sampling methods |
 | [Exa Webset Ready Check](block-integrations/exa/websets.md#exa-webset-ready-check) | Check if webset is ready for next operation - enables conditional workflow branching |
 | [If Input Matches](block-integrations/logic.md#if-input-matches) | Handles conditional logic based on comparison operators |
+| [Parallel Choice Decision](block-integrations/parallel/choice.md#parallel-choice-decision) | Pick one of several options using current web evidence from Parallel, with a probability for each option |
+| [Parallel Yes No Decision](block-integrations/parallel/yes_no.md#parallel-yes-no-decision) | Answer a yes/no question using current web evidence from Parallel, and forward data to the yes, no or unsure output |
 | [Pinecone Init](block-integrations/logic.md#pinecone-init) | Initializes a Pinecone index |
 | [Pinecone Insert](block-integrations/logic.md#pinecone-insert) | Upload data to a Pinecone index |
 | [Pinecone Query](block-integrations/logic.md#pinecone-query) | Queries a Pinecone index |

@@ -3,6 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { showResult } from "./renderConnected";
 import { tripSource } from "@/lib/openui/__tests__/capability-fixtures";
 
+vi.mock("ol/layer/Tile", async (importActual) => {
+  const actual = await importActual<typeof import("ol/layer/Tile")>();
+  return {
+    ...actual,
+    default: class extends actual.default {
+      render() {
+        return document.createElement("div");
+      }
+    },
+  };
+});
+
 describe("one connected itinerary in chat", () => {
   beforeEach(() => sessionStorage.clear());
   it("links places, visit edits, completion, available time and submitted plan", async () => {
