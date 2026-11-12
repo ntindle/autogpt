@@ -50,6 +50,60 @@ function showResult(
 describe("OpenUI results in a Copilot conversation", () => {
   beforeEach(() => sessionStorage.clear());
 
+  it.each(["tool-render_openui", "dynamic-tool", "tool-run_capability"])(
+    "renders %s programs alongside visual cards and legacy programs",
+    async (type) => {
+      const source =
+        'root = Workspace("Mixed", "mixed-view", [Prose("Program content")]);';
+      const program = {
+        type,
+        toolName: "render_openui",
+        toolCallId: "new-program",
+        state: "output-available",
+        input:
+          type === "tool-run_capability"
+            ? { id: "tool:render_openui", input: { source } }
+            : { source },
+        output: { ...output, source },
+      } as ToolUIPart;
+      render(
+        <CopilotChatActionsProvider onSend={vi.fn()}>
+          <ChainMessageParts
+            parts={[
+              program,
+              {
+                ...program,
+                type: "tool-render_ui",
+                toolCallId: "legacy-program",
+              },
+              {
+                type: "tool-render_ui",
+                toolCallId: "visual-cards",
+                state: "output-available",
+                input: {},
+                output: {
+                  type: "ui_blocks",
+                  message: "",
+                  blocks: [
+                    {
+                      type: "stats",
+                      items: [{ label: "Completed", value: "7" }],
+                    },
+                  ],
+                },
+              },
+            ]}
+            messageID="mixed-message"
+            isCurrentlyStreaming={false}
+          />
+        </CopilotChatActionsProvider>,
+      );
+      expect(await screen.findAllByText("Program content")).toHaveLength(2);
+      expect(screen.getByText("Completed")).toBeDefined();
+      expect(screen.getByText("7")).toBeDefined();
+    },
+  );
+
   it("keeps drafts isolated when different sessions reuse a tool call ID", async () => {
     const first = showResult();
     fireEvent.change(await screen.findByLabelText("Audience"), {

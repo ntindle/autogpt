@@ -127,7 +127,7 @@ async def write_draft(
 ) -> UIDraftResponse:
     async with db.transaction() as tx:
         await lock_owned_session(tx, user_id, session_id)
-        if await find_openui_view_file(user_id, session_id, view_id):
+        if await find_openui_view_file(user_id, session_id, view_id, client=tx):
             raise HTTPException(409, _SAVED)
         source, sequence = await _selected_view(
             user_id, session_id, view_id, request.tool_call_id, client=tx

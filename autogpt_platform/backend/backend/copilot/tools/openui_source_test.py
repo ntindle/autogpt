@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from backend.copilot.tools._test_data import make_session
 from backend.copilot.tools.models import ResponseType
-from backend.copilot.tools.render_ui import RenderUIInput, RenderUITool
+from backend.copilot.tools.render_openui import RenderOpenUITool, RenderUIInput
 
 
 @pytest.mark.parametrize(
@@ -40,7 +40,7 @@ def test_preserves_strings_comments_and_forward_references(source: str):
 
 @pytest.mark.asyncio
 async def test_returns_a_repairable_error_instead_of_a_broken_view():
-    result = await RenderUITool()._execute(
+    result = await RenderOpenUITool()._execute(
         "owner",
         make_session("owner"),
         source='root = Workspace("Plan", "", [',

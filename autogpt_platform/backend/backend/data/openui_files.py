@@ -9,6 +9,8 @@ run in the CoPilot executor too, so they are exposed on the DatabaseManager.
 import posixpath
 from typing import Optional
 
+from prisma import Prisma
+
 from backend.data.db import execute_raw_with_schema, query_raw_with_schema, transaction
 from backend.data.workspace import OPENUI_EXTENSION, OPENUI_MIME_TYPE, WorkspaceFile
 from backend.data.workspace_scope import session_path_prefix
@@ -65,7 +67,7 @@ def _openui_field(metadata: dict, key: str) -> str | None:
 
 
 async def find_openui_view_file(
-    user_id: str, session_id: str, view_id: str
+    user_id: str, session_id: str, view_id: str, *, client: Prisma | None = None
 ) -> Optional[str]:
     """ID of the user's live file that holds ``view_id`` for this chat.
 
@@ -85,6 +87,7 @@ async def find_openui_view_file(
         view_id,
         session_id,
         session_path_prefix(session_id),
+        client=client,
     )
     return rows[0]["id"] if rows else None
 
