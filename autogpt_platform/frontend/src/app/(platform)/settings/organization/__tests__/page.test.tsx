@@ -17,7 +17,6 @@ import {
   getGetV2GetOrganizationDetailsMockHandler,
   getGetV2ListOrganizationMembersMockHandler,
   getGetV2ListOrganizationMembersMockHandler401,
-  getGetV2ListUserOrganizationsMockHandler,
   getGetV2ListWorkspacesMockHandler,
   getPatchV2UpdateMemberRoleMockHandler,
   getPatchV2UpdateOrganizationMockHandler,
@@ -27,7 +26,6 @@ import {
 import {
   getDeleteV2RevokeInvitationMockHandler,
   getGetV2ListPendingInvitationsMockHandler,
-  getPostV2AcceptInvitationMockHandler,
   getPostV2CreateInvitationMockHandler,
 } from "@/app/api/__generated__/endpoints/invitations/invitations.msw";
 
@@ -39,7 +37,6 @@ import {
   DEFAULT_TEAM,
   ENGINEERING_TEAM,
   MARKETING_TEAM,
-  OTHER_ORG,
   OWNER_MEMBER,
   PENDING_INVITATION_FROM_OTHER_ORG,
   PERSONAL_ORG,
@@ -361,79 +358,25 @@ describe("OrganizationSettingsPage", () => {
     );
   });
 
-  it("accepts a pending invitation and switches to the inviting org", async () => {
-    const acceptSpy = vi.fn();
+  it("directs invitees to their email without exposing token actions", async () => {
     mockOrg({ myInvitations: [PENDING_INVITATION_FROM_OTHER_ORG] });
-    server.use(
-      getPostV2AcceptInvitationMockHandler(() => {
-        acceptSpy();
-        return { orgId: OTHER_ORG.id, message: "Invitation accepted" };
-      }),
-      getGetV2ListUserOrganizationsMockHandler([TEAM_ORG, OTHER_ORG]),
-    );
     render(<OrganizationSettingsPage />);
 
-    expect(await screen.findByText("Other Corp")).toBeDefined();
-    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
-
-    await waitFor(() => {
-      expect(acceptSpy).toHaveBeenCalledTimes(1);
-      expect(useOrgTeamStore.getState().activeOrgID).toBe(OTHER_ORG.id);
-    });
-    // The joined org must land in the store too — an activeOrgID that isn't in
-    // `orgs` leaves the switcher with a null active org until a page reload.
-    await waitFor(() => {
-      expect(useOrgTeamStore.getState().orgs.map((org) => org.id)).toContain(
-        OTHER_ORG.id,
-      );
-    });
+    const section = await screen.findByTestId("my-invitations-section");
+    expect(within(section).getByText("Other Corp")).toBeDefined();
+    expect(
+      within(section).getByText(
+        "Use your invitation link to accept or decline.",
+      ),
+    ).toBeDefined();
+    expect(
+      within(section).queryByRole("button", { name: "Accept" }),
+    ).toBeNull();
+    expect(
+      within(section).queryByRole("button", { name: "Decline" }),
+    ).toBeNull();
+    expect(useOrgTeamStore.getState().activeOrgID).toBe(TEAM_ORG.id);
   });
-
-  it("keeps the joined org in the store when the org list refresh fails", async () => {
-    mockOrg({ myInvitations: [PENDING_INVITATION_FROM_OTHER_ORG] });
-    server.use(
-      getPostV2AcceptInvitationMockHandler(() => ({
-        orgId: OTHER_ORG.id,
-        message: "Invitation accepted",
-      })),
-      getGetV2ListUserOrganizationsMockHandler(() => {
-        throw new Error("network down");
-      }),
-    );
-    render(<OrganizationSettingsPage />);
-
-    expect(await screen.findByText("Other Corp")).toBeDefined();
-    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
-
-    await waitFor(() => {
-      const state = useOrgTeamStore.getState();
-      expect(state.activeOrgID).toBe(OTHER_ORG.id);
-      expect(state.orgs.map((org) => org.id)).toContain(OTHER_ORG.id);
-    });
-  });
-
-  it("keeps the joined org in the store when the refreshed list omits it", async () => {
-    mockOrg({ myInvitations: [PENDING_INVITATION_FROM_OTHER_ORG] });
-    server.use(
-      getPostV2AcceptInvitationMockHandler(() => ({
-        orgId: OTHER_ORG.id,
-        message: "Invitation accepted",
-      })),
-      // The membership hasn't propagated to the list endpoint yet.
-      getGetV2ListUserOrganizationsMockHandler([TEAM_ORG]),
-    );
-    render(<OrganizationSettingsPage />);
-
-    expect(await screen.findByText("Other Corp")).toBeDefined();
-    await userEvent.click(screen.getByRole("button", { name: "Accept" }));
-
-    await waitFor(() => {
-      const state = useOrgTeamStore.getState();
-      expect(state.activeOrgID).toBe(OTHER_ORG.id);
-      expect(state.orgs.map((org) => org.id)).toContain(OTHER_ORG.id);
-    });
-  });
-
   it("shows an error when the members query fails", async () => {
     mockOrg();
     server.use(getGetV2ListOrganizationMembersMockHandler401());

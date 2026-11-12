@@ -10,6 +10,7 @@ import AuthFeedback from "@/components/auth/AuthFeedback";
 import { CheckYourInbox } from "@/components/auth/CheckYourInbox/CheckYourInbox";
 import { EmailNotAllowedModal } from "@/components/auth/EmailNotAllowedModal";
 import { GoogleOAuthButton } from "@/components/auth/GoogleOAuthButton";
+import { MicrosoftOAuthButton } from "@/components/auth/MicrosoftOAuthButton";
 import { AuthDivider } from "@/components/auth/AuthSplitLayout/AuthDivider";
 import { AuthSplitLayout } from "@/components/auth/AuthSplitLayout/AuthSplitLayout";
 import { MobileWarningBanner } from "@/components/auth/MobileWarningBanner";
@@ -20,11 +21,11 @@ import { SignupLegalLine } from "./components/SignupLegalLine";
 import { SignupMarketingPanel } from "./components/SignupMarketingPanel";
 import { useSignupPage } from "./useSignupPage";
 
-export function SignupPage({
-  allowTeamPassword,
-}: {
+interface Props {
   allowTeamPassword: boolean;
-}) {
+}
+
+export function SignupPage({ allowTeamPassword }: Props) {
   const searchParams = useSearchParams();
   const nextUrl = searchParams.get("next");
   const loginHref = nextUrl
@@ -40,6 +41,8 @@ export function SignupPage({
     hasInitializedAuth,
     isLoading,
     isGoogleLoading,
+    isMicrosoftLoading,
+    isMicrosoftEnabled,
     isSigningUp,
     isCloudEnv,
     showNotAllowedModal,
@@ -135,7 +138,7 @@ export function SignupPage({
           <Button
             variant="primary"
             loading={isLoading}
-            disabled={isGoogleLoading}
+            disabled={isGoogleLoading || isMicrosoftLoading}
             type="submit"
             className="mt-6 w-full"
           >
@@ -143,14 +146,25 @@ export function SignupPage({
           </Button>
         </form>
 
-        {isCloudEnv ? (
+        {isCloudEnv || isMicrosoftEnabled ? (
           <>
             <AuthDivider />
-            <GoogleOAuthButton
-              onClick={() => handleProviderSignup("google")}
-              isLoading={isGoogleLoading}
-              disabled={isLoading}
-            />
+            <div className="flex w-full flex-col gap-3">
+              {isCloudEnv ? (
+                <GoogleOAuthButton
+                  onClick={() => handleProviderSignup("google")}
+                  isLoading={isGoogleLoading}
+                  disabled={isLoading || isMicrosoftLoading}
+                />
+              ) : null}
+              {isMicrosoftEnabled ? (
+                <MicrosoftOAuthButton
+                  onClick={() => handleProviderSignup("microsoft")}
+                  isLoading={isMicrosoftLoading}
+                  disabled={isLoading || isGoogleLoading}
+                />
+              ) : null}
+            </div>
           </>
         ) : null}
 

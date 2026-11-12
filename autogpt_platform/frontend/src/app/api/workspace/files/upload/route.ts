@@ -1,5 +1,7 @@
 import { environment } from "@/services/environment";
+import { authTokenUnavailableResponse } from "@/lib/auth/server/authTokenUnavailableResponse";
 import { getServerAuthToken } from "@/lib/auth/server/getServerAuthToken";
+import { AuthTokenUnavailableError } from "@/lib/autogpt-server-api/helpers";
 import { NextRequest, NextResponse } from "next/server";
 import { ORG_HEADER_NAME, TEAM_HEADER_NAME } from "@/services/org-team/headers";
 
@@ -45,6 +47,9 @@ export async function POST(request: NextRequest) {
     const data = await response.json();
     return NextResponse.json(data);
   } catch (error) {
+    if (error instanceof AuthTokenUnavailableError) {
+      return authTokenUnavailableResponse(error);
+    }
     console.error("File upload proxy error:", error);
     return NextResponse.json(
       {

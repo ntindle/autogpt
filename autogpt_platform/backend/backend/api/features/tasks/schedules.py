@@ -17,7 +17,7 @@ from backend.util.exceptions import NotFoundError
 
 class TaskScheduleRequest(BaseModel):
     version: int
-    cron: str | None = None
+    cron: str | None = Field(default=None, max_length=256)
     run_at: datetime | None = None
     timezone: str = Field(default="UTC", max_length=100)
 

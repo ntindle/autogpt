@@ -9,6 +9,7 @@ import AuthFeedback from "@/components/auth/AuthFeedback";
 import { CheckYourInbox } from "@/components/auth/CheckYourInbox/CheckYourInbox";
 import { EmailNotAllowedModal } from "@/components/auth/EmailNotAllowedModal";
 import { GoogleOAuthButton } from "@/components/auth/GoogleOAuthButton";
+import { MicrosoftOAuthButton } from "@/components/auth/MicrosoftOAuthButton";
 import { AuthDivider } from "@/components/auth/AuthSplitLayout/AuthDivider";
 import { AuthSplitLayout } from "@/components/auth/AuthSplitLayout/AuthSplitLayout";
 import { MobileWarningBanner } from "@/components/auth/MobileWarningBanner";
@@ -23,11 +24,11 @@ import {
 } from "./helpers";
 import { useLoginPage } from "./useLoginPage";
 
-export function LoginPage({
-  allowTeamPassword,
-}: {
+interface Props {
   allowTeamPassword: boolean;
-}) {
+}
+
+export function LoginPage({ allowTeamPassword }: Props) {
   const searchParams = useSearchParams();
   const nextUrl = searchParams.get("next");
   const signupHref = nextUrl
@@ -44,6 +45,8 @@ export function LoginPage({
     showBannedNotice,
     isLoading,
     isGoogleLoading,
+    isMicrosoftLoading,
+    isMicrosoftEnabled,
     isCloudEnv,
     isUserLoading,
     showNotAllowedModal,
@@ -134,7 +137,7 @@ export function LoginPage({
           <Button
             variant="primary"
             loading={isLoading}
-            disabled={isGoogleLoading}
+            disabled={isGoogleLoading || isMicrosoftLoading}
             type="submit"
             className="mt-6 w-full"
           >
@@ -142,14 +145,25 @@ export function LoginPage({
           </Button>
         </form>
 
-        {isCloudEnv ? (
+        {isCloudEnv || isMicrosoftEnabled ? (
           <>
             <AuthDivider />
-            <GoogleOAuthButton
-              onClick={() => handleProviderLogin("google")}
-              isLoading={isGoogleLoading}
-              disabled={isLoading}
-            />
+            <div className="flex w-full flex-col gap-3">
+              {isCloudEnv ? (
+                <GoogleOAuthButton
+                  onClick={() => handleProviderLogin("google")}
+                  isLoading={isGoogleLoading}
+                  disabled={isLoading || isMicrosoftLoading}
+                />
+              ) : null}
+              {isMicrosoftEnabled ? (
+                <MicrosoftOAuthButton
+                  onClick={() => handleProviderLogin("microsoft")}
+                  isLoading={isMicrosoftLoading}
+                  disabled={isLoading || isGoogleLoading}
+                />
+              ) : null}
+            </div>
           </>
         ) : null}
 

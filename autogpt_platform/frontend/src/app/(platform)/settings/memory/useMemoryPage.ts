@@ -13,25 +13,16 @@ import {
   useListMyExpertMemoryFacts,
   useListMyMemoryFacts,
 } from "@/app/api/__generated__/endpoints/memory/memory";
-import { useListExperts } from "@/services/experts/scoped-queries";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
 import { useOrgTeamStore } from "@/services/org-team/store";
-import {
-  getActiveExperts,
-  getScopeName,
-  readExpertScopeFromUrl,
-  RECENT_FACTS_LIMIT,
-} from "./helpers";
+import { useMemoryScope } from "./useMemoryScope";
+import { RECENT_FACTS_LIMIT } from "./helpers";
 
 export function useMemoryPage() {
-  // The Soul drawer's learned-notes panel links here with ?expert=<id>, so
-  // the link opens on that expert. Read once — the dropdown owns it after.
-  const [scopeExpertID, setScopeExpertID] = useState<string | null>(
-    readExpertScopeFromUrl,
-  );
+  const scope = useMemoryScope();
+  const { scopeExpertID } = scope;
   const queryClient = useQueryClient();
   const organizationID = useOrgTeamStore((state) => state.activeOrgID);
   const isLoaded = useOrgTeamStore((state) => state.isLoaded);
@@ -40,26 +31,6 @@ export function useMemoryPage() {
   function scopedKey(key: readonly unknown[]) {
     return ["organization-memory", organizationID, ...key];
   }
-
-  const expertsQuery = useListExperts(undefined, undefined, {
-    organizationId: organizationID,
-    teamId: null,
-    isReady: isLoaded,
-  });
-  const expertsSettled = expertsQuery.data?.status === 200;
-  const experts = getActiveExperts(
-    expertsQuery.data?.status === 200 ? expertsQuery.data.data : undefined,
-  );
-
-  // A selected expert can disappear (fired in another tab, roster changed) —
-  // fall back to Otto instead of driving queries with a dead scope id.
-  useEffect(() => {
-    if (!scopeExpertID || !expertsSettled) return;
-    if (!experts.some((expert) => expert.id === scopeExpertID)) {
-      setScopeExpertID(null);
-    }
-  }, [scopeExpertID, expertsSettled, experts]);
-
   const accountFacts = useListMyMemoryFacts(
     { limit: RECENT_FACTS_LIMIT },
     {
@@ -213,15 +184,8 @@ export function useMemoryPage() {
     }
   }
 
-  function selectScope(value: string | null) {
-    setScopeExpertID(value);
-  }
-
   return {
-    scopeExpertID,
-    selectScope,
-    experts,
-    scopeName: getScopeName(scopeExpertID, experts),
+    ...scope,
     facts,
     isLoadingFacts: factsQuery.isLoading,
     isFactsError: factsQuery.isError,

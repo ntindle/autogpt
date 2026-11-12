@@ -143,8 +143,8 @@ def hire_waits_for_setup(monkeypatch):
     """Most tests assert on what a hire installs, so let them read it back
     once the background setup has finished."""
 
-    async def hire_and_finish_setup(user_id, template_id, name, surface=None):
-        result = await _hire_without_waiting(user_id, template_id, name, surface)
+    async def hire_and_finish_setup(user_id, template_id, name, surface=None, via=None):
+        result = await _hire_without_waiting(user_id, template_id, name, surface, via)
         await _finish_hire_setup()
         row = await prisma.models.Expert.prisma().find_unique(
             where={"id": result.expert.id}, include=experts_db._WORKFLOW_INCLUDE
@@ -1881,6 +1881,10 @@ async def test_list_expert_identities_is_lightweight_and_includes_archived(
         item for item in identities if item.id == active_hired.expert.id
     )
     assert active_identity.is_archived is False
+    # The sidebar lists an expert added in the last week before their first
+    # chat, so the join time has to come back, as an aware UTC time.
+    assert active_identity.created_at is not None
+    assert active_identity.created_at.utcoffset() is not None
     assert template.id not in identity_ids
     assert active_template.id not in identity_ids
     assert other_hired.expert.id not in identity_ids
@@ -1990,6 +1994,7 @@ def test_expert_identity_projection_columns_exist_in_schema():
         "jobTitle",
         "isArchived",
         "autopilotMode",
+        "createdAt",
     } <= fields
     assert {"ownerUserId", "isTemplate"} <= fields
 
@@ -2067,7 +2072,7 @@ async def test_owns_private_active_expert_adds_the_visibility_filter(
         await prisma.models.Expert.prisma().update(
             where={"id": hired.expert.id}, data={"visibility": shared}
         )
-        assert await experts_db.owns_active_expert(test_user.id, hired.expert.id)
+        assert not await experts_db.owns_active_expert(test_user.id, hired.expert.id)
         assert not await experts_db.owns_private_active_expert(
             test_user.id, hired.expert.id
         )
@@ -2452,9 +2457,15 @@ async def test_rehire_missing_private_tenancy_rolls_back_to_archived():
         id="expert-1",
         ownerUserId="owner-1",
         isArchived=False,
+        organizationId=None,
+        teamId=None,
         visibility=prisma.enums.ResourceVisibility.PRIVATE,
     )
-    expert_client = SimpleNamespace(update=AsyncMock(), find_unique=AsyncMock())
+    expert_client = SimpleNamespace(
+        update=AsyncMock(),
+        find_unique=AsyncMock(),
+        find_first=AsyncMock(return_value=row),
+    )
     with (
         patch.object(prisma.models.Expert, "prisma", return_value=expert_client),
         patch.object(
@@ -2537,24 +2548,27 @@ async def test_rehire_reattach_failure_restores_archived_state():
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_resolve_private_expert_tenancy_uses_owner_personal_scope():
+async def test_resolve_private_expert_tenancy_uses_saved_scope():
     find_first = AsyncMock(
         return_value=SimpleNamespace(
             id="expert-1",
-            organizationId="personal-org",
-            teamId="personal-team",
+            organizationId="business-org",
+            teamId="business-team",
         )
     )
     manager = SimpleNamespace(find_first=find_first)
-    lookup = AsyncMock(return_value=("personal-org", "personal-team"))
+    lookup = AsyncMock(return_value=("business-org", "business-team"))
 
     with (
         patch.object(prisma.models.Expert, "prisma", return_value=manager),
         patch.object(experts_db, "get_user_default_team", lookup),
+        patch.object(
+            experts_db, "has_live_resource_access", new=AsyncMock(return_value=True)
+        ) as access,
     ):
         result = await experts_db.resolve_private_expert_tenancy("owner-1", "expert-1")
 
-    assert result == ("personal-org", "personal-team")
+    assert result == ("business-org", "business-team")
     find_first.assert_awaited_once_with(
         where={
             "id": "expert-1",
@@ -2564,7 +2578,10 @@ async def test_resolve_private_expert_tenancy_uses_owner_personal_scope():
             "visibility": prisma.enums.ResourceVisibility.PRIVATE,
         }
     )
-    lookup.assert_awaited_once_with("owner-1")
+    lookup.assert_not_awaited()
+    access.assert_awaited_once_with(
+        "owner-1", "business-org", "business-team", "execute"
+    )
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -2631,6 +2648,9 @@ async def test_resolve_private_expert_tenancy_allows_missing_default_team():
     with (
         patch.object(prisma.models.Expert, "prisma", return_value=manager),
         patch.object(
+            experts_db, "has_live_resource_access", new=AsyncMock(return_value=True)
+        ),
+        patch.object(
             experts_db,
             "get_user_default_team",
             new_callable=AsyncMock,
@@ -2643,20 +2663,64 @@ async def test_resolve_private_expert_tenancy_allows_missing_default_team():
 
 
 @pytest.mark.asyncio(loop_scope="session")
-@pytest.mark.parametrize(
-    ("stored_org", "stored_team"),
-    [(None, None), ("other-org", "personal-team"), ("personal-org", "other-team")],
-)
-async def test_resolve_private_expert_tenancy_rejects_row_scope_mismatch(
-    stored_org: str | None, stored_team: str | None
+async def test_check_private_expert_reads_the_hire_and_its_owners_scope(
+    server: SpinTestServer, test_user, other_user
 ):
-    manager = SimpleNamespace(
-        find_first=AsyncMock(
-            return_value=SimpleNamespace(
-                id="expert-1", organizationId=stored_org, teamId=stored_team
-            )
-        )
+    template = await _seed_template(name="Maria", preload_listings=[])
+    hired = await experts_db.hire_expert(test_user.id, template.id, None)
+
+    check = await experts_db.check_private_expert(test_user.id, hired.expert.id)
+
+    fresh = await experts_db.get_expert(
+        test_user.id, hired.expert.id, include_workflows=False
     )
+    assert fresh is not None
+    identity_fields = {
+        "id",
+        "name",
+        "role",
+        "identity",
+        "voice_preferences",
+        "boundaries",
+        "protected_soul_rules",
+        "is_archived",
+        "setup_status",
+    }
+    assert check.expert.model_dump(include=identity_fields) == fresh.model_dump(
+        include=identity_fields
+    )
+    assert (
+        check.organization_id,
+        check.team_id,
+    ) == await experts_db.resolve_private_expert_tenancy(test_user.id, hired.expert.id)
+    refused = [(other_user.id, hired.expert.id), (test_user.id, template.id)]
+    await experts_db.archive_expert(test_user.id, hired.expert.id)
+    refused.append((test_user.id, hired.expert.id))
+    for user_id, expert_id in refused:
+        with pytest.raises(experts_db.ExpertNotFoundError):
+            await experts_db.check_private_expert(user_id, expert_id)
+        # A database manager from before check_private_expert is asked with
+        # these two reads instead, and they refuse the same experts.
+        assert (
+            await experts_db.get_expert(user_id, expert_id, include_workflows=False)
+            is None
+        )
+        with pytest.raises(experts_db.ExpertNotFoundError):
+            await experts_db.resolve_private_expert_tenancy(user_id, expert_id)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_check_private_expert_skips_the_roster_only_reads():
+    """The latest run and the weekly spend are roster card fields; a turn's
+    check never needs them, and the latest-run read grows with the expert's
+    history."""
+    row = SimpleNamespace(
+        id="expert-1", organizationId="personal-org", teamId="personal-team"
+    )
+    expert = SimpleNamespace(id="expert-1")
+    manager = SimpleNamespace(find_first=AsyncMock(return_value=row))
+    latest_runs = AsyncMock()
+    weekly_spend = AsyncMock()
     with (
         patch.object(prisma.models.Expert, "prisma", return_value=manager),
         patch.object(
@@ -2664,9 +2728,21 @@ async def test_resolve_private_expert_tenancy_rejects_row_scope_mismatch(
             "get_user_default_team",
             new=AsyncMock(return_value=("personal-org", "personal-team")),
         ),
-        pytest.raises(experts_db.ExpertPrivateTenancyNotFoundError),
+        patch.object(
+            experts_db, "has_live_resource_access", AsyncMock(return_value=True)
+        ),
+        patch.object(experts_db, "_latest_runs", latest_runs),
+        patch.object(experts_db, "get_weekly_spend", weekly_spend),
+        patch.object(experts_db, "_to_model", return_value=expert) as to_model,
+        patch.object(experts_db, "CheckedExpert", side_effect=SimpleNamespace),
     ):
-        await experts_db.resolve_private_expert_tenancy("owner-1", "expert-1")
+        check = await experts_db.check_private_expert("owner-1", "expert-1")
+
+    to_model.assert_called_once_with(row)
+    assert check.expert is expert
+    assert (check.organization_id, check.team_id) == ("personal-org", "personal-team")
+    latest_runs.assert_not_awaited()
+    weekly_spend.assert_not_awaited()
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -4523,6 +4599,46 @@ async def test_list_experts_includes_last_run(server: SpinTestServer, test_user)
 
 
 @pytest.mark.asyncio(loop_scope="session")
+async def test_last_run_with_a_failed_step_reports_failed(
+    server: SpinTestServer, test_user
+):
+    """A step that fails without a typed reason (a bad credential) leaves the
+    run COMPLETED with node_error_count > 0. The expert must report it as
+    failed: the expert page and Home read last_run_status, and a failed run
+    can never show done."""
+    slv_id = await _seed_store_listing(server)
+    template = await _seed_template(name="Maria", preload_listings=[slv_id])
+    hired = await experts_db.hire_expert(test_user.id, template.id, None)
+    wf = hired.expert.workflows[0]
+    assert wf.library_agent_id is not None
+    library_agent = await prisma.models.LibraryAgent.prisma().find_unique(
+        where={"id": wf.library_agent_id}
+    )
+    assert library_agent is not None
+    await prisma.models.AgentGraphExecution.prisma().create(
+        data={
+            "agentGraphId": library_agent.agentGraphId,
+            "agentGraphVersion": library_agent.agentGraphVersion,
+            "userId": test_user.id,
+            "executionStatus": prisma.enums.AgentExecutionStatus.COMPLETED,
+            "expertId": hired.expert.id,
+            "stats": SafeJson({"node_count": 1, "node_error_count": 1}),
+        }
+    )
+
+    experts = await experts_db.list_experts(test_user.id)
+    me = next(e for e in experts if e.id == hired.expert.id)
+    assert me.last_run_status == "FAILED"
+
+    fetched = await experts_db.get_expert(test_user.id, hired.expert.id)
+    assert fetched is not None
+    assert fetched.last_run_status == "FAILED"
+
+    runs = await experts_db.list_expert_runs(test_user.id, hired.expert.id)
+    assert [run.status for run in runs] == ["failed"]
+
+
+@pytest.mark.asyncio(loop_scope="session")
 async def test_hired_workflows_order_by_created_at_then_id(
     server: SpinTestServer, test_user
 ):
@@ -5223,6 +5339,7 @@ def _run_execution(**overrides) -> SimpleNamespace:
         "executionStatus": "COMPLETED",
         "startedAt": None,
         "endedAt": None,
+        "stats": None,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -5303,6 +5420,17 @@ def test_to_expert_run_never_reports_a_failed_run_as_completed(execution_status)
         needs_review=False,
     )
     assert run.status == execution_status.value.lower()
+
+
+def test_to_expert_run_reports_a_completed_run_with_a_failed_step_as_failed():
+    run = experts_db._to_expert_run(
+        _run_execution(stats={"node_count": 3, "node_error_count": 1}),
+        _run_workflow(),
+        "unknown",
+        None,
+        needs_review=False,
+    )
+    assert run.status == "failed"
 
 
 def test_to_expert_run_names_a_library_only_workflow():
@@ -6306,6 +6434,58 @@ async def test_expert_hired_carries_the_hiring_surface(
         test_user.id,
         "expert_hired",
         _expert_hired(result, template.id, surface="onboarding"),
+    )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_expert_hired_says_the_plan_made_a_fresh_or_a_revived_hire(
+    server: SpinTestServer, test_user
+):
+    template = await _seed_template(name="Maria", preload_listings=[])
+    with patch.object(experts_db, "emit_funnel_event") as emit:
+        hired = await experts_db.hire_expert(
+            test_user.id, template.id, None, "onboarding", via="plan"
+        )
+    emit.assert_called_once_with(
+        test_user.id,
+        "expert_hired",
+        _expert_hired(hired, template.id, surface="onboarding", via="plan"),
+    )
+
+    await experts_db.archive_expert(test_user.id, hired.expert.id)
+    with patch.object(experts_db, "emit_funnel_event") as emit:
+        revived = await experts_db.hire_expert(
+            test_user.id, template.id, None, "onboarding", via="plan"
+        )
+
+    assert revived.expert.id == hired.expert.id
+    emit.assert_called_once_with(
+        test_user.id,
+        "expert_hired",
+        _expert_hired(revived, template.id, surface="onboarding", via="plan"),
+    )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_expert_hired_names_no_via_when_a_person_rehires_a_plan_hire(
+    server: SpinTestServer, test_user
+):
+    template = await _seed_template(name="Maria", preload_listings=[])
+    hired = await experts_db.hire_expert(
+        test_user.id, template.id, None, "onboarding", via="plan"
+    )
+    await experts_db.archive_expert(test_user.id, hired.expert.id)
+
+    with patch.object(experts_db, "emit_funnel_event") as emit:
+        revived = await experts_db.hire_expert(
+            test_user.id, template.id, None, "expert_page"
+        )
+
+    assert revived.expert.id == hired.expert.id
+    emit.assert_called_once_with(
+        test_user.id,
+        "expert_hired",
+        _expert_hired(revived, template.id, surface="expert_page"),
     )
 
 
@@ -7600,3 +7780,30 @@ async def _record_marketplace_step() -> None:
         ),
         return_exceptions=True,
     )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+@pytest.mark.parametrize(
+    ("stored_org", "stored_team"),
+    [(None, None), ("other-org", "personal-team"), ("personal-org", "other-team")],
+)
+async def test_resolve_private_expert_tenancy_rejects_row_scope_mismatch(
+    stored_org: str | None, stored_team: str | None
+):
+    manager = SimpleNamespace(
+        find_first=AsyncMock(
+            return_value=SimpleNamespace(
+                id="expert-1", organizationId=stored_org, teamId=stored_team
+            )
+        )
+    )
+    with (
+        patch.object(prisma.models.Expert, "prisma", return_value=manager),
+        patch.object(
+            experts_db,
+            "has_live_resource_access",
+            new=AsyncMock(return_value=False),
+        ),
+        pytest.raises(experts_db.ExpertPrivateTenancyNotFoundError),
+    ):
+        await experts_db.resolve_private_expert_tenancy("owner-1", "expert-1")

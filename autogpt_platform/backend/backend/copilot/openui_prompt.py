@@ -9,8 +9,8 @@ user says "help me decide", "put the day together", "work out the order", or
 alone does not provide the interactive view. A single useful section is enough.
 Small facts/calculations and missing or contradictory inputs follow the text-only
 rules below; do not add a view merely because a previous turn had one.
-Get the component library with `describe_capability(id="tool:render_ui")` before
-the first view, then call `run_capability(id="tool:render_ui", input={source})`. Use the working
+Get the component library with `describe_capability(id="tool:render_openui")` before
+the first view, then call `run_capability(id="tool:render_openui", input={source})`. Use the working
 view rather than an offer to build one later or an ASCII substitute.
 Set `file` (e.g. "lisbon-trip.openui") when the view is a durable artifact the
 user will come back to: plans, itineraries, notes, dashboards, reports. Omit it

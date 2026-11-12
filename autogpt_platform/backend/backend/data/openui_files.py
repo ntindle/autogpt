@@ -8,6 +8,8 @@ run in the CoPilot executor too, so they are exposed on the DatabaseManager.
 
 import posixpath
 
+from prisma import Prisma
+
 from backend.data.db import execute_raw_with_schema, query_raw_with_schema, transaction
 from backend.data.tenancy import live_resource_access_barrier
 from backend.data.workspace import OPENUI_EXTENSION, OPENUI_MIME_TYPE, WorkspaceFile
@@ -71,6 +73,7 @@ async def find_openui_view_file(
     *,
     organization_id: str | None = None,
     team_id: str | None = None,
+    client: Prisma | None = None,
 ) -> str | None:
     """ID of the user's live file that holds ``view_id`` for this chat.
 
@@ -83,7 +86,7 @@ async def find_openui_view_file(
         if not allowed:
             return None
         return await _find_openui_view_file(
-            user_id, session_id, view_id, organization_id, team_id
+            user_id, session_id, view_id, organization_id, team_id, client=client
         )
 
 
@@ -93,6 +96,8 @@ async def _find_openui_view_file(
     view_id: str,
     organization_id: str | None,
     team_id: str | None,
+    *,
+    client: Prisma | None = None,
 ) -> str | None:
     rows = await query_raw_with_schema(
         'SELECT f.id FROM {schema_prefix}"UserWorkspaceFile" f '
@@ -116,6 +121,7 @@ async def _find_openui_view_file(
         session_path_prefix(session_id),
         organization_id,
         team_id,
+        client=client,
     )
     return rows[0]["id"] if rows else None
 

@@ -10,6 +10,7 @@ from prisma.models import APIKey as PrismaAPIKey
 from prisma.types import APIKeyUpdateManyMutationInput, APIKeyWhereInput
 from pydantic import Field
 
+from backend.data.db import prisma
 from backend.data.includes import MAX_USER_API_KEYS_FETCH
 from backend.data.tenancy import has_live_tenancy
 from backend.util.exceptions import NotAuthorizedError, NotFoundError
@@ -178,13 +179,28 @@ async def _record_use(key_obj: APIKeyInfoWithHash) -> None:
     if key_obj.last_used_at and now - key_obj.last_used_at < LAST_USED_RESOLUTION:
         return
     try:
-        await PrismaAPIKey.prisma().update(
-            where={"id": key_obj.id}, data={"lastUsedAt": now}
+        updated = await prisma.execute_raw(
+            """
+            WITH available AS (
+                SELECT "id" FROM "APIKey"
+                WHERE "id" = $1
+                  AND ("lastUsedAt" IS NULL
+                       OR "lastUsedAt" <= ($3::timestamptz AT TIME ZONE 'UTC'))
+                FOR NO KEY UPDATE SKIP LOCKED
+            )
+            UPDATE "APIKey" AS key
+            SET "lastUsedAt" = ($2::timestamptz AT TIME ZONE 'UTC')
+            FROM available WHERE key."id" = available."id"
+            """,
+            key_obj.id,
+            now,
+            now - LAST_USED_RESOLUTION,
         )
     except Exception as e:
         logger.warning(f"Failed to record use of API key #{key_obj.id}: {e}")
         return
-    key_obj.last_used_at = now
+    if updated:
+        key_obj.last_used_at = now
 
 
 async def _migrate_key_to_secure_hash(
@@ -237,6 +253,22 @@ async def revoke_api_key(
         return APIKeyInfo.from_db(e.api_key)
 
     return APIKeyInfo.from_db(updated_api_key)
+
+
+async def revoke_user_api_keys(user_id: str) -> int:
+    """Revoke every key of the user that isn't revoked yet; returns how many.
+
+    Suspended keys are revoked too, so nothing can bring them back. Keys the
+    user minted for an organization are included: they act as the user who
+    created them. Keys revoked earlier keep their original ``revokedAt``.
+    """
+    return await PrismaAPIKey.prisma().update_many(
+        where={"userId": user_id, "status": {"not": APIKeyStatus.REVOKED}},
+        data={
+            "status": APIKeyStatus.REVOKED,
+            "revokedAt": datetime.now(timezone.utc),
+        },
+    )
 
 
 async def list_user_api_keys(

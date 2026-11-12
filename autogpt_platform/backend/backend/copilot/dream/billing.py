@@ -42,6 +42,7 @@ from backend.copilot.graphiti.scope import MemoryScope
 from backend.copilot.graphiti.scope_resolution import memory_organization_id
 from backend.copilot.inference.context import InferenceContext, InferenceUsage
 from backend.copilot.inference.record import price, record
+from backend.copilot.limit_tracking import track_limit_exceeded
 from backend.copilot.rate_limit import RateLimitExceeded, RateLimitUnavailable
 from backend.data.entitlement import is_user_paywalled
 from backend.data.entitlement_limits import check_rate_limit, get_global_rate_limits
@@ -117,6 +118,7 @@ async def check_dream_budget(
             org_id=org_id,
         )
     except RateLimitExceeded as exc:
+        track_limit_exceeded(user_id, exc, surface="background")
         logger.info(
             "dream billing: user=%s over %s cap, skipping", user_id[:8], exc.window
         )

@@ -1055,15 +1055,13 @@ async def _enqueue_payload(
     name this owner's and this graph; the scope is recorded
     (``MemoryScopeRegistry``), so the account's crons find it.
 
-    Creating a group's queue also registers dream-system crons (community
-    rebuild + nightly batch), never for a shared tier, which has no per-user
-    dream curation: an expert group registers the expert's scope, not the
-    account's; an organization's scope has no crons of its own, so it
-    registers the account's, which run it too (``maintenance.py``). That
-    happens on the group's first write in this process and again each time
-    its queue comes back after retiring (``_WORKER_IDLE_TIMEOUT`` idle).
-    Fire-and-forget, flag-gated and idempotent; see
-    ``_register_dream_schedules``.
+    Creating a group's queue also registers the scope's own dream-system
+    crons (the flag-gated nightly ones) and claims its registry row, which
+    the hourly community sweep reads: an expert group registers the
+    expert's scope, not the account's. That happens on the group's first
+    write in this process and again each time its queue comes back after
+    retiring (``_WORKER_IDLE_TIMEOUT`` idle). Fire-and-forget, flag-gated
+    and idempotent; see ``_register_dream_schedules``.
     """
     user_id = scope.owner_user_id
     group_id = shared_group_id or scope.group_id

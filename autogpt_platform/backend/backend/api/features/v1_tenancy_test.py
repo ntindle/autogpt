@@ -166,7 +166,7 @@ def test_execute_graph_block_rechecks_live_permission_before_charge(
     block.execute.assert_not_called()
 
 
-def test_execute_graph_block_holds_live_permission_through_provider_iteration(
+def test_execute_graph_block_releases_transaction_during_provider_iteration(
     mocker: pytest_mock.MockFixture,
 ) -> None:
     active = False
@@ -181,7 +181,7 @@ def test_execute_graph_block_holds_live_permission_through_provider_iteration(
             active = False
 
     async def execute(*_args, **_kwargs):
-        assert active is True
+        assert active is False
         yield "output", "done"
 
     async def charge(**_kwargs):

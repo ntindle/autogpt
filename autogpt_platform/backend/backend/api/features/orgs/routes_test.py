@@ -2268,7 +2268,7 @@ class TestInvitationListPending:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 1
-        assert data[0]["token"] == "tok-1"
+        assert "token" not in data[0]
         assert data[0]["org_id"] == "org-1"
         assert data[0]["org_name"] == "Acme Org"
         assert data[0]["org_slug"] == "acme-org"

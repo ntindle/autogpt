@@ -3,6 +3,7 @@ import { useGetV2GetExpertComputer } from "@/services/experts/scoped-queries";
 import { usePostV2StartExpertDesktop } from "@/services/experts/scoped-mutations";
 import type { DesktopStream } from "@/app/api/__generated__/models/desktopStream";
 import { okData } from "@/app/api/helpers";
+import { desktopStartFailure } from "@/app/(platform)/copilot/components/ArtifactPanel/components/desktopStartFailure";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -39,10 +40,10 @@ export function useExpertComputerSection({ expertId }: Args) {
             queryKey: getGetV2GetExpertComputerQueryKey(expertId),
           });
         },
-        onError: () => {
+        onError: (error) => {
           toast({
             title: "Could not open the desktop",
-            description: "The sandbox did not come up. Try again in a moment.",
+            description: desktopStartFailure(error),
             variant: "destructive",
           });
         },

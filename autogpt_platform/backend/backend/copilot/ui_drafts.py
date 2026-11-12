@@ -173,6 +173,7 @@ async def _write_draft(
             view_id,
             organization_id=session.organization_id,
             team_id=session.team_id,
+            client=tx,
         ):
             raise HTTPException(409, _SAVED)
         source, sequence = await _selected_view(

@@ -19,6 +19,8 @@ T = TypeVar("T")
 
 
 class LiveResourceLeaseGuard:
+    check_interval = 0.1
+
     def __init__(self, lease_db, lease_id: str) -> None:
         self._lease_db = lease_db
         self.lease_id = lease_id
@@ -36,7 +38,7 @@ class LiveResourceLeaseGuard:
 
     async def _wait_for_loss(self) -> None:
         while True:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(self.check_interval)
             await self.validate()
 
     async def run(self, action: Awaitable[T], *, context: Context | None = None) -> T:
@@ -76,6 +78,34 @@ class LiveResourceLeaseGuard:
             await asyncio.gather(action_task, loss_task, return_exceptions=True)
             if not action_started and inspect.iscoroutine(action):
                 action.close()
+
+
+class LiveResourceAccessGuard(LiveResourceLeaseGuard):
+    """Recheck long-running work without reserving a database transaction.
+
+    Mutations inside the work still acquire their own short resource leases.
+    """
+
+    check_interval = 1.0
+
+    def __init__(
+        self,
+        scope_db,
+        user_id: str,
+        organization_id: str | None,
+        team_id: str | None,
+        access: ResourceAccess,
+    ) -> None:
+        self._scope_db = scope_db
+        self._scope = (user_id, organization_id, team_id, access)
+
+    async def validate(self) -> None:
+        try:
+            allowed = await self._scope_db.has_live_resource_access(*self._scope)
+        except Exception as exc:
+            raise LiveResourceAccessRevoked("workspace_access_unavailable") from exc
+        if not allowed:
+            raise LiveResourceAccessRevoked("workspace_access_revoked")
 
 
 class _ActiveLiveResourceLease(BaseModel):
@@ -353,6 +383,16 @@ async def store_listing_version_delivery_lease(
             raise LiveResourceAccessRevoked("store_listing_version_lease_lost")
 
 
+def auth_session_db():
+    if db.is_connected():
+        from backend.data.auth import session as auth_session_store
+
+        return auth_session_store
+    from backend.util.clients import get_database_manager_async_client
+
+    return get_database_manager_async_client()
+
+
 def background_task_db():
     if db.is_connected():
         from backend.copilot import background_task_db as store
@@ -387,6 +427,36 @@ def experts_db():
         experts_db = get_database_manager_async_client()
 
     return experts_db
+
+
+def expert_check_db():
+    if db.is_connected():
+        from backend.api.features.experts import experts_db as _expert_check_db
+
+        expert_check_db = _expert_check_db
+    else:
+        from backend.util.clients import get_database_manager_async_client
+
+        # One attempt: a database manager from before check_private_expert
+        # answers at once that it has no such route, where the retrying
+        # client would wait up to five minutes for its replacement. The
+        # executor's expert check then reads the expert another way.
+        expert_check_db = get_database_manager_async_client(should_retry=False)
+
+    return expert_check_db
+
+
+def feedback_prompts_db():
+    if db.is_connected():
+        from backend.data import feedback_prompts as _feedback_prompts_db
+
+        feedback_prompts_db = _feedback_prompts_db
+    else:
+        from backend.util.clients import get_database_manager_async_client
+
+        feedback_prompts_db = get_database_manager_async_client()
+
+    return feedback_prompts_db
 
 
 def spend_approval_db():

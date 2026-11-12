@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 import pytest_asyncio
 from fastapi import HTTPException
+from prisma import Json
 from prisma.errors import PrismaError
 from pydantic import ValidationError
 
@@ -19,7 +20,11 @@ from backend.copilot.ui_view_files import (
     write_file_state,
 )
 from backend.data import db
-from backend.data.openui_files import get_openui_file_state, move_chat_edits_to_file
+from backend.data.openui_files import (
+    find_openui_view_file,
+    get_openui_file_state,
+    move_chat_edits_to_file,
+)
 from backend.data.workspace import OPENUI_MIME_TYPE, get_or_create_workspace
 from backend.util.workspace import WorkspaceManager
 from backend.util.workspace_storage import compute_file_checksum, get_workspace_storage
@@ -575,3 +580,36 @@ def test_saved_view_names_are_plain_openui_names():
     for bad in ["", "  ", "../x", "a/b", ".."]:
         with pytest.raises(ValidationError):
             _save(bad)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_saved_view_lookup_reads_the_draft_transactions_pending_revision(
+    draft_user,
+):
+    session_id = await _view(draft_user)
+    try:
+        saved = await save_draft_as_file(draft_user, session_id, "trip", _save())
+        session = await db.prisma.chatsession.find_unique(where={"id": session_id})
+        assert session is not None
+        scope = {"organization_id": session.organizationId, "team_id": session.teamId}
+        async with db.transaction() as tx:
+            await tx.userworkspacefile.update(
+                where={"id": saved.file_id},
+                data={
+                    "metadata": Json(
+                        {"openui": {"viewId": "staged", "originSessionId": session_id}}
+                    )
+                },
+            )
+            assert (
+                await find_openui_view_file(
+                    draft_user, session_id, "staged", client=tx, **scope
+                )
+                == saved.file_id
+            )
+            assert (
+                await find_openui_view_file(draft_user, session_id, "staged", **scope)
+                is None
+            )
+    finally:
+        await db.prisma.chatsession.delete(where={"id": session_id})

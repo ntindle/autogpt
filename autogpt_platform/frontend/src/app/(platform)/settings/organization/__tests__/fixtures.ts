@@ -125,7 +125,6 @@ export const ENGINEERING_TEAM: TeamResponse = {
 
 export const PENDING_INVITATION_FROM_OTHER_ORG: UserInvitationResponse = {
   id: "inv-9",
-  token: "tok-9",
   org_id: OTHER_ORG.id,
   org_name: OTHER_ORG.name,
   org_slug: OTHER_ORG.slug,

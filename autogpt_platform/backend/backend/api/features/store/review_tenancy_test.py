@@ -56,7 +56,8 @@ async def test_review_rejects_inaccessible_subgraph_before_approval(mocker) -> N
     submission = _submission()
     submission.AgentGraph.Nodes = [
         MagicMock(
-            AgentBlock=MagicMock(id=db._AGENT_EXECUTOR_BLOCK_ID),
+            AgentBlock=None,
+            agentBlockId=db._AGENT_EXECUTOR_BLOCK_ID,
             constantInput={"graph_id": "foreign-graph", "graph_version": 1},
         )
     ]
@@ -88,6 +89,7 @@ async def test_review_yields_stable_graphs_with_live_scope(mocker) -> None:
     submission.AgentGraph.Nodes = [
         MagicMock(
             AgentBlock=MagicMock(id=db._AGENT_EXECUTOR_BLOCK_ID),
+            agentBlockId=db._AGENT_EXECUTOR_BLOCK_ID,
             constantInput={"graph_id": "graph-2", "graph_version": 5},
         )
     ]
@@ -114,3 +116,21 @@ async def test_review_yields_stable_graphs_with_live_scope(mocker) -> None:
         ("creator-1", "org-1", "team-1", "create", "graph-1", 3),
         ("creator-1", "org-1", "team-1", "create", "graph-2", 5),
     ]
+
+
+@pytest.mark.asyncio
+async def test_rejection_does_not_require_publishable_subgraphs(mocker) -> None:
+    submission = _submission()
+    client = MagicMock(find_unique=AsyncMock(return_value=submission))
+    mocker.patch("prisma.models.StoreListingVersion.prisma", return_value=client)
+    resolve = mocker.patch.object(
+        db,
+        "_get_exact_store_subgraphs",
+        AsyncMock(side_effect=NotFoundError("missing")),
+    )
+    async with db._stable_review_graphs(
+        "version-1", require_publishable_composition=False
+    ) as (locked, children):
+        assert locked is submission
+        assert children == []
+    resolve.assert_not_awaited()

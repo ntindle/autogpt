@@ -56,6 +56,8 @@ from .base import BaseTool
 from .expert_delegation import (
     chain_refusal,
     expert_matches_session_workspace,
+    is_card_retry,
+    is_first_task,
     resolve_target_expert,
     safe_caller_name,
     sent_from_metadata,
@@ -269,6 +271,14 @@ async def start_delegation(
     The part of ``delegate_to_expert`` after its checks. The caller has
     already resolved *target* and cleared ``chain_refusal``.
     """
+    # Only the hire card's own hand-off introduces a new expert. Its Try again
+    # arrives here through Otto; any other delegation just starts the work.
+    # Read before the thread opens: once it exists, every expert has a chat.
+    first_task = (
+        not delegated_session_id
+        and is_card_retry(session, target.name)
+        and await is_first_task(user_id, target.id)
+    )
     inner_session_id = await _resolve_session(
         user_id=user_id,
         session=session,
@@ -286,6 +296,7 @@ async def start_delegation(
         system_context=system_context,
         opened_here=not delegated_session_id,
         wait_for_result=wait_for_result,
+        first_task=first_task,
     )
 
 
@@ -299,6 +310,7 @@ async def run_delegated_turn(
     system_context: str = "",
     opened_here: bool,
     wait_for_result: int,
+    first_task: bool = False,
 ) -> ToolResponseBase:
     """Queue *prompt* on a delegation thread and report what happened.
 
@@ -307,7 +319,8 @@ async def run_delegated_turn(
     task handed to a new hire runs exactly like any other delegation: same
     provenance, permissions, mode and result contract. ``opened_here``
     drops a thread this call opened when its turn never reached it
-    (``TurnNotDispatched`` is re-raised after).
+    (``TurnNotDispatched`` is re-raised after). ``first_task`` marks the
+    expert's first turn ever, in any chat (see ``_FIRST_TASK_NOTE``).
     """
     caller = await _caller_name(user_id, session.expert_id, session)
     started_at = time.monotonic()
@@ -315,7 +328,9 @@ async def run_delegated_turn(
         outcome, result = await run_copilot_turn_via_queue(
             session_id=inner_session_id,
             user_id=user_id,
-            message=_handoff_message(caller, system_context, prompt),
+            message=_handoff_message(
+                caller, system_context, prompt, first_task=first_task
+            ),
             timeout=max(0, min(wait_for_result, MAX_SUB_SESSION_WAIT_SECONDS)),
             permissions=get_current_permissions(),
             tool_call_id=(
@@ -489,7 +504,20 @@ async def _caller_name(
     return caller.name
 
 
-def _handoff_message(caller: str, system_context: str, prompt: str) -> str:
+# An expert's first task from the hire card is also the user's first look at
+# them, so they open with a one-line hello and then do the work in the same
+# reply. Only the card's hand-off (and its Try again) adds this; a task from a
+# teammate or a routine just starts.
+_FIRST_TASK_NOTE = (
+    "[This is your first task since joining the team, and the user reads this "
+    "thread: open with one line introducing yourself to them, then do the "
+    "task.]"
+)
+
+
+def _handoff_message(
+    caller: str, system_context: str, prompt: str, *, first_task: bool = False
+) -> str:
     """Frame the task so the teammate knows a colleague — not the user — asked.
 
     Without this the delegated prompt reads as the user speaking, and the
@@ -503,6 +531,8 @@ def _handoff_message(caller: str, system_context: str, prompt: str) -> str:
         "final message. If the task needs something only the user can "
         "provide, say what is missing instead of guessing.]"
     )
+    if first_task:
+        preamble += f"\n\n{_FIRST_TASK_NOTE}"
     if system_context.strip():
         preamble += f"\n\n[Context: {system_context.strip()}]"
     return f"{preamble}\n\n{prompt}"

@@ -34,6 +34,7 @@ from backend.data.model import (
     CredentialsType,
     HostScopedCredentials,
     UserPasswordCredentials,
+    is_refused_sdk_default,
     is_sdk_default,
 )
 from backend.data.tenancy import (
@@ -562,7 +563,7 @@ async def list_credentials(
         return [
             to_meta_response(cred)
             for cred in credentials
-            if not is_sdk_default(cred.id)
+            if not is_refused_sdk_default(cred.id)
         ]
 
 
@@ -585,7 +586,7 @@ async def list_credentials_by_provider(
         return [
             to_meta_response(cred)
             for cred in credentials
-            if not is_sdk_default(cred.id)
+            if not is_refused_sdk_default(cred.id)
         ]
 
 
@@ -714,22 +715,25 @@ async def delete_credential(
     token revocation.
     """
     async with _live_credential_action(auth):
-        if is_sdk_default(cred_id):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Credentials not found",
-            )
         if is_system_credential(cred_id):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="System-managed credentials cannot be deleted",
             )
-        creds = await creds_manager.store.get_creds_by_id(auth.user_id, cred_id)
-        if not creds or not provider_matches(creds.provider, provider):
+        if is_sdk_default(cred_id):
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Credentials not found",
+                status_code=status.HTTP_404_NOT_FOUND, detail="Credentials not found"
             )
+        creds = await creds_manager.store.get_creds_by_id(auth.user_id, cred_id)
+        if not creds:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Credentials not found"
+            )
+        if not provider_matches(creds.provider, provider):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Credentials not found"
+            )
+
         await creds_manager.delete(auth.user_id, cred_id)
 
     return DeleteCredentialResponse(deleted=True, credentials_id=cred_id)

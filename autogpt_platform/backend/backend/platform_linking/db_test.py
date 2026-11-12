@@ -26,7 +26,9 @@ from .db import (
     delete_server_link,
     delete_user_link,
     fetch_workspace_artifact,
+    find_server_link_owner,
     find_server_link_owner_for_sender,
+    find_user_link_owner,
     get_link_token_info,
     get_link_token_status,
     mask_email,
@@ -46,6 +48,62 @@ from .models import (
 async def _fake_transaction():
     # Avoids Prisma's tx binding asyncio primitives to the wrong loop in tests.
     yield MagicMock()
+
+
+# ── Link owners ──────────────────────────────────────────────────────
+
+
+class TestLinkOwnerOfAClosedAccount:
+    """With open_only, a closed account's link counts as unlinked, checked in
+    the same DB-manager call so the bot path pays no extra round trip."""
+
+    @pytest.fixture
+    def links(self):
+        with (
+            patch("backend.platform_linking.db.PlatformLink") as server,
+            patch("backend.platform_linking.db.PlatformUserLink") as user,
+        ):
+            server.prisma.return_value.find_first = AsyncMock(
+                return_value=MagicMock(userId="u-closed")
+            )
+            user.prisma.return_value.find_unique = AsyncMock(
+                return_value=MagicMock(userId="u-closed")
+            )
+            yield
+
+    @pytest.mark.asyncio
+    async def test_open_only_hides_a_closed_owner(self, links):
+        with patch(
+            "backend.platform_linking.db.is_account_closed",
+            new=AsyncMock(return_value=True),
+        ) as closed:
+            server = await find_server_link_owner("DISCORD", "g1", open_only=True)
+            user = await find_user_link_owner("DISCORD", "pu1", open_only=True)
+
+        assert server is None and user is None
+        assert closed.await_args_list == [(("u-closed",),), (("u-closed",),)]
+
+    @pytest.mark.asyncio
+    async def test_open_only_keeps_an_open_owner(self, links):
+        with patch(
+            "backend.platform_linking.db.is_account_closed",
+            new=AsyncMock(return_value=False),
+        ):
+            server = await find_server_link_owner("DISCORD", "g1", open_only=True)
+            user = await find_user_link_owner("DISCORD", "pu1", open_only=True)
+
+        assert server == "u-closed" and user == "u-closed"
+
+    @pytest.mark.asyncio
+    async def test_without_open_only_the_closed_check_is_skipped(self, links):
+        with patch(
+            "backend.platform_linking.db.is_account_closed", new=AsyncMock()
+        ) as closed:
+            server = await find_server_link_owner("DISCORD", "g1")
+            user = await find_user_link_owner("DISCORD", "pu1")
+
+        assert server == "u-closed" and user == "u-closed"
+        closed.assert_not_awaited()
 
 
 # ── Resolve ──────────────────────────────────────────────────────────
@@ -652,8 +710,12 @@ class TestRefreshServerLinkName:
 
 
 def _artifact_patches(*, expert_id: str | None, manager: MagicMock):
-    session = SimpleNamespace(user_id="user-1", expert_id=expert_id)
-    file = SimpleNamespace(name="report.txt", mime_type="text/plain", size_bytes=10)
+    session = SimpleNamespace(
+        user_id="user-1", expert_id=expert_id, organization_id="org-1", team_id="team-1"
+    )
+    file = SimpleNamespace(
+        name="report.txt", mime_type="text/plain", size_bytes=10, session_id="sess-1"
+    )
     return (
         patch(
             "backend.platform_linking.db.get_chat_session_metadata",
@@ -701,6 +763,9 @@ class TestFetchWorkspaceArtifactExpertScope:
             workspace_id="ws-1",
             session_id="sess-1",
             scope=scope.with_session("sess-1"),
+            organization_id="org-1",
+            team_id="team-1",
+            access="execute",
         )
 
     @pytest.mark.asyncio
@@ -726,5 +791,11 @@ class TestFetchWorkspaceArtifactExpertScope:
         assert result.content == b"data"
         resolve_mock.assert_not_awaited()
         manager_cls.assert_called_once_with(
-            user_id="user-1", workspace_id="ws-1", session_id="sess-1", scope=None
+            user_id="user-1",
+            workspace_id="ws-1",
+            session_id="sess-1",
+            scope=None,
+            organization_id="org-1",
+            team_id="team-1",
+            access="execute",
         )

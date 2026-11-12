@@ -75,6 +75,11 @@ export function useExpertKickoff({
         ],
         enabled: wantsSession,
         refetchOnWindowFocus: false,
+        // A kickoff link opened again must find the chat the first visit
+        // made, not the empty list cached from before it existed. The page
+        // only arms this once the roster settles, after mount, so stale-now
+        // is what makes enabling it fetch.
+        staleTime: 0,
         refetchInterval:
           wantsSession && userId && expertId && kickoffStatus === "pending"
             ? 1_000
@@ -149,11 +154,16 @@ export function useExpertKickoff({
     });
   });
 
+  // A finished kickoff never runs again, but its link still has to open the
+  // chat it made: settling clears the param, and the adoption below with it,
+  // so read the expert's chats first.
+  const isListingSessions = wantsSession && sessionsQuery.isFetching;
   useEffect(() => {
     if (!isArmed || !userId || !expertId) return;
     if (getKickoffStatus(userId, expertId) !== "done") return;
+    if (isListingSessions) return;
     settleKickoff();
-  }, [expertId, isArmed, settleKickoff, userId]);
+  }, [expertId, isArmed, isListingSessions, settleKickoff, userId]);
 
   useEffect(() => {
     if (!isArmed || !userId || !expertId || sessionId) return;
@@ -166,6 +176,9 @@ export function useExpertKickoff({
       return;
     }
     if (sessions === null && !sessionsQuery.isError) return;
+    // An empty list being re-read may be the one cached before the
+    // expert's first chat: wait for the answer before starting another.
+    if (sessionsQuery.isFetching) return;
     if (getKickoffStatus(userId, expertId) !== "idle") return;
     if (transportsQuery.data?.status !== 200) return;
     beginKickoff(userId, expertId);
@@ -176,6 +189,7 @@ export function useExpertKickoff({
     sessionId,
     sessionsQuery.data,
     sessionsQuery.isError,
+    sessionsQuery.isFetching,
     transportsQuery.data,
     userId,
   ]);

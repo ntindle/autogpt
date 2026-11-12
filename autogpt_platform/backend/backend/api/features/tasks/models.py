@@ -108,7 +108,7 @@ class TaskBreakdownRequest(BaseModel):
 
     detail: Literal["milestones", "steps", "small_steps"] = "steps"
     guidance: str = Field(default="", max_length=2000)
-    preview_id: str | None = None
+    preview_id: str | None = Field(default=None, max_length=256)
     current_steps: list[TaskBreakdownSelection] | None = Field(
         default=None, min_length=1, max_length=12
     )
@@ -209,11 +209,11 @@ def _self_identity(assignee: TaskAssignee | None, user_id: str) -> TaskAssignee 
 class TaskCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str = Field(default_factory=lambda: str(uuid4()))
+    id: str = Field(default_factory=lambda: str(uuid4()), max_length=256)
     title: str = Field(min_length=1, max_length=500)
     description: str = Field(default="", max_length=20000)
     project: str = Field(default="", max_length=100)
-    parent_id: str | None = None
+    parent_id: str | None = Field(default=None, max_length=256)
     plan_only: bool = False
 
     @field_validator("title")

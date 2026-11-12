@@ -102,8 +102,8 @@ async def get_user_info(
     path="/blocks",
     tags=["blocks"],
     dependencies=[
-        permission_dependency(APIKeyPermission.READ_BLOCK),
         READ_LIMIT,
+        permission_dependency(APIKeyPermission.READ_BLOCK, hold_until_return=False),
     ],
 )
 async def get_graph_blocks() -> Sequence[dict[Any, Any]]:
@@ -121,7 +121,9 @@ async def get_graph_blocks() -> Sequence[dict[Any, Any]]:
 async def execute_graph_block(
     block_id: str,
     data: BlockInput,
-    auth: APIAuthorizationInfo = require_permission(APIKeyPermission.EXECUTE_BLOCK),
+    auth: APIAuthorizationInfo = require_permission(
+        APIKeyPermission.EXECUTE_BLOCK, hold_until_return=False
+    ),
 ) -> CompletedBlockOutput:
     async with live_resource_access_barrier(
         auth.user_id,
@@ -131,7 +133,13 @@ async def execute_graph_block(
     ) as allowed:
         if not allowed:
             raise HTTPException(403, detail="Execution access was revoked")
-        return await _execute_graph_block_live(block_id, data, auth)
+    output = await _execute_graph_block_live(block_id, data, auth)
+    async with live_resource_access_barrier(
+        auth.user_id, auth.organization_id, auth.team_id_restriction, "execute"
+    ) as allowed:
+        if not allowed:
+            raise HTTPException(403, detail="Execution access was revoked")
+        return output
 
 
 async def _execute_graph_block_live(
@@ -179,9 +187,14 @@ async def _run_direct_block(
     slot: DirectBlockExecutionSlot,
 ) -> CompletedBlockOutput:
     try:
-        await charge_for_direct_block_execution(
-            user_id=auth.user_id, block=obj, input_data=data, source="external"
-        )
+        async with live_resource_access_barrier(
+            auth.user_id, auth.organization_id, auth.team_id_restriction, "execute"
+        ) as allowed:
+            if not allowed:
+                raise HTTPException(403, detail="Execution access was revoked")
+            await charge_for_direct_block_execution(
+                user_id=auth.user_id, block=obj, input_data=data, source="external"
+            )
     except InsufficientBalanceError as e:
         raise HTTPException(
             status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(e)

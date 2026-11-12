@@ -69,7 +69,11 @@ export function TopUpPromptProvider({ children }: Props) {
       value={{ isOutOfCredits, openTopUp, closeTopUp }}
     >
       {children}
-      <TopUpDialog isOpen={isOpen && !isTeamOrg} onClose={closeTopUp} />
+      <TopUpDialog
+        key={identityKey ?? "anonymous"}
+        isOpen={isOpen && !isTeamOrg}
+        onClose={closeTopUp}
+      />
       {isOutOfCredits && <DailyTopUpAutoOpener />}
     </TopUpPromptContext.Provider>
   );

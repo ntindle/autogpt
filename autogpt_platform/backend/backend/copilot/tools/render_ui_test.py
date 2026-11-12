@@ -1,621 +1,329 @@
+"""render_ui validates the cards Otto shows and decides who can be offered it."""
+
 import json
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+import os
+from pathlib import Path
+from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from backend.api.features.store.exceptions import VirusScanError
-from backend.copilot import prompting
-from backend.copilot.baseline.service import (
-    _baseline_tool_executor,
-    _BaselineStreamState,
+from backend.copilot.model import ChatSession
+from backend.copilot.permissions import CopilotPermissions, all_known_tool_names
+from backend.copilot.tools.models import ErrorResponse, ResponseType
+from backend.copilot.tools.render_ui import (
+    RENDER_UI_TOOL,
+    RenderUITool,
+    render_ui_disabled_tools,
+    shows_cards,
+    without_render_ui,
 )
-from backend.copilot.capabilities import registry
-from backend.copilot.capabilities.dispatch import resolve_tool_dispatch
-from backend.copilot.capabilities.index import CapabilityIndex
-from backend.copilot.capabilities.sources.static_tools import tool_entries
-from backend.copilot.config import ChatConfig
-from backend.copilot.response_model import StreamToolOutputAvailable
-from backend.copilot.sdk.tool_adapter import (
-    _make_truncating_wrapper,
-    _text_from_mcp_result,
-    pop_pending_tool_output,
-    reset_pending_tool_outputs,
-    reset_tool_failure_counters,
-    set_execution_context,
+from backend.copilot.tools.render_ui_models import (
+    MAX_BLOCKS,
+    MAX_PAYLOAD_CHARS,
+    UIBlocksResponse,
+    render_ui_parameters,
 )
-from backend.copilot.tools import TOOL_REGISTRY, get_available_tools, openui_files
-from backend.copilot.tools._test_data import make_session
-from backend.copilot.tools.models import ResponseType
-from backend.copilot.tools.openui_validator import (
-    ValidationResult,
-    ValidatorUnavailable,
-    validate_openui_source,
+
+FIXTURE = (
+    Path(__file__).parents[4]
+    / "frontend/src/app/(platform)/copilot/tools/RenderUI/__tests__"
+    / "renderUIOutput.json"
 )
-from backend.data.workspace import OPENUI_MIME_TYPE, WorkspaceFile
-from backend.data.workspace_scope import WorkspaceAccessDeniedError
-from backend.util.tool_call_loop import LLMToolCall
 
-SOURCE = 'root = Workspace("Revenue", "From the uploaded report", [Metrics([Metric("Revenue", "$42,000", "Q3", "positive")])], "revenue")'
-
-
-FILE_ID = "0b6a3c1e-7d2f-4f5a-9c8b-1a2b3c4d5e6f"
-
-
-@pytest.fixture(autouse=True)
-def saved_views(monkeypatch):
-    """No view of the chat is saved yet; tests that save one say so."""
-    db = MagicMock()
-    db.find_openui_view_file = AsyncMock(return_value=None)
-    db.move_chat_edits_to_file = AsyncMock(return_value=True)
-    monkeypatch.setattr(openui_files, "openui_files_db", MagicMock(return_value=db))
-    return db
-
-
-@pytest.fixture(autouse=True)
-def workspace(monkeypatch):
-    manager = MagicMock()
-    manager.user_id = "owner"
-    manager.organization_id = None
-    manager.team_id = None
-    manager.write_file = AsyncMock(side_effect=_written)
-    manager.replace_file_content = AsyncMock(side_effect=_replaced)
-    manager.get_file_info = AsyncMock(return_value=_view_file())
-    monkeypatch.setattr(
-        openui_files, "get_workspace_manager", AsyncMock(return_value=manager)
-    )
-    return manager
-
-
-def _view_file(**overrides) -> WorkspaceFile:
-    values = {
-        "id": FILE_ID,
-        "workspace_id": "ws-1",
-        "created_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
-        "updated_at": datetime(2026, 10, 1, tzinfo=timezone.utc),
-        "name": "revenue.openui",
-        "path": "/sessions/earlier-chat/revenue.openui",
-        "storage_path": "local://revenue.openui",
-        "mime_type": OPENUI_MIME_TYPE,
-        "size_bytes": 10,
-        "metadata": {
-            "origin": "agent-created",
-            "openui": {"viewId": "revenue", "originSessionId": "earlier-chat"},
-        },
-    }
-    return WorkspaceFile(**{**values, **overrides})
-
-
-async def _written(*, content, filename, mime_type, metadata, **kwargs):
-    return _view_file(
-        id="new-file",
-        name=filename,
-        path=f"/sessions/chat/{filename}",
-        mime_type=mime_type,
-        metadata=metadata,
-    )
-
-
-async def _replaced(file_id, content, *, mime_type, metadata):
-    return _view_file(id=file_id, mime_type=mime_type, metadata=metadata)
-
-
-@pytest.fixture
-def render_ui_tool(monkeypatch):
-    monkeypatch.setattr(
-        registry,
-        "_registry",
-        CapabilityIndex(tool_entries({"render_ui": TOOL_REGISTRY["render_ui"]}, {})),
-    )
-    return TOOL_REGISTRY["render_ui"]
-
-
-def test_render_ui_is_discoverable_but_does_not_expand_every_turn(render_ui_tool):
-
-    assert "render_ui" not in {
-        tool["function"]["name"] for tool in get_available_tools()
-    }
-    call = resolve_tool_dispatch(
-        "run_capability",
-        {"id": "tool:render_ui", "input": {"source": SOURCE, "summary": "Revenue."}},
-    )
-    assert call is not None and call.tool is render_ui_tool
-    assert call.name == "render_ui" and call.args["source"] == SOURCE
-
-
-@pytest.mark.parametrize("use_e2b", [False, True])
-@pytest.mark.parametrize("expert_session", [False, True])
-def test_prompt_guidance_is_available_by_default_for_both_engines(
-    monkeypatch, use_e2b, expert_session
-):
-    monkeypatch.setattr(
-        ChatConfig, "model_config", {**ChatConfig.model_config, "env_file": None}
-    )
-    for value in (None, "false", "true"):
-        if value is None:
-            monkeypatch.delenv("CHAT_OPENUI_ENABLED", raising=False)
-        else:
-            monkeypatch.setenv("CHAT_OPENUI_ENABLED", value)
-        assert "tool:render_ui" in prompting.get_openui_supplement()
-        supplement = prompting.get_sdk_supplement(use_e2b, expert_session)
-        assert "tool:render_ui" in supplement
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_flag", [None, "false"])
-async def test_render_ui_works_without_deployment_configuration(
-    monkeypatch, legacy_flag
-):
-    monkeypatch.setattr(
-        ChatConfig, "model_config", {**ChatConfig.model_config, "env_file": None}
-    )
-    if legacy_flag is None:
-        monkeypatch.delenv("CHAT_OPENUI_ENABLED", raising=False)
-    else:
-        monkeypatch.setenv("CHAT_OPENUI_ENABLED", legacy_flag)
-    tool = TOOL_REGISTRY["render_ui"]
-    assert tool.is_available
-    result = await tool._execute(
-        "owner", make_session("owner"), source=SOURCE, summary="Revenue."
-    )
-    assert result.type == ResponseType.UI_RENDERED
-
-
-@pytest.mark.asyncio
-async def test_render_ui_requires_a_logged_in_user(render_ui_tool):
-    result = await render_ui_tool.execute(
-        None, make_session("owner"), "ui-call", source=SOURCE, summary="Revenue."
-    )
-    assert json.loads(result.output)["type"] == "need_login"
-
-
-@pytest.mark.asyncio
-async def test_render_ui_limits_encoded_size_before_tool_output_truncation(
-    render_ui_tool,
-):
-    source = 'root = Workspace("' + "🎨" * 20_000 + '", "Example", [])'
-    assert len(source) < 60_000
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=source, summary="Summary"
-    )
-    assert result.type == ResponseType.ERROR
-
-
-@pytest.mark.asyncio
-async def test_baseline_dispatch_emits_and_records_the_ui_payload(render_ui_tool):
-
-    state = _BaselineStreamState()
-    session = make_session("owner")
-    await _baseline_tool_executor(
-        LLMToolCall(
-            id="ui-call",
-            name="run_capability",
-            arguments=json.dumps(
-                {
-                    "id": "tool:render_ui",
-                    "input": {"source": SOURCE, "summary": "Revenue."},
-                }
-            ),
-        ),
-        tools=[],
-        state=state,
-        user_id="owner",
-        session=session,
-        disabled_groups=[],
-        disabled_tools=frozenset(),
-    )
-    outputs = [
-        event
-        for event in state.emitted_events
-        if isinstance(event, StreamToolOutputAvailable)
-    ]
-    assert len(outputs) == 1
-    assert outputs[0].toolName == "render_ui"
-    assert json.loads(outputs[0].output)["source"] == SOURCE
-    records = list(state.tool_persistence.results.values())
-    assert len(records) == 1 and records[0].tool_name == "render_ui"
-    assert json.loads(records[0].content)["source"] == SOURCE
-
-
-@pytest.mark.asyncio
-async def test_sdk_dispatch_preserves_the_ui_payload_for_the_frontend(render_ui_tool):
-
-    async def dispatcher_should_not_run(args):
-        raise AssertionError("Expected dispatch to render_ui")
-
-    args = {"source": SOURCE, "summary": "Revenue."}
-    reset_pending_tool_outputs()
-    reset_tool_failure_counters()
-    set_execution_context("owner", make_session("owner"))
-    try:
-        wrapper = _make_truncating_wrapper(
-            dispatcher_should_not_run, "run_capability", required_args=["id", "input"]
-        )
-        response = await wrapper({"id": "tool:render_ui", "input": args})
-        assert json.loads(_text_from_mcp_result(response))["source"] == SOURCE
-        output = pop_pending_tool_output("render_ui", args)
-        assert output is not None
-    finally:
-        set_execution_context(None, None)
-        reset_pending_tool_outputs()
-
-
-@pytest.mark.asyncio
-async def test_render_ui_returns_a_persistable_result():
-    tool = TOOL_REGISTRY["render_ui"]
-    session = make_session("owner")
-    result = await tool._execute(
-        user_id="owner",
-        session=session,
-        source=SOURCE,
-        summary="Revenue was $42,000 in Q3.",
-    )
-    payload = json.loads(result.model_dump_json())
-    assert payload["type"] == "ui_rendered"
-    assert payload["source"] == SOURCE
-    assert "Revenue: $42,000 (Q3)" in payload["message"]
-    assert payload["session_id"] == session.session_id
-    assert payload["version"] == 1
-    assert payload["view_id"] == "revenue"
-
-
-@pytest.mark.asyncio
-async def test_new_views_require_an_id_but_historical_sources_remain_readable():
-    legacy = SOURCE.replace(', "revenue")', ")")
-    parsed = await validate_openui_source(legacy)
-    assert parsed.valid
-    assert parsed.view_id is None
-    rejected = await TOOL_REGISTRY["render_ui"]._execute(
-        "owner", make_session("owner"), source=legacy
-    )
-    assert rejected.type == ResponseType.ERROR
-    assert "stable viewId" in rejected.message
-    assert "Retry" in rejected.message
-    assert "source" not in rejected.model_dump()
-
-
-@pytest.mark.asyncio
-async def test_render_ui_refuses_another_users_session():
-    tool = TOOL_REGISTRY["render_ui"]
-    result = await tool._execute(
-        user_id="other-user",
-        session=make_session("owner"),
-        source=SOURCE,
-        summary="Revenue.",
-    )
-    assert result.type == ResponseType.ERROR
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "source",
-    [
-        "",
-        "x" * 60_001,
-        "```openui\nroot = Workspace()\n```",
-        "<script>alert(1)</script>",
-    ],
-    ids=["empty", "oversized", "fenced", "html"],
-)
-async def test_render_ui_rejects_invalid_or_oversized_inputs(source):
-    result = await TOOL_REGISTRY["render_ui"]._execute(
-        user_id="owner",
-        session=make_session("owner"),
-        source=source,
-        summary="Fallback.",
-    )
-    assert result.type == ResponseType.ERROR
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "section, issue",
-    [
-        (
-            'DataTable("Quotes", ["Name", "Price"], [["Kite", "$1550", "extra"]])',
-            "DataTable",
-        ),
-        ('DataTable("Quotes", ["a","b","c","d","e","f","g"], [])', "columns"),
-        ("unresolved_section", "unresolved_section"),
-        ('MadeUpComponent("hi")', "MadeUpComponent"),
-    ],
-)
-async def test_render_ui_rejects_schema_errors_before_publishing(
-    render_ui_tool, section, issue
-):
-    result = await render_ui_tool._execute(
-        "owner",
-        make_session("owner"),
-        source=f'root = Workspace("Test", "Supplied data", [{section}])',
-        summary="Fallback.",
-    )
-    assert result.type == ResponseType.ERROR
-    assert issue in result.message
-    assert "retry" in result.message.lower()
-    assert "source" not in result.model_dump()
-
-
-@pytest.mark.asyncio
-async def test_validator_outage_returns_text_guidance_without_publishing(
-    render_ui_tool, monkeypatch
-):
-    monkeypatch.setattr(
-        openui_files,
-        "validate_openui_source",
-        AsyncMock(side_effect=ValidatorUnavailable("Unavailable")),
-    )
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE, summary="Revenue."
-    )
-    assert result.type == ResponseType.ERROR
-    assert "plain text" in result.message
-    assert "source" not in result.model_dump()
-
-
-@pytest.mark.asyncio
-async def test_missing_canonical_summary_does_not_publish_a_view(
-    render_ui_tool, monkeypatch
-):
-    monkeypatch.setattr(
-        openui_files,
-        "validate_openui_source",
-        AsyncMock(return_value=ValidationResult(valid=True, error="", summary="")),
-    )
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE, summary="Unvalidated fallback."
-    )
-    assert result.type == ResponseType.ERROR
-    assert "plain text" in result.message
-    assert "source" not in result.model_dump()
-    assert "Unvalidated fallback" not in result.message
-
-
-@pytest.mark.asyncio
-async def test_summary_expansion_cannot_exceed_the_tool_output_byte_limit(
-    render_ui_tool,
-):
-    source = 'root = Workspace("Large", "' + "漢" * 15_000 + '", [], "large")'
-    assert len(source.encode()) < 70_000
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=source
-    )
-    assert result.type == ResponseType.ERROR
-    assert "too large" in result.message
-    assert "source" not in result.model_dump()
-
-
-@pytest.mark.asyncio
-async def test_sdk_returns_repair_feedback_then_publishes_only_corrected_view(
-    render_ui_tool,
-):
-    async def dispatcher_should_not_run(args):
-        raise AssertionError("Expected render_ui dispatch")
-
-    reset_pending_tool_outputs()
-    reset_tool_failure_counters()
-    set_execution_context("owner", make_session("owner"))
-    try:
-        wrapper = _make_truncating_wrapper(
-            dispatcher_should_not_run, "run_capability", required_args=["id", "input"]
-        )
-        bad = 'root = Workspace("Quotes", "Data", [DataTable("Prices", ["Name", "Price"], [["Kite"]])], "quotes")'
-        rejected = await wrapper(
-            {"id": "tool:render_ui", "input": {"source": bad, "summary": "Quotes."}}
-        )
-        error = json.loads(_text_from_mcp_result(rejected))
-        assert error["type"] == "error"
-        assert "DataTable.rows.0" in error["message"]
-        assert "source" not in error
-        corrected = bad.replace('[["Kite"]]', '[["Kite", "$1550"]]')
-        accepted = await wrapper(
-            {
-                "id": "tool:render_ui",
-                "input": {"source": corrected, "summary": "Kite costs $1550."},
-            }
-        )
-        output = json.loads(_text_from_mcp_result(accepted))
-        assert output["type"] == "ui_rendered"
-        assert output["source"] == corrected
-    finally:
-        set_execution_context(None, None)
-        reset_pending_tool_outputs()
-
-
-@pytest.mark.asyncio
-async def test_a_new_filename_saves_the_view_as_a_file(
-    render_ui_tool, workspace, saved_views
-):
-    session = make_session("owner")
-    result = await render_ui_tool._execute(
-        "owner", session, source=SOURCE, file="Q3 revenue"
-    )
-    payload = json.loads(result.model_dump_json())
-    assert payload["type"] == "ui_rendered"
-    assert payload["file_id"] == "new-file"
-    assert payload["file_name"] == "Q3 revenue.openui"
-    assert payload["file_path"] == "/sessions/chat/Q3 revenue.openui"
-    assert payload["file_uri"] == f"workspace://new-file#{OPENUI_MIME_TYPE}"
-    written = workspace.write_file.await_args.kwargs
-    assert written["content"] == SOURCE.encode()
-    assert written["mime_type"] == OPENUI_MIME_TYPE
-    openui = written["metadata"]["openui"]
-    assert openui["viewId"] == "revenue"
-    assert openui["originSessionId"] == session.session_id
-    assert openui["summary"] == payload["message"]
-    assert "Revenue: $42,000 (Q3)" in openui["summary"]
-    workspace.replace_file_content.assert_not_awaited()
-    saved_views.move_chat_edits_to_file.assert_awaited_once_with(
-        "owner",
-        session.session_id,
-        "revenue",
-        "new-file",
-        organization_id=None,
-        team_id=None,
-    )
-
-
-@pytest.mark.asyncio
-async def test_rerendering_a_saved_view_revises_the_same_file(
-    render_ui_tool, workspace, saved_views
-):
-    saved_views.find_openui_view_file.return_value = FILE_ID
-    session = make_session("owner")
-    result = await render_ui_tool._execute("owner", session, source=SOURCE)
-    assert json.loads(result.model_dump_json())["file_id"] == FILE_ID
-    saved_views.find_openui_view_file.assert_awaited_once_with(
-        "owner", session.session_id, "revenue", organization_id=None, team_id=None
-    )
-    file_id, content = workspace.replace_file_content.await_args.args
-    metadata = workspace.replace_file_content.await_args.kwargs["metadata"]
-    assert (file_id, content) == (FILE_ID, SOURCE.encode())
-    assert metadata["origin"] == "agent-created"
-    assert metadata["openui"]["originSessionId"] == session.session_id
-    assert "Revenue: $42,000 (Q3)" in metadata["openui"]["summary"]
-    workspace.write_file.assert_not_awaited()
-    saved_views.move_chat_edits_to_file.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "reference",
-    [f"workspace://{FILE_ID}#{OPENUI_MIME_TYPE}", FILE_ID, FILE_ID.upper()],
-    ids=["uri", "bare-id", "upper-case"],
-)
-async def test_a_file_reference_revises_that_file(
-    render_ui_tool, workspace, saved_views, reference
-):
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE, file=reference
-    )
-    assert json.loads(result.model_dump_json())["file_id"] == FILE_ID
-    workspace.get_file_info.assert_awaited_once_with(FILE_ID)
-    assert workspace.replace_file_content.await_args.args[0] == FILE_ID
-    saved_views.find_openui_view_file.assert_not_awaited()
-    saved_views.move_chat_edits_to_file.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "existing",
-    [None, _view_file(name="notes.md", mime_type="text/markdown", metadata={})],
-    ids=["missing-or-not-owned", "not-a-view"],
-)
-async def test_only_an_owned_view_file_can_be_revised(
-    render_ui_tool, workspace, existing
-):
-    workspace.get_file_info.return_value = existing
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE, file=FILE_ID
-    )
-    assert result.type == ResponseType.ERROR
-    assert "not an OpenUI view file" in result.message
-    assert "source" not in result.model_dump()
-    workspace.replace_file_content.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_an_invalid_view_is_never_written(render_ui_tool, workspace):
-    result = await render_ui_tool._execute(
-        "owner",
-        make_session("owner"),
-        source='root = Workspace("Test", "Data", [MadeUpComponent("hi")], "test")',
-        file="test.openui",
-    )
-    assert result.type == ResponseType.ERROR
-    workspace.write_file.assert_not_awaited()
-    workspace.replace_file_content.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_a_failed_file_write_does_not_publish_the_view(render_ui_tool, workspace):
-    workspace.write_file.side_effect = ValueError(
-        "File already exists at path: /sessions/chat/revenue.openui"
-    )
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE, file="revenue"
-    )
-    assert result.type == ResponseType.ERROR
-    assert "already exists" in result.message
-    assert "source" not in result.model_dump()
-
-
-@pytest.mark.asyncio
-async def test_a_new_file_is_kept_when_moving_the_chats_edits_fails(
-    render_ui_tool, workspace, saved_views
-):
-    saved_views.move_chat_edits_to_file.side_effect = RuntimeError("db down")
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE, file="revenue"
-    )
-    assert json.loads(result.model_dump_json())["file_id"] == "new-file"
-
-
-@pytest.mark.asyncio
-async def test_a_chat_only_view_survives_a_failed_saved_view_lookup(
-    render_ui_tool, saved_views
-):
-    saved_views.find_openui_view_file.side_effect = RuntimeError("db down")
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE
-    )
-    payload = json.loads(result.model_dump_json())
-    assert payload["type"] == "ui_rendered"
-    assert payload["file_id"] is None
-
-
-_WRITE_FAILURES = [
-    VirusScanError("Scanner unavailable"),
-    ValueError("Storage limit exceeded"),
-    WorkspaceAccessDeniedError("Outside this chat's scope"),
-    RuntimeError("db down"),
+ALL_BLOCKS: list[dict[str, Any]] = [
+    {
+        "type": "stats",
+        "items": [
+            {"label": "Leads", "value": "412", "change": "+6%", "tone": "positive"},
+            {"label": "Replies", "value": "96", "change": "+37%", "tone": "positive"},
+        ],
+    },
+    {
+        "type": "chart",
+        "title": "Replies per week",
+        "kind": "area",
+        "x_labels": ["Wk 1", "Wk 2", "Wk 3", "Wk 4"],
+        "series": [{"name": "This month", "values": [14, 17, 28, 37]}],
+        "annotation": {"x": "Wk 3", "label": "New subject lines"},
+    },
+    {
+        "type": "workflow_diagram",
+        "title": "Where leads drop out",
+        "steps": [
+            {"label": "New lead", "detail": "412", "status": "ok"},
+            {"label": "Enrich lead", "detail": "31 failed", "status": "error"},
+        ],
+    },
+    {
+        "type": "gallery",
+        "images": [
+            {"src": "workspace://file-1#image/png", "caption": "Before"},
+            {"src": "workspace://file-2", "caption": "After"},
+        ],
+    },
+    {
+        "type": "timeline",
+        "items": [{"date": "14 Oct", "title": "New subject lines", "status": "ok"}],
+    },
+    {
+        "type": "options",
+        "items": [
+            {"title": "Fix enrichment", "description": "Recover 31 leads"},
+            {"title": "Add a day 5 follow-up", "tone": "positive"},
+        ],
+    },
+    {
+        "type": "table",
+        "columns": ["Metric", "This month"],
+        "rows": [["Meetings", "21"]],
+    },
 ]
 
 
+def block(block_type: str) -> dict[str, Any]:
+    return next(item for item in ALL_BLOCKS if item["type"] == block_type)
+
+
+@pytest.fixture()
+def tool() -> RenderUITool:
+    return RenderUITool()
+
+
+@pytest.fixture()
+def session() -> ChatSession:
+    return ChatSession.new(
+        user_id="test-user", dry_run=False, session_id="fixture-session"
+    )
+
+
+async def run(tool: RenderUITool, session: ChatSession, blocks: Any):
+    return await tool._execute(user_id=None, session=session, blocks=blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sample", ALL_BLOCKS, ids=lambda item: item["type"])
+async def test_every_block_type_is_returned(
+    tool: RenderUITool, session: ChatSession, sample: dict[str, Any]
+):
+    result = await run(tool, session, [sample])
+
+    assert isinstance(result, UIBlocksResponse)
+    assert result.type == ResponseType.UI_BLOCKS
+    assert result.blocks[0].type == sample["type"]
+
+
+@pytest.mark.asyncio
+async def test_output_matches_frontend_fixture(
+    tool: RenderUITool, session: ChatSession
+):
+    """The frontend renders this same file, so the two halves can't drift."""
+    result = await run(tool, session, ALL_BLOCKS[:MAX_BLOCKS])
+    assert isinstance(result, UIBlocksResponse)
+    output = json.loads(result.model_dump_json(exclude_none=True))
+
+    if os.environ.get("UPDATE_RENDER_UI_FIXTURE"):
+        FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+        FIXTURE.write_text(json.dumps(output, indent=2) + "\n")
+
+    assert output == json.loads(FIXTURE.read_text())
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failure", _WRITE_FAILURES, ids=["scan", "quota", "scope", "unexpected"]
+    "bad_blocks, expected",
+    [
+        pytest.param([], "blocks", id="no_blocks"),
+        pytest.param([block("table")] * 7, "at most 6", id="seven_blocks"),
+        pytest.param(
+            [{**block("options"), "items": [{"title": "Go", "href": "https://x.io"}]}],
+            "href",
+            id="unknown_field",
+        ),
+        pytest.param(
+            [{"type": "html", "markup": "<b>hi</b>"}], "blocks", id="unknown_type"
+        ),
+        pytest.param(
+            [
+                {
+                    **block("chart"),
+                    "series": [{"name": "Short", "values": [1, 2]}],
+                }
+            ],
+            "x_labels",
+            id="chart_series_must_match_labels",
+        ),
+        pytest.param(
+            [{**block("chart"), "annotation": {"x": "Wk 9", "label": "Launch"}}],
+            "annotation",
+            id="annotation_off_the_axis",
+        ),
+        pytest.param(
+            [{**block("table"), "rows": [["only one cell"]]}],
+            "columns",
+            id="table_row_must_match_columns",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "gallery",
+                    "images": [{"src": "https://evil.io/a.png", "caption": "x"}],
+                }
+            ],
+            "src",
+            id="gallery_refuses_http_url",
+        ),
+        pytest.param(
+            [
+                {
+                    "type": "gallery",
+                    "images": [
+                        {"src": "workspace://abc#text/html", "caption": "x"},
+                    ],
+                }
+            ],
+            "src",
+            id="gallery_refuses_non_image",
+        ),
+    ],
 )
-async def test_a_chat_only_view_survives_a_failed_update_of_its_saved_copy(
-    render_ui_tool, workspace, saved_views, failure
+async def test_invalid_blocks_are_refused_with_a_reason(
+    tool: RenderUITool, session: ChatSession, bad_blocks: Any, expected: str
 ):
-    saved_views.find_openui_view_file.return_value = FILE_ID
-    workspace.replace_file_content.side_effect = failure
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE
-    )
-    payload = json.loads(result.model_dump_json())
-    assert payload["type"] == "ui_rendered"
-    assert payload["source"] == SOURCE
-    assert payload["file_id"] is None
-    workspace.replace_file_content.assert_awaited_once()
+    result = await run(tool, session, bad_blocks)
+
+    assert isinstance(result, ErrorResponse)
+    assert expected in result.message
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", _WRITE_FAILURES[:3], ids=["scan", "quota", "scope"])
-async def test_a_named_file_that_cannot_be_revised_does_not_publish_the_view(
-    render_ui_tool, workspace, failure
+async def test_null_optional_fields_are_accepted(
+    tool: RenderUITool, session: ChatSession
 ):
-    workspace.replace_file_content.side_effect = failure
-    result = await render_ui_tool._execute(
-        "owner", make_session("owner"), source=SOURCE, file=FILE_ID
+    blocks = [
+        {"type": "stats", "items": [{"label": "Runs", "value": "7", "change": None}]}
+    ]
+
+    result = await run(tool, session, blocks)
+
+    assert isinstance(result, UIBlocksResponse)
+
+
+@pytest.mark.asyncio
+async def test_oversized_payload_is_refused(tool: RenderUITool, session: ChatSession):
+    wide_row = ["x" * 200] * 6
+    wide_table = {
+        "type": "table",
+        "columns": ["a", "b", "c", "d", "e", "f"],
+        "rows": [wide_row] * 20,
+    }
+
+    result = await run(tool, session, [wide_table] * 6)
+
+    assert isinstance(result, ErrorResponse)
+    assert str(MAX_PAYLOAD_CHARS) in result.message
+
+
+def test_parameters_are_flat_and_keep_title_fields():
+    parameters = render_ui_parameters()
+    text = json.dumps(parameters)
+
+    for keyword in ("$ref", "$defs", "discriminator", "oneOf"):
+        assert keyword not in text
+    # A schema `title` keyword holds a string; a field called title holds an object.
+    assert '"title": "' not in text
+    assert parameters["required"] == ["blocks"]
+    items = parameters["properties"]["blocks"]["items"]["anyOf"]
+    chart = next(
+        option
+        for option in items
+        if option["properties"]["type"].get("const") == "chart"
     )
-    assert result.type == ResponseType.ERROR
-    assert "View not published" in result.message
-    assert str(failure) in result.message
-    assert "source" not in result.model_dump()
+    assert "title" in chart["properties"]
+    # The SDK validates against this before the tool runs, and models send null
+    # for optional fields they leave empty.
+    assert chart["properties"]["title"]["type"] == ["string", "null"]
+    stats = next(
+        option
+        for option in items
+        if option["properties"]["type"].get("const") == "stats"
+    )
+    tone = stats["properties"]["items"]["items"]["properties"]["tone"]
+    assert None in tone["enum"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "file", ["revenue", FILE_ID], ids=["new-name", "file-reference"]
+    "overrides, flag_on, hidden",
+    [
+        pytest.param({}, True, False, id="person_in_the_chat"),
+        pytest.param({"origin": "automation"}, True, False, id="scheduled_follow_up"),
+        pytest.param({}, False, True, id="flag_off"),
+        pytest.param({"source_platform": "slack"}, True, True, id="chat_platform"),
+        pytest.param({"text_only_result": True}, True, True, id="text_only_caller"),
+        pytest.param(
+            {"origin": "automation", "delegated_by_session_id": "parent"},
+            True,
+            True,
+            id="thread_reporting_back",
+        ),
+        pytest.param(
+            {
+                "delegated_by_session_id": "parent",
+                "handed_off_from_expert_id": "expert",
+            },
+            True,
+            False,
+            id="handed_off_thread",
+        ),
+    ],
 )
-async def test_an_unexpected_error_saving_a_named_file_propagates(
-    render_ui_tool, workspace, file
+async def test_render_ui_availability(
+    overrides: dict[str, Any], flag_on: bool, hidden: bool
 ):
-    failure = RuntimeError("db down")
-    workspace.write_file.side_effect = failure
-    workspace.replace_file_content.side_effect = failure
-    with pytest.raises(RuntimeError, match="db down"):
-        await render_ui_tool._execute(
-            "owner", make_session("owner"), source=SOURCE, file=file
-        )
+    session = ChatSession.new(user_id="test-user", dry_run=False, **overrides)
+
+    with patch(
+        "backend.copilot.tools.render_ui.is_feature_enabled",
+        AsyncMock(return_value=flag_on),
+    ):
+        disabled = await render_ui_disabled_tools(session)
+
+    assert (RENDER_UI_TOOL in disabled) is hidden
+
+
+@pytest.mark.parametrize(
+    "permissions",
+    [
+        pytest.param(None, id="no_filter"),
+        pytest.param(CopilotPermissions(), id="empty_filter"),
+        pytest.param(
+            CopilotPermissions(tools=["bash_exec"], tools_exclude=True),
+            id="deny_list",
+        ),
+        pytest.param(
+            CopilotPermissions(tools=["render_ui", "web_fetch"], tools_exclude=False),
+            id="allow_list",
+        ),
+    ],
+)
+def test_text_only_turns_refuse_render_ui(permissions: CopilotPermissions | None):
+    all_tools = all_known_tool_names()
+    before = (permissions or CopilotPermissions()).effective_allowed_tools(all_tools)
+
+    after = without_render_ui(permissions).effective_allowed_tools(all_tools)
+
+    assert RENDER_UI_TOOL not in after
+    assert after == before - {RENDER_UI_TOOL}
+
+
+@pytest.mark.asyncio
+async def test_only_cards_count_as_shown(tool: RenderUITool, session: ChatSession):
+    shown = await tool._execute(
+        user_id=None, session=session, blocks=ALL_BLOCKS[:MAX_BLOCKS]
+    )
+    refused = await tool._execute(user_id=None, session=session, blocks=[])
+
+    assert shows_cards(shown.model_dump_json(exclude_none=True))
+    assert not shows_cards(refused.model_dump_json(exclude_none=True))
+    assert not shows_cards("Tool execution error: boom")

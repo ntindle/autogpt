@@ -43,7 +43,7 @@ _FILE_REF = re.compile(
 _AGENT_ORIGIN = {"origin": "agent-created"}
 
 RENDER_RETRY = (
-    'Correct these issues and retry run_capability(id="tool:render_ui", '
+    'Correct these issues and retry run_capability(id="tool:render_openui", '
     "input={...}) with a complete source."
 )
 RENDER_FALLBACK = "Provide the complete answer as plain text instead"
@@ -257,7 +257,7 @@ async def read_view_file(
         message=(
             f"Read OpenUI view {file.name}. summary is its generated text, "
             "source the program, user_edits the user's current field values "
-            "and ticks. To revise it, call tool:render_ui with "
+            "and ticks. To revise it, call tool:render_openui with "
             f'file="workspace://{file.id}" and a complete program that keeps '
             f"its viewId.{note}"
         ),
@@ -283,7 +283,7 @@ def _program_text(content: bytes, session_id: str) -> str | ErrorResponse:
         return ErrorResponse(
             message=f"View not saved: {error}. An .openui file holds one "
             "complete OpenUI program beginning with root = Workspace(...); "
-            'describe_capability(id="tool:render_ui") lists the components.',
+            'describe_capability(id="tool:render_openui") lists the components.',
             session_id=session_id,
         )
 
