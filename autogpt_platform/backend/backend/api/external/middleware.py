@@ -1,11 +1,12 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Optional, cast
+from typing import Annotated, Optional, cast
 
+from autogpt_libs.auth import reject_closed_account
 from autogpt_libs.auth.dependencies import ACCOUNT_BANNED_DETAIL
 from autogpt_libs.auth.permissions import OrgAction, TeamAction
-from fastapi import FastAPI, HTTPException, Security, status
+from fastapi import FastAPI, HTTPException, Request, Security, status
 from fastapi.params import Depends as DependsParameter
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from prisma.enums import APIKeyPermission, APIKeyStatus
@@ -210,6 +211,7 @@ async def _verify_principal(
     if api_key is not None:
         api_key_info = await validate_api_key(api_key)
         if api_key_info:
+            await reject_closed_account(api_key_info.user_id)
             await _refuse_banned_owner(api_key_info)
             return _VerifiedPrincipal(auth=api_key_info)
         raise HTTPException(
@@ -223,6 +225,7 @@ async def _verify_principal(
         if not is_access_token(bearer.credentials) and (
             api_key_info := await validate_api_key(bearer.credentials)
         ):
+            await reject_closed_account(api_key_info.user_id)
             await _refuse_banned_owner(api_key_info)
             return _VerifiedPrincipal(auth=api_key_info)
 
@@ -230,16 +233,30 @@ async def _verify_principal(
             token_info, application = await validate_access_token(bearer.credentials)
         except (InvalidClientError, InvalidTokenError) as e:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(e))
+        await reject_closed_account(token_info.user_id)
         await _refuse_banned_owner(token_info)
         return _VerifiedPrincipal(auth=token_info, application=application)
 
     return None
 
 
+async def _resolve_personal_auth_info(
+    api_key: str | None, bearer: HTTPAuthorizationCredentials | None
+) -> APIAuthorizationInfo | None:
+    principal = await _verify_principal(api_key, bearer)
+    if principal is None:
+        return None
+    if principal.application is not None:
+        return await _scope_oauth_token(principal.auth, principal.application)
+    return await _scope_api_key(principal.auth)
+
+
 async def resolve_request_auth(
     scope: Scope,
     api_key: str | None,
     bearer: HTTPAuthorizationCredentials | None,
+    *,
+    personal_only: bool = False,
 ) -> APIAuthorizationInfo | None:
     """`resolve_auth_info`, verified at most once per request.
 
@@ -253,18 +270,23 @@ async def resolve_request_auth(
         api_key if api_key is not None else bearer.credentials if bearer else None
     )
     state = scope.setdefault("state", {})
-    verified = state.get(_REQUEST_AUTH)
+    cache_key = _REQUEST_AUTH + (":personal" if personal_only else "")
+    verified = state.get(cache_key)
     if not isinstance(verified, VerifiedCredential) or (
         verified.credential != credential
     ):
         try:
             verified = VerifiedCredential(
                 credential=credential,
-                auth=await resolve_auth_info(api_key=api_key, bearer=bearer),
+                auth=await (
+                    _resolve_personal_auth_info(api_key, bearer)
+                    if personal_only
+                    else resolve_auth_info(api_key=api_key, bearer=bearer)
+                ),
             )
         except HTTPException as rejection:
             verified = VerifiedCredential(credential=credential, rejection=rejection)
-        state[_REQUEST_AUTH] = verified
+        state[cache_key] = verified
     if verified.rejection is not None:
         raise HTTPException(
             status_code=verified.rejection.status_code,
@@ -281,27 +303,25 @@ def verified_credential(scope: Scope) -> Optional[VerifiedCredential]:
 
 
 async def require_auth(
-    api_key: str | None = Security(api_key_header),
-    bearer: HTTPAuthorizationCredentials | None = Security(bearer_auth),
+    request: Request,
+    api_key: Annotated[str | None, Security(api_key_header)] = None,
+    bearer: Annotated[
+        HTTPAuthorizationCredentials | None, Security(bearer_auth)
+    ] = None,
 ) -> APIAuthorizationInfo:
-    """
-    Unified authentication dependency that requires valid credentials.
+    """The request's verified caller; 401 when it sent no credentials.
 
-    Accepts an API key (`X-API-Key`, or sent as a Bearer token) or an OAuth
-    access token, rejects requests with no credentials, and pins the
-    credential to its owner's personal organization and default team, the
-    only scope a credential acts in for now. A key or application tagged with
-    any other scope is refused with a 403.
+    Resolved once per request, retaining the verified personal scope.
     """
-    principal = await _verify_principal(api_key, bearer)
-    if principal is None:
+    auth = await resolve_request_auth(
+        request.scope, api_key=api_key, bearer=bearer, personal_only=True
+    )
+    if auth is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authentication. Provide API key or access token.",
         )
-    if principal.application is not None:
-        return await _scope_oauth_token(principal.auth, principal.application)
-    return await _scope_api_key(principal.auth)
+    return auth
 
 
 async def _refuse_banned_owner(auth: APIAuthorizationInfo) -> None:

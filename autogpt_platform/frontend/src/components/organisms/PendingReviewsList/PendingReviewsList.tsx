@@ -18,6 +18,7 @@ import { Icon } from "@/components/atoms/Icon/Icon";
 import { AttentionCard } from "@/components/organisms/AttentionCard/AttentionCard";
 import { SpendApprovalCard } from "./components/SpendApprovalCard/SpendApprovalCard";
 import { spendSummary } from "./components/SpendApprovalCard/helpers";
+import { isGateReview, waitingOnLine } from "./helpers";
 
 interface PendingReviewsListProps {
   reviews: PendingHumanReviewModel[];
@@ -25,8 +26,6 @@ interface PendingReviewsListProps {
   emptyMessage?: string;
 }
 
-// Copilot action-gate approvals bind exact arguments; auto-approve cannot apply.
-export const COPILOT_GATE_NODE_PREFIX = "copilot-node-gate-";
 // An expert's spend approval (backend SPEND_REVIEW_MARKER) unlocks her week,
 // not a node, so auto-approving its node would do nothing.
 const SPEND_REVIEW_MARKER = "expert-spend:";
@@ -294,9 +293,7 @@ export function PendingReviewsList({
               </Text>
             </AttentionCard.Row>
             <Text variant="large" tone="body">
-              {reviewGroups.every(([nodeId]) => isGateReview(nodeId))
-                ? "Otto is waiting for your approval before the action below."
-                : "This workflow is paused until you approve the step below. Check what it will do, and edit it if needed."}
+              {waitingOnLine(reviewGroups)}
             </Text>
           </div>
 
@@ -439,10 +436,6 @@ export function PendingReviewsList({
       )}
     </div>
   );
-}
-
-function isGateReview(nodeId: string | null | undefined) {
-  return !!nodeId?.startsWith(COPILOT_GATE_NODE_PREFIX);
 }
 
 function isSpendReview(nodeId: string) {

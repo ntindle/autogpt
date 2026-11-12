@@ -170,12 +170,8 @@ async def test_graph_metadata_requires_approved_live_listing(mocker) -> None:
             "id": "pending-version",
             "isDeleted": False,
             "StoreListing": {"is": {"isDeleted": False}},
-            "OR": [
-                {
-                    "isAvailable": True,
-                    "submissionStatus": SubmissionStatus.APPROVED,
-                }
-            ],
+            "isAvailable": True,
+            "submissionStatus": SubmissionStatus.APPROVED,
         },
         include={
             "AgentGraph": {"include": db.AGENT_GRAPH_INCLUDE},

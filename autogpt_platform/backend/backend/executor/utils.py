@@ -25,6 +25,10 @@ from backend.api.features.library import db as library_db
 from backend.api.features.orgs.db import resolve_member_tenancy
 from backend.blocks import get_block
 from backend.blocks._base import Block, BlockCostType, BlockSchema, BlockType
+from backend.blocks._platform_credentials import (
+    is_platform_credential,
+    platform_credentials_refused_message,
+)
 from backend.copilot.model import pauses_irreversible_actions
 from backend.copilot.rate_limit import UserPaywalledError
 from backend.data import execution as execution_db
@@ -66,11 +70,12 @@ from backend.data.model import (
     sdk_default_refused_message,
 )
 from backend.data.rabbitmq import Exchange, ExchangeType, Queue, RabbitMQConfig
-from backend.data.user import is_user_banned
+from backend.data.user import is_user_refused
 from backend.executor.input_depth import (
     validate_graph_input_depth,
     validate_starting_node_input_depth,
 )
+from backend.executor.nesting import nested_context, resumed_chain
 from backend.integrations.credentials_store import (
     CredentialsSnapshot,
     is_system_credential,
@@ -716,6 +721,17 @@ async def _validate_node_input_credentials(
                 credential_errors[node.id][field_name] = (
                     f"{CRED_ERR_NOT_AVAILABLE_PREFIX} "
                     f"{sdk_default_refused_message(credentials_meta.id)}"
+                )
+                continue
+
+            if is_platform_credential(
+                credentials_meta.id
+            ) and block.refuses_platform_credentials_for(
+                {**node.input_default, **(nodes_input_masks or {}).get(node.id, {})}
+            ):
+                credential_errors[node.id][field_name] = (
+                    f"{CRED_ERR_NOT_AVAILABLE_PREFIX} "
+                    f"{platform_credentials_refused_message(credentials_meta.provider)}"
                 )
                 continue
 
@@ -1704,8 +1720,9 @@ async def _enforce_expert_credential_scope(
     copilot tool runs alike. Enforcing at creation also means a revoke takes effect
     on the next run instead of only on newly created schedules.
 
-    System credentials (platform LLM keys) carry no grant and are always allowed;
-    filtering them would stop every expert from running an LLM block.
+    The platform's own keys (system LLM keys, and the shared key of a provider
+    such as Firecrawl) carry no grant and are always allowed; filtering them
+    would stop every expert from running an LLM block or a platform-keyed one.
     """
     if not graph_credentials_inputs:
         return
@@ -1877,8 +1894,10 @@ async def _add_graph_execution(
             f"schedule #{schedule_id}, webhook #{webhook_id}"
         )
 
-    if await is_user_banned(user_id):
-        raise UserBannedError("This account is banned, so its workflows can't run.")
+    if await is_user_refused(user_id):
+        raise UserBannedError(
+            "This account is banned or closed, so its workflows can't run."
+        )
 
     is_new_execution = graph_exec_id is None
     nesting: list[GraphExecutionMeta | None] = []
@@ -2073,6 +2092,14 @@ async def _add_graph_execution(
 
         logger.info(f"Resuming graph execution #{graph_exec.id} for graph #{graph_id}")
     else:
+        parent_exec_id = (
+            execution_context.parent_execution_id if execution_context else None
+        )
+        if execution_context and parent_exec_id is not None:
+            # Refused before anything is written: a workflow already running
+            # in this chain would start itself again without end.
+            execution_context = nested_context(execution_context, graph_id)
+
         if expert_id:
             organization_id, team_id = await _resolve_expert_execution_tenancy(
                 user_id, expert_id
@@ -2367,6 +2394,15 @@ async def _add_graph_execution(
     if nesting:
         execution_context = await _keep_nesting_safe_modes(
             execution_context, nesting, user_id, gdb
+        )
+        # A resumed sub-graph run keeps its place in its chain, by which the
+        # executor admits it and refuses a run of a workflow already in it.
+        execution_context = execution_context.model_copy(
+            update={
+                "ancestor_graph_ids": resumed_chain(
+                    [run.graph_id if run else None for run in nesting]
+                )
+            }
         )
 
     stamp: dict[str, Any] = {
@@ -2673,6 +2709,13 @@ class NodeExecutionProgress:
                 return next_output.pop(0)
 
         return None
+
+    def has_ended(self) -> bool:
+        """Whether every task of this node's executions has ended, its block
+        and its bookkeeping alike. Unlike is_done, a stop doesn't make it so:
+        a block that ignores the cancel runs on until it returns."""
+        with self._lock:
+            return not self._unwinding and not self._settling
 
     def is_done(self, wait_time: float = 0.0) -> bool:
         exec_id = self._next_exec()

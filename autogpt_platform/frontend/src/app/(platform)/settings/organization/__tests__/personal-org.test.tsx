@@ -126,7 +126,7 @@ describe("Personal organization settings", () => {
     expect(screen.queryByTestId("org-convert-section")).toBeNull();
   });
 
-  it("still shows pending invitations, so an invitee can accept them", async () => {
+  it("still shows pending invitations and directs invitees to their email", async () => {
     mockOrg({
       org: PERSONAL_ORG,
       members: [OWNER_MEMBER],
@@ -137,7 +137,9 @@ describe("Personal organization settings", () => {
     const invitations = await screen.findByTestId("my-invitations-section");
     expect(within(invitations).getByText("Other Corp")).toBeDefined();
     expect(
-      within(invitations).getByRole("button", { name: "Accept" }),
+      within(invitations).getByText(
+        "Use your invitation link to accept or decline.",
+      ),
     ).toBeDefined();
   });
 

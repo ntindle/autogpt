@@ -33,7 +33,9 @@ export enum Key {
   LOW_CREDIT_BANNER_DISMISSED = "low-credit-banner-dismissed",
   BUILDER_MOBILE_WARNING_SUPPRESSED = "builder-mobile-warning-suppressed",
   CREATE_SURFACE_TEAMS = "create-surface-teams",
+  HOME_SUGGESTED_TASKS_COLLAPSED = "home.suggestedTasks.collapsed",
   GITHUB_STAR_PROMPT_COUNT = "github-star-prompt-count",
+  NPS_CHECK = "nps-check",
 }
 
 export const storage = createSafeStorage<Key>("local");

@@ -52,6 +52,8 @@ class TurnBudget(BaseModel):
     # allowance is real money with no plan behind it, so the CLI backstop
     # sits exactly on the budget instead of above it.
     hard_cap: bool = False
+    # The plan tier the budget was worked out for, for analytics.
+    tier: str | None = None
 
 
 async def resolve_turn_budget(
@@ -83,12 +85,16 @@ async def resolve_turn_budget(
         # Raises when the trial has nothing left: no trial turn may start.
         remaining = resolve_trial_sdk_budget(task_cap, remaining)
     if remaining < 0 or not math.isfinite(remaining) or task_cap <= remaining:
-        return whole_task.model_copy(update={"hard_cap": trial})
+        return whole_task.model_copy(update={"hard_cap": trial, "tier": tier.value})
     window, resets_at = await _limiting_window(
         user_id, org_id, daily_limit, weekly_limit, tier, remaining
     )
     return TurnBudget(
-        usd=remaining, limiting=window, resets_at=resets_at, hard_cap=trial
+        usd=remaining,
+        limiting=window,
+        resets_at=resets_at,
+        hard_cap=trial,
+        tier=tier.value,
     )
 
 

@@ -1,14 +1,12 @@
 "use client";
 
 import { Badge } from "@/components/atoms/Badge/Badge";
-import { Button } from "@/components/atoms/Button/Button";
 import { Text } from "@/components/atoms/Text/Text";
 
 import { useMyInvitationsSection } from "./useMyInvitationsSection";
 
 export function MyInvitationsSection() {
-  const { invitations, acceptingId, decliningId, handleAccept, handleDecline } =
-    useMyInvitationsSection();
+  const { invitations } = useMyInvitationsSection();
 
   if (invitations.length === 0) {
     return null;
@@ -22,6 +20,7 @@ export function MyInvitationsSection() {
       <Text variant="h4" as="h2">
         You&apos;ve been invited
       </Text>
+      <Text variant="body">Use your invitation link to accept or decline.</Text>
       <ul className="flex flex-col gap-2">
         {invitations.map((invitation) => (
           <li
@@ -38,21 +37,6 @@ export function MyInvitationsSection() {
               </span>
             </div>
             {invitation.is_admin ? <Badge variant="info">Admin</Badge> : null}
-            <Button
-              size="small"
-              loading={acceptingId === invitation.id}
-              onClick={() => handleAccept(invitation)}
-            >
-              Accept
-            </Button>
-            <Button
-              variant="secondary"
-              size="small"
-              loading={decliningId === invitation.id}
-              onClick={() => handleDecline(invitation)}
-            >
-              Decline
-            </Button>
           </li>
         ))}
       </ul>

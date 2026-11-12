@@ -19,6 +19,12 @@ import logging
 
 from backend.copilot import rate_limit
 from backend.copilot.config import ChatConfig
+from backend.copilot.limit_tracking import (
+    BlockedSurface,
+    LimitReading,
+    track_chat_blocked,
+    track_limit_exceeded,
+)
 from backend.copilot.rate_limit import (
     DEFAULT_TIER,
     CoPilotUsageStatus,
@@ -184,8 +190,16 @@ async def build_budget_ctx(
     )
 
 
+async def no_allowance_reading(
+    user_id: str, tier: SubscriptionTier, org_id: str | None = None
+):
+    if await org_plan_decides(org_id):
+        return "weekly", LimitReading(tier=tier.value, cap=0.0)
+    return await rate_limit.no_allowance_reading(user_id, tier)
+
+
 async def platform_spend_refusal(
-    user_id: str | None, org_id: str | None = None
+    user_id: str | None, org_id: str | None = None, *, surface: BlockedSurface = "chat"
 ) -> str | None:
     """Why a call billed to the platform's own key may not run now, or None.
 
@@ -202,6 +216,14 @@ async def platform_spend_refusal(
         org_id,
     )
     if daily == 0 and weekly == 0:
+        try:
+            limit, reading = await no_allowance_reading(user_id, tier, org_id)
+        except Exception:
+            logger.warning("Could not read usage state for chat_blocked", exc_info=True)
+            limit, reading = "weekly", LimitReading(tier=tier.value, cap=0.0)
+        track_chat_blocked(
+            user_id, limit=limit, outcome="refused", surface=surface, reading=reading
+        )
         return "Your plan has no usage allowance for this right now."
     try:
         await check_rate_limit(
@@ -212,6 +234,7 @@ async def platform_spend_refusal(
             org_id=org_id,
         )
     except RateLimitExceeded as e:
+        track_limit_exceeded(user_id, e, surface=surface)
         return str(e)
     except RateLimitUnavailable:
         logger.warning(

@@ -22,13 +22,12 @@ from pydantic import BaseModel
 from backend.copilot.config import ChatConfig
 from backend.copilot.model import ChatSession, upsert_chat_session
 from backend.copilot.pending_messages import peek_pending_count
-from backend.copilot.rate_limit import RateLimitExceeded, SubscriptionTier
+from backend.copilot.rate_limit import RateLimitExceeded
 from backend.copilot.turn_pause import TurnPause, append_pause_marker
-from backend.copilot.usage_activation import get_ready_usage_state
 from backend.data.entitlement_limits import (
     check_rate_limit,
     get_global_rate_limits,
-    org_plan_decides,
+    no_allowance_reading,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,15 +64,13 @@ async def refusal_for(user_id: str | None, org_id: str | None) -> TurnPause | No
         # reads TRIAL, which check_rate_limit's tier guard would take for a
         # subscription change and report as unavailable -- and which is
         # what says the pause is the trial's rather than a missing plan's.
-        state = await get_ready_usage_state(user_id)
-        ended_trial = (
-            state.tier == SubscriptionTier.TRIAL and not await org_plan_decides(org_id)
-        )
+        limit, reading = await no_allowance_reading(user_id, tier, org_id)
         return TurnPause(
-            reason="trial" if ended_trial else "weekly",
+            reason=limit,
             resets_at=None,
             checkpoint_saved=False,
             started=False,
+            reading=reading,
         )
     try:
         await check_rate_limit(
@@ -92,6 +89,7 @@ async def refusal_for(user_id: str | None, org_id: str | None) -> TurnPause | No
             resets_at=exc.resets_at if limit > 0 else None,
             checkpoint_saved=False,
             started=False,
+            reading=exc.reading,
         )
     return None
 

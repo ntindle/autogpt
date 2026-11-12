@@ -11,6 +11,7 @@ import prisma.models
 import prisma.types
 
 from backend.blocks.agent import AgentExecutorBlock
+from backend.data.account_deletion import is_account_closed
 from backend.data.db import get_database_schema, query_raw_with_schema, transaction
 from backend.data.graph import (
     GraphModel,
@@ -538,37 +539,12 @@ async def get_available_graph(
     """``include_subgraphs`` is required for a complete
     `credentials_input_schema`, which aggregates sub-graph credentials too."""
     try:
-        # Public consumers can only read live approved versions. Authenticated
-        # creators can also inspect their own non-deleted pending versions.
+        # Only a version the marketplace lists, as for the download in get_agent().
         store_listing_version = (
             await prisma.models.StoreListingVersion.prisma().find_first(
                 where={
                     "id": store_listing_version_id,
-                    "isDeleted": False,
-                    "StoreListing": {"is": {"isDeleted": False}},
-                    "OR": (
-                        [
-                            {
-                                "isAvailable": True,
-                                "submissionStatus": (
-                                    prisma.enums.SubmissionStatus.APPROVED
-                                ),
-                            },
-                            {
-                                "AgentGraph": {"is": {"userId": user_id}},
-                                "StoreListing": {"is": {"owningUserId": user_id}},
-                            },
-                        ]
-                        if user_id is not None
-                        else [
-                            {
-                                "isAvailable": True,
-                                "submissionStatus": (
-                                    prisma.enums.SubmissionStatus.APPROVED
-                                ),
-                            }
-                        ]
-                    ),
+                    **installable_store_version_where(),
                 },
                 include={
                     "AgentGraph": {"include": AGENT_GRAPH_INCLUDE},
@@ -876,7 +852,11 @@ async def get_store_creators(
 
 async def get_store_creator(
     username: str,
+    *,
+    include_unlisted: bool = False,
 ) -> store_model.CreatorDetails:
+    """A creator page, which only a creator with a listed workflow has, as in
+    `get_store_creators`. ``include_unlisted`` is for the profile's owner."""
     logger.debug(f"Getting store creator details for {username}")
 
     try:
@@ -885,7 +865,11 @@ async def get_store_creator(
             where={"username": username}
         )
 
-        if not creator:
+        if (
+            not creator
+            or (creator.num_agents <= 0 and not include_unlisted)
+            or await _is_creator_account_closed(username)
+        ):
             logger.warning(f"Creator not found: {username}")
             raise store_exceptions.CreatorNotFoundError(f"Creator {username} not found")
 
@@ -896,6 +880,16 @@ async def get_store_creator(
     except Exception as e:
         logger.error(f"Error getting store creator details: {e}")
         raise DatabaseError("Failed to fetch creator details") from e
+
+
+async def _is_creator_account_closed(username: str) -> bool:
+    """A closed account's creator page answers as unknown, until the account
+    is reopened or erased. Its listings are already down, so the creators
+    list (creators with a live listing) leaves it out by itself."""
+    profile = await prisma.models.Profile.prisma().find_unique(
+        where={"username": username}
+    )
+    return profile is not None and await is_account_closed(profile.userId)
 
 
 async def _get_submission_stats(

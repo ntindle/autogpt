@@ -4,18 +4,17 @@ import { Text } from "@/components/atoms/Text/Text";
 import { ErrorCard } from "@/components/molecules/ErrorCard/ErrorCard";
 import { useEffect } from "react";
 import { useOrgTeamStore } from "@/services/org-team/store";
+import { environment } from "@/services/environment";
 
-import { SkillLearningSheet } from "@/components/organisms/SkillLearningSheet/SkillLearningSheet";
+import { MemoryLearningSection } from "./components/MemoryLearningSection";
+import { UnavailableMemorySettings } from "./components/UnavailableMemorySettings";
 import { EraseMemoryCard } from "./components/EraseMemoryCard";
-import { LearningHistoryCard } from "./components/LearningHistoryCard";
 import { MemoryChatPanel } from "./components/MemoryChatPanel/MemoryChatPanel";
 import { useMemoryChatPanel } from "./components/MemoryChatPanel/useMemoryChatPanel";
-import { OpenDecisionsCard } from "./components/OpenDecisionsCard";
 import { RecentMemoriesCard } from "./components/RecentMemoriesCard";
 import { ScopeCard } from "./components/ScopeCard";
 import { SummaryCard } from "./components/SummaryCard";
 import { UnderstandingCard } from "./components/UnderstandingCard/UnderstandingCard";
-import { learningSheetScope } from "./helpers";
 import { useLearningHistory } from "./useLearningHistory";
 import { useMemoryPage } from "./useMemoryPage";
 
@@ -29,6 +28,14 @@ function SettingsMemoryContent() {
     document.title = "Memory – AutoGPT Platform";
   }, []);
 
+  if (!environment.isGraphMemoryAvailable()) {
+    return <UnavailableMemorySettings />;
+  }
+
+  return <MemorySettings />;
+}
+
+function MemorySettings() {
   const {
     scopeExpertID,
     selectScope,
@@ -90,36 +97,7 @@ function SettingsMemoryContent() {
         />
       )}
 
-      {learning.enabled ? (
-        <>
-          <OpenDecisionsCard
-            decisions={learning.decisions}
-            experts={experts}
-            isDeciding={learning.isDeciding}
-            onDecide={learning.decideProposal}
-          />
-          <LearningHistoryCard
-            items={learning.items}
-            isLoading={learning.isLoading}
-            experts={experts}
-            origin={learning.origin}
-            state={learning.state}
-            onOriginChange={learning.setOrigin}
-            onStateChange={learning.setState}
-            onOpen={learning.openRecordFor}
-          />
-          <SkillLearningSheet
-            scope={learningSheetScope(
-              learning.openRecord?.expertId ?? null,
-              experts,
-            )}
-            skillName={learning.openRecord?.skillName ?? null}
-            initialVersionId={learning.openRecord?.versionId ?? null}
-            onChanged={learning.refreshHistory}
-            onClose={learning.closeRecord}
-          />
-        </>
-      ) : null}
+      <MemoryLearningSection learning={learning} experts={experts} />
 
       <EraseMemoryCard
         scopeName={scopeName}
