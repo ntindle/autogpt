@@ -241,6 +241,56 @@ def test_execute_graph_block(
     )
 
 
+@pytest.mark.parametrize("revoke_during_run", [False, True])
+def test_direct_block_releases_request_transactions_during_work(
+    mocker, revoke_during_run
+):
+    active = 0
+    allowed = True
+
+    @asynccontextmanager
+    async def barrier(*_args, **_kwargs):
+        nonlocal active
+        active += 1
+        try:
+            yield allowed
+        finally:
+            active -= 1
+
+    mocker.patch("backend.api.live_auth.live_resource_permission_barrier", barrier)
+    mocker.patch(
+        "backend.api.features.blocks.routes.live_resource_permission_barrier", barrier
+    )
+    block = Mock(disabled=False)
+    block.execute.return_value = None
+    mocker.patch("backend.api.features.blocks.routes.get_block", return_value=block)
+    mocker.patch(
+        "backend.api.features.blocks.routes.get_user_by_id",
+        AsyncMock(return_value=Mock(timezone="UTC")),
+    )
+
+    async def charge(**_kwargs):
+        assert active == 1
+
+    async def run(*_args):
+        nonlocal allowed
+        assert active == 0
+        allowed = not revoke_during_run
+        return {"answer": ["ok"]}
+
+    mocker.patch(
+        "backend.api.features.blocks.routes.execution_utils.charge_for_direct_block_execution",
+        AsyncMock(side_effect=charge),
+    )
+    mocker.patch(
+        "backend.api.features.blocks.routes.run_block_off_loop",
+        AsyncMock(side_effect=run),
+    )
+    response = client.post("/blocks/test-block/execute", json={})
+    assert response.status_code == (403 if revoke_during_run else 200)
+    assert active == 0
+
+
 def test_execute_graph_block_forwards_execution_context(
     mocker: pytest_mock.MockFixture,
     test_user_id: str,

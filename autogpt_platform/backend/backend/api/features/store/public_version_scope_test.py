@@ -20,7 +20,8 @@ def _graph_with_refs(
 ) -> MagicMock:
     nodes = [
         MagicMock(
-            AgentBlock=MagicMock(id=db._AGENT_EXECUTOR_BLOCK_ID),
+            AgentBlock=None,
+            agentBlockId=db._AGENT_EXECUTOR_BLOCK_ID,
             constantInput={"graph_id": ref_id, "graph_version": ref_version},
         )
         for ref_id, ref_version in refs
@@ -99,7 +100,8 @@ async def test_submission_rejects_mixed_tenant_subgraph_before_write(mocker) -> 
             graph_id="parent",
             graph_version=1,
             slug="agent",
-            name="Agent",
+            name="Workflow",
+            sub_heading="Test workflow",
             organization_id="org-1",
             team_id_restriction="team-1",
         )
@@ -145,7 +147,8 @@ async def test_submission_rechecks_composition_under_graph_barriers(mocker) -> N
             graph_id="parent",
             graph_version=1,
             slug="agent",
-            name="Agent",
+            name="Workflow",
+            sub_heading="Test workflow",
             organization_id="org-1",
             team_id_restriction="team-1",
         )

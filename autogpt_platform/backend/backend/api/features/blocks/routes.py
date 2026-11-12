@@ -160,7 +160,9 @@ async def execute_graph_block(
     ctx: Annotated[
         RequestContext,
         requires_resource_permission(
-            OrgAction.EXECUTE_RESOURCES, TeamAction.EXECUTE_AGENTS
+            OrgAction.EXECUTE_RESOURCES,
+            TeamAction.EXECUTE_AGENTS,
+            hold_until_return=False,
         ),
     ],
 ) -> CompletedBlockOutput:
@@ -186,13 +188,7 @@ async def execute_graph_block(
         ) from e
 
     with slot:
-        async with _live_resource_action(
-            user_id,
-            ctx,
-            OrgAction.EXECUTE_RESOURCES,
-            TeamAction.EXECUTE_AGENTS,
-        ):
-            return await _run_direct_block(obj, data, user_id, user.timezone, ctx, slot)
+        return await _run_direct_block(obj, data, user_id, user.timezone, ctx, slot)
 
 
 async def _run_direct_block(
@@ -204,9 +200,12 @@ async def _run_direct_block(
     slot: DirectBlockExecutionSlot,
 ) -> CompletedBlockOutput:
     try:
-        await execution_utils.charge_for_direct_block_execution(
-            user_id=user_id, block=obj, input_data=data, source="internal"
-        )
+        async with _live_resource_action(
+            user_id, ctx, OrgAction.EXECUTE_RESOURCES, TeamAction.EXECUTE_AGENTS
+        ):
+            await execution_utils.charge_for_direct_block_execution(
+                user_id=user_id, block=obj, input_data=data, source="internal"
+            )
     except InsufficientBalanceError as e:
         raise HTTPException(status_code=HTTP_402_PAYMENT_REQUIRED, detail=str(e)) from e
 
@@ -234,7 +233,10 @@ async def _run_direct_block(
             block_type=block_type, status="success", duration=duration
         )
 
-        return output
+        async with _live_resource_action(
+            user_id, ctx, OrgAction.EXECUTE_RESOURCES, TeamAction.EXECUTE_AGENTS
+        ):
+            return output
     except DirectBlockExecutionTimeoutError as e:
         duration = time.time() - start_time
         block_type = obj.__class__.__name__
@@ -259,7 +261,9 @@ async def upload_file(
     ctx: Annotated[
         RequestContext,
         requires_resource_permission(
-            OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS
+            OrgAction.CREATE_RESOURCES,
+            TeamAction.CREATE_AGENTS,
+            hold_until_return=False,
         ),
     ],
     file: UploadFile = File(...),
@@ -306,6 +310,10 @@ async def upload_file(
     await scan_content_safe(content, filename=file_name)
 
     # Check if cloud storage is configured
+    async with _live_resource_action(
+        user_id, ctx, OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS
+    ):
+        pass
     cloud_storage = await get_cloud_storage_handler()
     if not cloud_storage.config.gcs_bucket_name:
         # Fallback to base64 data URI when GCS is not configured
@@ -328,13 +336,16 @@ async def upload_file(
         user_id=user_id,
     )
 
-    return CloudStorageUploadResponse(
-        file_uri=storage_path,
-        file_name=file_name,
-        size=content_size,
-        content_type=content_type,
-        expires_in_hours=expiration_hours,
-    )
+    async with _live_resource_action(
+        user_id, ctx, OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS
+    ):
+        return CloudStorageUploadResponse(
+            file_uri=storage_path,
+            file_name=file_name,
+            size=content_size,
+            content_type=content_type,
+            expires_in_hours=expiration_hours,
+        )
 
 
 def _create_file_size_error(size_bytes: int, max_size_mb: int) -> HTTPException:

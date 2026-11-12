@@ -40,6 +40,8 @@ LIVE_ACTION_TRANSACTION_TIMEOUT = timedelta(minutes=31)
 LIVE_REQUEST_TRANSACTION_LIMIT = max(1, min(2, int(CONN_LIMIT or 5) - 1))
 LIVE_TRANSACTION_LEASE_CLASS_LIMIT = 3
 LIVE_TRANSACTION_LEASE_POOL_LIMIT = LIVE_TRANSACTION_LEASE_CLASS_LIMIT * 3 + 3
+LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS = 5.0
+LIVE_RESOURCE_LEASE_TIMEOUT_SECONDS = 60.0
 _live_request_transaction_slots: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
 LiveTransactionLeaseClass = Literal["resource", "attachment", "delivery"]
 _live_transaction_lease_slots: dict[
@@ -114,8 +116,16 @@ async def check_live_transaction_lease_database() -> bool:
 async def _live_transaction_lease_slot(
     lease_class: LiveTransactionLeaseClass,
 ) -> AsyncIterator[Prisma]:
-    async with _get_live_transaction_lease_slots(lease_class):
-        yield live_transaction_lease_prisma
+    slots = _get_live_transaction_lease_slots(lease_class)
+    async with asyncio.timeout(LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS):
+        await slots.acquire()
+    try:
+        async with asyncio.timeout(
+            LIVE_RESOURCE_LEASE_TIMEOUT_SECONDS if lease_class == "resource" else None
+        ):
+            yield live_transaction_lease_prisma
+    finally:
+        slots.release()
 
 
 @asynccontextmanager
@@ -628,7 +638,9 @@ async def acquire_live_resource_lease(
         ready,
     )
     try:
-        allowed = await asyncio.shield(ready)
+        allowed = await asyncio.wait_for(
+            asyncio.shield(ready), timeout=LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS
+        )
     except BaseException:
         await _cancel_live_transaction_lease_acquisition(task, release, ready)
         raise
@@ -694,7 +706,9 @@ async def acquire_live_resource_scopes_lease(
         ready,
     )
     try:
-        authorized = await asyncio.shield(ready)
+        authorized = await asyncio.wait_for(
+            asyncio.shield(ready), timeout=LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS
+        )
     except BaseException:
         await _cancel_live_transaction_lease_acquisition(task, release, ready)
         raise
@@ -757,7 +771,9 @@ async def acquire_agent_graph_attachment_lease(graph_ids: list[str]) -> str:
         ready,
     )
     try:
-        await asyncio.shield(ready)
+        await asyncio.wait_for(
+            asyncio.shield(ready), timeout=LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS
+        )
     except BaseException:
         await _cancel_live_transaction_lease_acquisition(task, release, ready)
         raise
@@ -820,7 +836,9 @@ async def acquire_alert_condition_delivery_lease(condition_ids: list[str]) -> st
         ready,
     )
     try:
-        await asyncio.shield(ready)
+        await asyncio.wait_for(
+            asyncio.shield(ready), timeout=LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS
+        )
     except BaseException:
         await _cancel_live_transaction_lease_acquisition(task, release, ready)
         raise
@@ -880,7 +898,9 @@ async def acquire_store_listing_version_delivery_lease(version_id: str) -> str:
         ready,
     )
     try:
-        await asyncio.shield(ready)
+        await asyncio.wait_for(
+            asyncio.shield(ready), timeout=LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS
+        )
     except BaseException:
         await _cancel_live_transaction_lease_acquisition(task, release, ready)
         raise

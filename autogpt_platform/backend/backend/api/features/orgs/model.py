@@ -250,13 +250,11 @@ class InvitationCreateResponse(InvitationResponse):
 class UserInvitationResponse(BaseModel):
     """Invitation as seen by the INVITEE (GET /invitations/pending).
 
-    Includes the accept/decline token — safe here because the list is
-    filtered to the caller's own email — and the inviting org's display
-    info, without which the invitee can't tell who is inviting them.
+    Includes the inviting organization's display information. The acceptance
+    token is delivered separately through the invitation email.
     """
 
     id: str
-    token: str
     org_id: str
     org_name: str
     org_slug: str
@@ -269,7 +267,6 @@ class UserInvitationResponse(BaseModel):
     def from_db(inv) -> "UserInvitationResponse":
         return UserInvitationResponse(
             id=inv.id,
-            token=inv.token,
             org_id=inv.orgId,
             org_name=inv.Org.name if inv.Org else "",
             org_slug=inv.Org.slug if inv.Org else "",

@@ -82,7 +82,7 @@ def _referenced_subgraph_versions(
     refs: set[tuple[str, int]] = set()
     for graph in graphs:
         for node in graph.Nodes or []:
-            if not node.AgentBlock or node.AgentBlock.id != _AGENT_EXECUTOR_BLOCK_ID:
+            if node.agentBlockId != _AGENT_EXECUTOR_BLOCK_ID:
                 continue
             inputs = dict(node.constantInput)
             graph_id = inputs.get("graph_id")
@@ -124,6 +124,8 @@ async def _get_exact_store_subgraphs(
 @asynccontextmanager
 async def _stable_review_graphs(
     store_listing_version_id: str,
+    *,
+    require_publishable_composition: bool = True,
 ) -> AsyncIterator[
     tuple[prisma.models.StoreListingVersion, list[prisma.models.AgentGraph]]
 ]:
@@ -136,6 +138,10 @@ async def _stable_review_graphs(
             raise NotFoundError(
                 f"Store listing version {store_listing_version_id} not found"
             )
+
+        if not require_publishable_composition:
+            yield submission, []
+            return
 
         sub_graphs = await _get_exact_store_subgraphs(submission.AgentGraph)
         expected_graphs = {
@@ -2069,7 +2075,9 @@ async def review_store_submission(
     try:
         # The sub-graphs are read, and their live access held, before the
         # transaction opens: reads inside it go through its own client.
-        async with _stable_review_graphs(store_listing_version_id) as (
+        async with _stable_review_graphs(
+            store_listing_version_id, require_publishable_composition=is_approved
+        ) as (
             _locked_submission,
             sub_graphs,
         ):

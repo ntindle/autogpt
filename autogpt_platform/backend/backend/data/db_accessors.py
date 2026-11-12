@@ -19,6 +19,8 @@ T = TypeVar("T")
 
 
 class LiveResourceLeaseGuard:
+    check_interval = 0.1
+
     def __init__(self, lease_db, lease_id: str) -> None:
         self._lease_db = lease_db
         self.lease_id = lease_id
@@ -36,7 +38,7 @@ class LiveResourceLeaseGuard:
 
     async def _wait_for_loss(self) -> None:
         while True:
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(self.check_interval)
             await self.validate()
 
     async def run(self, action: Awaitable[T], *, context: Context | None = None) -> T:
@@ -76,6 +78,34 @@ class LiveResourceLeaseGuard:
             await asyncio.gather(action_task, loss_task, return_exceptions=True)
             if not action_started and inspect.iscoroutine(action):
                 action.close()
+
+
+class LiveResourceAccessGuard(LiveResourceLeaseGuard):
+    """Recheck long-running work without reserving a database transaction.
+
+    Mutations inside the work still acquire their own short resource leases.
+    """
+
+    check_interval = 1.0
+
+    def __init__(
+        self,
+        scope_db,
+        user_id: str,
+        organization_id: str | None,
+        team_id: str | None,
+        access: ResourceAccess,
+    ) -> None:
+        self._scope_db = scope_db
+        self._scope = (user_id, organization_id, team_id, access)
+
+    async def validate(self) -> None:
+        try:
+            allowed = await self._scope_db.has_live_resource_access(*self._scope)
+        except Exception as exc:
+            raise LiveResourceAccessRevoked("workspace_access_unavailable") from exc
+        if not allowed:
+            raise LiveResourceAccessRevoked("workspace_access_revoked")
 
 
 class _ActiveLiveResourceLease(BaseModel):

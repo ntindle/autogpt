@@ -879,6 +879,9 @@ async def get_graph_executions_paginated(
         if team_id_restriction is not None:
             where_filter["organizationId"] = organization_id
             where_filter["teamId"] = team_id_restriction
+            where_filter["AND"] = _execution_visibility_filters(
+                user_id, organization_id, [team_id_restriction]
+            )
         else:
             team_ids = await get_user_team_ids(user_id, organization_id)
             where_filter["AND"] = _execution_visibility_filters(
@@ -931,6 +934,9 @@ async def get_graph_execution_meta(
         if team_id_restriction is not None:
             where["organizationId"] = organization_id
             where["teamId"] = team_id_restriction
+            where["AND"] = _execution_visibility_filters(
+                user_id, organization_id, [team_id_restriction]
+            )
         else:
             team_ids = await get_user_team_ids(user_id, organization_id)
             where["AND"] = _execution_visibility_filters(
@@ -984,6 +990,9 @@ async def get_graph_execution(
         if team_id_restriction is not None:
             where["organizationId"] = organization_id
             where["teamId"] = team_id_restriction
+            where["AND"] = _execution_visibility_filters(
+                user_id, organization_id, [team_id_restriction]
+            )
         else:
             team_ids = await get_user_team_ids(user_id, organization_id)
             where["AND"] = _execution_visibility_filters(

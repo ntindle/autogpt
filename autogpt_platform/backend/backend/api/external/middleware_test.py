@@ -203,6 +203,33 @@ async def test_api_key_permission_downgrade_fails_after_lock(mocker) -> None:
 
 
 @pytest.mark.asyncio
+async def test_long_action_releases_principal_lock_and_rechecks_before_return(mocker):
+    tx = MagicMock(query_raw=AsyncMock(return_value=[{"id": "key-1"}]))
+    transaction = MagicMock()
+    transaction.__aenter__ = AsyncMock(return_value=tx)
+    transaction.__aexit__ = AsyncMock(return_value=False)
+    mocker.patch.object(
+        middleware, "prisma", MagicMock(tx=MagicMock(return_value=transaction))
+    )
+    row = MagicMock(
+        status=APIKeyStatus.ACTIVE,
+        userId="user-1",
+        permissions=[APIKeyPermission.EXECUTE_BLOCK],
+    )
+    delegate = MagicMock(find_unique=AsyncMock(return_value=row))
+    mocker.patch.object(middleware.PrismaAPIKey, "prisma", return_value=delegate)
+    with pytest.raises(HTTPException, match="no longer active"):
+        async with middleware._live_authorization_principal(
+            api_key_auth(APIKeyPermission.EXECUTE_BLOCK),
+            (APIKeyPermission.EXECUTE_BLOCK,),
+            hold_until_return=False,
+        ):
+            transaction.__aexit__.assert_awaited_once()
+            row.status = APIKeyStatus.REVOKED
+    assert delegate.find_unique.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_oauth_without_app_scope_uses_live_default_context(mocker) -> None:
     token = OAuthAccessTokenInfo(
         id="token-1",

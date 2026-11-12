@@ -22,17 +22,15 @@ from sentry_sdk.tracing import Span
 from backend.blocks import get_block, get_blocks
 from backend.blocks._base import BlockSchema
 from backend.blocks.agent import AgentExecutorBlock
-from backend.blocks.autopilot import AutoPilotBlock
 from backend.blocks.mcp.block import MCPToolBlock
-from backend.blocks.time_blocks import CountdownTimerBlock
 from backend.data import redis_client as redis
 from backend.data.block import BlockInput, BlockOutput, BlockOutputEntry
 from backend.data.db_accessors import (
     AgentGraphAttachmentLeaseGuard,
+    LiveResourceAccessGuard,
     LiveResourceAccessRevoked,
     LiveResourceLeaseGuard,
     experts_db,
-    run_with_live_resource_lease_guard,
 )
 from backend.data.dynamic_fields import parse_execution_output, sanitize_pin_name
 from backend.data.entitlement_limits import platform_spend_refusal
@@ -210,39 +208,26 @@ def _bind_persisted_execution_scope(
     return True
 
 
-async def _run_with_execution_lease(
+async def _run_with_execution_access(
     graph_exec: GraphExecutionEntry,
     action: Callable[["DatabaseManagerAsyncClient"], Awaitable[T]],
 ) -> T:
     db_client = get_db_async_client()
-    lease_id = await db_client.acquire_live_resource_lease(
+    guard = LiveResourceAccessGuard(
+        db_client,
         graph_exec.user_id,
         graph_exec.execution_context.organization_id,
         graph_exec.execution_context.team_id,
         "execute",
     )
-    if lease_id is None:
-        raise LiveResourceAccessRevoked("execution_access_revoked")
-    guard = LiveResourceLeaseGuard(db_client, lease_id)
-    try:
-        return await run_with_live_resource_lease_guard(
-            guard,
-            user_id=graph_exec.user_id,
-            organization_id=graph_exec.execution_context.organization_id,
-            team_id=graph_exec.execution_context.team_id,
-            access="execute",
-            action=action(db_client),
-        )
-    finally:
-        released = await db_client.release_live_resource_lease(lease_id)
-        if not released:
-            raise LiveResourceAccessRevoked("execution_lease_lost")
+    await guard.validate()
+    return await guard.run(action(db_client))
 
 
 async def _moderate_execution_inputs(
     graph_exec: GraphExecutionEntry,
 ) -> Exception | None:
-    return await _run_with_execution_lease(
+    return await _run_with_execution_access(
         graph_exec,
         lambda db_client: automod_manager.moderate_graph_execution_inputs(
             db_client=db_client,
@@ -254,7 +239,7 @@ async def _moderate_execution_inputs(
 async def _moderate_execution_outputs(
     graph_exec: GraphExecutionEntry,
 ) -> Exception | None:
-    return await _run_with_execution_lease(
+    return await _run_with_execution_access(
         graph_exec,
         lambda db_client: automod_manager.moderate_graph_execution_outputs(
             db_client=db_client,
@@ -270,7 +255,7 @@ async def _generate_execution_activity(
     execution_stats: GraphExecutionStats,
     execution_status: ExecutionStatus,
 ):
-    return await _run_with_execution_lease(
+    return await _run_with_execution_access(
         graph_exec,
         lambda db_client: generate_activity_status_for_execution(
             graph_exec_id=graph_exec.graph_exec_id,
@@ -1414,15 +1399,13 @@ class ExecutionProcessor:
         )
         db_client = get_db_async_client()
         organization_id = node_exec.execution_context.organization_id
-        if organization_id and live_lease_id is None:
-            live_lease_id = await db_client.acquire_live_resource_lease(
-                node_exec.user_id,
-                organization_id,
-                node_exec.execution_context.team_id,
-                "execute",
-            )
-            if live_lease_id is None:
-                raise LiveResourceAccessRevoked("execution_access_revoked")
+        access_guard = LiveResourceAccessGuard(
+            db_client,
+            node_exec.user_id,
+            organization_id,
+            node_exec.execution_context.team_id,
+            "execute",
+        )
 
         async def execute_and_settle(node: Node) -> NodeExecutionStats:
             execution_stats = NodeExecutionStats()
@@ -1466,27 +1449,14 @@ class ExecutionProcessor:
             return await _finish_despite_cancel(settle)
 
         try:
-            node = await db_client.get_node(node_exec.node_id)
-            is_coordinator = isinstance(
-                node.block,
-                (CountdownTimerBlock, AgentExecutorBlock, AutoPilotBlock),
-            )
-            if live_lease_id is not None and not is_coordinator:
-                guard = LiveResourceLeaseGuard(db_client, live_lease_id)
-                return await run_with_live_resource_lease_guard(
-                    guard,
-                    user_id=node_exec.user_id,
-                    organization_id=organization_id,
-                    team_id=node_exec.execution_context.team_id,
-                    access="execute",
-                    action=execute_and_settle(node),
-                )
+            await access_guard.validate()
             if live_lease_id is not None:
                 released = await db_client.release_live_resource_lease(live_lease_id)
                 live_lease_id = None
                 if not released:
                     raise LiveResourceAccessRevoked("execution_lease_lost")
-            return await execute_and_settle(node)
+            node = await db_client.get_node(node_exec.node_id)
+            return await access_guard.run(execute_and_settle(node))
         finally:
             if live_lease_id is not None:
                 released = await db_client.release_live_resource_lease(live_lease_id)
@@ -1608,6 +1578,23 @@ class ExecutionProcessor:
         outputs = 0
 
         async def persist_output(output_name: str, output_data: Any) -> None:
+            lease = await db_client.acquire_live_resource_lease(
+                node_exec.user_id,
+                node_exec.execution_context.organization_id,
+                node_exec.execution_context.team_id,
+                "execute",
+            )
+            if lease is None:
+                raise LiveResourceAccessRevoked("execution_access_revoked")
+            try:
+                await LiveResourceLeaseGuard(db_client, lease).run(
+                    persist_authorized_output(output_name, output_data)
+                )
+            finally:
+                if not await db_client.release_live_resource_lease(lease):
+                    raise LiveResourceAccessRevoked("execution_lease_lost")
+
+        async def persist_authorized_output(output_name: str, output_data: Any) -> None:
             nonlocal outputs
             outputs += 1
             await db_client.upsert_execution_output(

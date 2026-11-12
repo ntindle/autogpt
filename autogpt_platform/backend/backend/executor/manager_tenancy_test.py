@@ -126,7 +126,7 @@ def test_mismatched_queue_identity_is_rejected_before_authorization():
 )
 async def test_denied_moderation_lease_never_reaches_automod(operation):
     db_client = MagicMock()
-    db_client.acquire_live_resource_lease = AsyncMock(return_value=None)
+    db_client.has_live_resource_access = AsyncMock(return_value=False)
 
     with (
         patch("backend.executor.manager.get_db_async_client", return_value=db_client),
@@ -149,7 +149,7 @@ async def test_denied_moderation_lease_never_reaches_automod(operation):
 @pytest.mark.asyncio
 async def test_denied_activity_lease_never_fetches_or_sends_execution_content():
     db_client = MagicMock()
-    db_client.acquire_live_resource_lease = AsyncMock(return_value=None)
+    db_client.has_live_resource_access = AsyncMock(return_value=False)
 
     with (
         patch("backend.executor.manager.get_db_async_client", return_value=db_client),

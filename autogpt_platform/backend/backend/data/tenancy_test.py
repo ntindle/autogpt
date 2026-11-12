@@ -292,6 +292,45 @@ async def test_live_resource_lease_holds_and_releases_barrier(mocker):
 
 
 @pytest.mark.asyncio
+async def test_resource_acquisition_timeout_cleans_an_unclaimed_holder(mocker):
+    entered = asyncio.Event()
+
+    @asynccontextmanager
+    async def blocked(*_args, **_kwargs):
+        entered.set()
+        await asyncio.Event().wait()
+        yield True
+
+    mocker.patch.object(tenancy, "live_resource_access_barrier", blocked)
+    mocker.patch.object(tenancy, "LIVE_LEASE_ACQUISITION_TIMEOUT_SECONDS", 0.01)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            tenancy.acquire_live_resource_lease("owner", "org", None, "execute"), 5
+        )
+    assert entered.is_set()
+    assert not tenancy._live_transaction_lease_holders
+    assert not tenancy._live_resource_leases
+    assert tenancy._get_live_transaction_lease_slots("resource")._value == 3
+
+
+@pytest.mark.asyncio
+async def test_abandoned_resource_holder_expires_and_restores_capacity(mocker):
+    @asynccontextmanager
+    async def allowed(*_args, **_kwargs):
+        yield True
+
+    mocker.patch.object(tenancy, "live_resource_access_barrier", allowed)
+    mocker.patch.object(tenancy, "LIVE_RESOURCE_LEASE_TIMEOUT_SECONDS", 0.01)
+    lease = await tenancy.acquire_live_resource_lease("owner", "org", None, "execute")
+    assert lease is not None
+    holder = tenancy._live_resource_leases[lease][1]
+    await asyncio.wait_for(holder, 5)
+    assert not await tenancy.is_live_resource_lease_active(lease)
+    assert not tenancy._live_transaction_lease_holders
+    assert tenancy._get_live_transaction_lease_slots("resource")._value == 3
+
+
+@pytest.mark.asyncio
 async def test_nested_persistent_lease_classes_make_progress_without_deadlock(mocker):
     active = {"resource": 0, "attachment": 0, "delivery": 0}
     peak = {"resource": 0, "attachment": 0, "delivery": 0}

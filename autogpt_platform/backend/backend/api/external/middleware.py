@@ -50,6 +50,8 @@ def _auth_error(detail: str, status_code: int = status.HTTP_401_UNAUTHORIZED):
 async def _live_authorization_principal(
     auth: APIAuthorizationInfo,
     permissions: tuple[APIKeyPermission, ...],
+    *,
+    hold_until_return: bool = True,
 ) -> AsyncIterator[None]:
     async with live_request_transaction(prisma) as tx:
         if isinstance(auth, APIKeyInfo):
@@ -121,7 +123,12 @@ async def _live_authorization_principal(
                 )
         else:
             raise _auth_error("Unsupported authorization principal")
-        yield
+        if hold_until_return:
+            yield
+            return
+    yield
+    async with _live_authorization_principal(auth, permissions):
+        pass
 
 
 async def _scope_api_key(api_key: APIAuthorizationInfo) -> APIAuthorizationInfo:
@@ -310,7 +317,9 @@ async def owner_is_banned(auth: APIAuthorizationInfo) -> bool:
     return await is_user_banned(auth.user_id)
 
 
-def permission_dependency(*permissions: APIKeyPermission) -> DependsParameter:
+def permission_dependency(
+    *permissions: APIKeyPermission, hold_until_return: bool = True
+) -> DependsParameter:
     """
     Dependency function for checking required permissions.
     All listed permissions must be present.
@@ -329,7 +338,9 @@ def permission_dependency(*permissions: APIKeyPermission) -> DependsParameter:
                 detail=f"Missing required permission(s): "
                 f"{', '.join(p.value for p in missing)}",
             )
-        async with _live_authorization_principal(auth, permissions):
+        async with _live_authorization_principal(
+            auth, permissions, hold_until_return=hold_until_return
+        ):
             integration_admin = any(
                 permission
                 in {
@@ -365,8 +376,13 @@ def permission_dependency(*permissions: APIKeyPermission) -> DependsParameter:
     return live_dependency(check_permissions)
 
 
-def require_permission(*permissions: APIKeyPermission) -> APIAuthorizationInfo:
-    return cast(APIAuthorizationInfo, permission_dependency(*permissions))
+def require_permission(
+    *permissions: APIKeyPermission, hold_until_return: bool = True
+) -> APIAuthorizationInfo:
+    return cast(
+        APIAuthorizationInfo,
+        permission_dependency(*permissions, hold_until_return=hold_until_return),
+    )
 
 
 def _resource_access_for_permissions(

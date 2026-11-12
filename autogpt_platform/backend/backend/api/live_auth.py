@@ -26,6 +26,8 @@ def live_dependency(
 def requires_live_resource_permission(
     org_action: autogpt_auth_lib.OrgAction,
     team_action: autogpt_auth_lib.TeamAction,
+    *,
+    hold_until_return: bool = True,
 ) -> autogpt_auth_lib.RequestContext:
     async def dependency(
         user_id: str = Security(autogpt_auth_lib.get_user_id),
@@ -42,8 +44,12 @@ def requires_live_resource_permission(
         ) as allowed:
             if not allowed:
                 raise HTTPException(403, detail="Resource scope is inactive")
-            with credential_scope(ctx.org_id):
-                yield ctx
+            if hold_until_return:
+                with credential_scope(ctx.org_id):
+                    yield ctx
+                return
+        with credential_scope(ctx.org_id):
+            yield ctx
 
     return cast(autogpt_auth_lib.RequestContext, live_dependency(dependency))
 
