@@ -314,7 +314,7 @@ def test_text_only_turns_refuse_render_ui(permissions: CopilotPermissions | None
     after = without_render_ui(permissions).effective_allowed_tools(all_tools)
 
     assert RENDER_UI_TOOL not in after
-    assert after == before - {RENDER_UI_TOOL}
+    assert after == before - {RENDER_UI_TOOL, "render_openui"}
 
 
 @pytest.mark.asyncio
@@ -327,3 +327,44 @@ async def test_only_cards_count_as_shown(tool: RenderUITool, session: ChatSessio
     assert shows_cards(shown.model_dump_json(exclude_none=True))
     assert not shows_cards(refused.model_dump_json(exclude_none=True))
     assert not shows_cards("Tool execution error: boom")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides, hidden",
+    [
+        ({}, False),
+        ({"source_platform": "slack"}, True),
+        ({"text_only_result": True}, True),
+        ({"delegated_by_session_id": "parent"}, True),
+        (
+            {
+                "delegated_by_session_id": "parent",
+                "handed_off_from_expert_id": "expert",
+            },
+            False,
+        ),
+    ],
+)
+async def test_openui_visibility_follows_the_response_destination(overrides, hidden):
+    session = ChatSession.new(user_id="owner", dry_run=False, **overrides)
+    with patch(
+        "backend.copilot.tools.render_ui.is_feature_enabled",
+        AsyncMock(return_value=False),
+    ):
+        disabled = await render_ui_disabled_tools(session)
+    assert ("render_openui" in disabled) is hidden
+
+
+@pytest.mark.parametrize("excluded", [True, False])
+def test_text_only_filter_handles_each_visual_tool(excluded):
+    permissions = CopilotPermissions(
+        tools=["render_ui"] if excluded else ["render_openui", "web_fetch"],
+        tools_exclude=excluded,
+    )
+    allowed = without_render_ui(permissions).effective_allowed_tools(
+        all_known_tool_names()
+    )
+    assert "render_ui" not in allowed
+    assert "render_openui" not in allowed
+    assert "web_fetch" in allowed

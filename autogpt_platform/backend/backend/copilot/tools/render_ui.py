@@ -15,6 +15,7 @@ from .render_openui import RenderOpenUITool
 from .render_ui_models import RenderUIInput, UIBlocksResponse, render_ui_parameters
 
 RENDER_UI_TOOL = "render_ui"
+_VISUAL_TOOLS = (RENDER_UI_TOOL, "render_openui")
 _MAX_REPORTED_PROBLEMS = 5
 
 
@@ -65,7 +66,7 @@ class RenderUITool(BaseTool):
 
 
 async def render_ui_disabled_tools(session: ChatSession) -> frozenset[str]:
-    """Hide ``render_ui`` where nobody would see its cards.
+    """Hide visual tools where nobody would see their output.
 
     Chat platforms can't draw them, and text-only callers keep only the final
     text, so the numbers in a card would be lost to whoever asked. A session
@@ -85,7 +86,7 @@ async def render_ui_disabled_tools(session: ChatSession) -> frozenset[str]:
         or reports_back
         or not session.user_id
     ):
-        return hidden
+        return frozenset(_VISUAL_TOOLS)
     enabled = await is_feature_enabled(Flag.COPILOT_VISUAL_ANSWERS, session.user_id)
     return frozenset() if enabled else hidden
 
@@ -105,23 +106,26 @@ def shows_cards(output: Any) -> bool:
 def without_render_ui(
     permissions: CopilotPermissions | None,
 ) -> CopilotPermissions:
-    """*permissions* with ``render_ui`` refused, for one turn whose caller
+    """*permissions* with visual output refused, for one turn whose caller
     keeps only the final text.
 
     The session flag can't do this alone: a caller may resume a session made
     before the flag existed, or one a person reads. An allow-list naming only
-    ``render_ui`` is left alone, since emptying it would allow every tool.
+    visual tools is left alone, since emptying it would allow every tool.
     """
     base = permissions or CopilotPermissions()
     if not base.tools:
         return base.model_copy(
-            update={"tools": [RENDER_UI_TOOL], "tools_exclude": True}
+            update={"tools": list(_VISUAL_TOOLS), "tools_exclude": True}
         )
     if base.tools_exclude:
-        if RENDER_UI_TOOL in base.tools:
-            return base
-        return base.model_copy(update={"tools": [*base.tools, RENDER_UI_TOOL]})
-    kept = [tool for tool in base.tools if tool != RENDER_UI_TOOL]
+        missing = [tool for tool in _VISUAL_TOOLS if tool not in base.tools]
+        return (
+            base.model_copy(update={"tools": [*base.tools, *missing]})
+            if missing
+            else base
+        )
+    kept = [tool for tool in base.tools if tool not in _VISUAL_TOOLS]
     return base.model_copy(update={"tools": kept}) if kept else base
 
 
