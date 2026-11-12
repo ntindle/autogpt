@@ -53358,7 +53358,8 @@
           "preview_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 256
               },
               {
                 "type": "null"
@@ -53676,6 +53677,7 @@
         "properties": {
           "id": {
             "type": "string",
+            "maxLength": 256,
             "title": "Id"
           },
           "title": {
@@ -53699,7 +53701,8 @@
           "parent_id": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 256
               },
               {
                 "type": "null"
@@ -54110,7 +54113,8 @@
           "cron": {
             "anyOf": [
               {
-                "type": "string"
+                "type": "string",
+                "maxLength": 256
               },
               {
                 "type": "null"
