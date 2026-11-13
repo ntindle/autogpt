@@ -4,6 +4,7 @@ import {
   isWorkspaceAccessURL,
   subscribeWorkspaceAccess,
   withWorkspaceAccess,
+  workspaceAccessHeaders,
 } from "../workspaceAccess";
 
 jest.mock("@/lib/env", () => ({
@@ -19,6 +20,22 @@ beforeEach(() => {
     CF_Authorization: { name: "CF_Authorization", value: "fake-access" },
     other_account: { name: "other_account", value: "must-not-send" },
   });
+});
+
+test("native image requests receive only the access cookie and explicit authorization", async () => {
+  const headers = await workspaceAccessHeaders(
+    "https://workspace.example.com/_agpt/api/workspace/files/file-a/preview",
+    { Authorization: "Bearer fake-user" },
+  );
+  expect(headers).toEqual({
+    authorization: "Bearer fake-user",
+    cookie: "CF_Authorization=fake-access",
+  });
+  cookieGetter.mockClear();
+  expect(
+    await workspaceAccessHeaders("https://other.example.com/image.png"),
+  ).toEqual({});
+  expect(cookieGetter).not.toHaveBeenCalled();
 });
 
 test("adds only the Access cookie and preserves the explicit app session", async () => {

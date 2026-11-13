@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { authHeaders } from "@/lib/api/client";
 import {
   downloadFileText,
   fileDownloadURL,
+  fileImageHeaders,
   isPreviewUnavailable,
   shouldRetryFileText,
   workspaceKeys,
@@ -33,7 +33,7 @@ export function useFileViewer(file: WorkspaceFile) {
   // fresh for every image rather than kept.
   const headers = useQuery({
     queryKey: workspaceKeys.imageHeaders,
-    queryFn: authHeaders,
+    queryFn: fileImageHeaders,
     enabled: kind === "image",
     gcTime: 0,
   });

@@ -50,21 +50,10 @@ export function withWorkspaceAccess(
     ) {
       return fetcher(input, init);
     }
-    const cookies = await CookieManager.get(
-      FRONTEND_URL,
-      Platform.OS === "ios",
-    );
-    const accessCookie = cookies.CF_Authorization?.value;
-    const headers = new Headers(
+    const headers = await workspaceAccessHeaders(
+      url,
       init?.headers ?? (input instanceof Request ? input.headers : undefined),
     );
-    const existing = (headers.get("cookie") ?? "")
-      .split(";")
-      .map((part) => part.trim())
-      .filter((part) => part && !part.startsWith("CF_Authorization="));
-    if (accessCookie) existing.push(`CF_Authorization=${accessCookie}`);
-    if (existing.length) headers.set("cookie", existing.join("; "));
-    else headers.delete("cookie");
     const response = await fetcher(input, {
       ...init,
       headers,
@@ -80,6 +69,31 @@ export function withWorkspaceAccess(
     }
     return response;
   };
+}
+
+export async function workspaceAccessHeaders(
+  url: string,
+  initial?: HeadersInit,
+) {
+  const headers = new Headers(initial);
+  if (
+    ACCESS_LOGIN_ORIGIN &&
+    new URL(url).origin === new URL(FRONTEND_URL).origin
+  ) {
+    const cookies = await CookieManager.get(
+      FRONTEND_URL,
+      Platform.OS === "ios",
+    );
+    const existing = (headers.get("cookie") ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter((part) => part && !part.startsWith("CF_Authorization="));
+    if (cookies.CF_Authorization?.value)
+      existing.push(`CF_Authorization=${cookies.CF_Authorization.value}`);
+    if (existing.length) headers.set("cookie", existing.join("; "));
+    else headers.delete("cookie");
+  }
+  return Object.fromEntries(headers.entries());
 }
 
 export const workspaceFetch = withWorkspaceAccess(globalThis.fetch);

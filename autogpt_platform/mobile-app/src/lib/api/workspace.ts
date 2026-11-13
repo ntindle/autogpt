@@ -5,7 +5,7 @@ import {
   trimPartialUtf8,
 } from "@/features/files/helpers";
 import { clearAccessToken } from "@/lib/auth/token";
-import { workspaceFetch } from "@/lib/workspaceAccess";
+import { workspaceAccessHeaders, workspaceFetch } from "@/lib/workspaceAccess";
 
 import { ApiError, apiRequest, apiUrl, authHeaders } from "./client";
 
@@ -54,6 +54,13 @@ export async function listExpertFiles(expertID: string) {
 
 export function fileDownloadURL(fileID: string) {
   return apiUrl(`/api/workspace/files/${encodeURIComponent(fileID)}/download`);
+}
+
+export async function fileImageHeaders() {
+  return workspaceAccessHeaders(
+    apiUrl("/api/workspace/files"),
+    await authHeaders(),
+  );
 }
 
 export interface FileText {
