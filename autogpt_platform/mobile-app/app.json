@@ -1,0 +1,60 @@
+{
+  "expo": {
+    "name": "Otto Personal",
+    "slug": "ntindle-autogpt-personal",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "ntindle-autogpt",
+    "userInterfaceStyle": "automatic",
+    "backgroundColor": "#0B0B0D",
+    "ios": {
+      "bundleIdentifier": "com.ntindle.autogpt.personal",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "com.ntindle.autogpt.personal",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0B0D",
+        "foregroundImage": "./assets/images/icon.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0B0B0D",
+          "image": "./assets/images/icon.png",
+          "imageWidth": 96
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Attach photos to your chats.",
+          "cameraPermission": false,
+          "microphonePermission": "Dictate your messages."
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Dictate your messages.",
+          "enableBackgroundPlayback": false
+        }
+      ],
+      "expo-sqlite"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    }
+  }
+}

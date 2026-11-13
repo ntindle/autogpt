@@ -44,6 +44,7 @@ class FrontendEnvironmentTest(unittest.TestCase):
             "AUTH_GITHUB_CLIENT_SECRET": "github-secret",
             "AUTH_GOOGLE_CLIENT_ID": "google-client",
             "AUTH_GOOGLE_CLIENT_SECRET": "value with spaces",
+            "AUTH_MOBILE_APP_SCHEME": "ntindle-autogpt",
             "AUTH_SIGNUP_ALLOWLIST": "@example.com,admin@example.net",
             "OPENAI_API_BASE_URL": "https://api.openai.com/v1",
             "OPENAI_API_KEY": "openai-transcription-fallback",
