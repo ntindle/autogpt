@@ -339,6 +339,23 @@ get_credits = _get_credits
 spend_credits = _spend_credits
 
 
+async def _find_openui_view_file(
+    user_id: str,
+    session_id: str,
+    view_id: str,
+    *,
+    organization_id: str | None = None,
+    team_id: str | None = None,
+) -> str | None:
+    return await find_openui_view_file(
+        user_id,
+        session_id,
+        view_id,
+        organization_id=organization_id,
+        team_id=team_id,
+    )
+
+
 async def _store_content_embedding(
     content_type: ContentType,
     content_id: str,
@@ -661,7 +678,7 @@ class DatabaseManager(AppService):
     list_workspace_folders = _(list_workspace_folders)
     soft_delete_workspace_file = _(soft_delete_workspace_file)
     update_workspace_file_content = _(update_workspace_file_content)
-    find_openui_view_file = _(find_openui_view_file)
+    find_openui_view_file = _(_find_openui_view_file, name="find_openui_view_file")
     get_openui_file_state = _(get_openui_file_state)
     move_chat_edits_to_file = _(move_chat_edits_to_file)
     resolve_expert_workspace_scope = _(resolve_expert_workspace_scope)
