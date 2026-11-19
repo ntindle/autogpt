@@ -48,7 +48,7 @@ from backend.copilot.builder_context import (
 )
 from backend.copilot.capabilities.dispatch import resolve_tool_dispatch
 from backend.copilot.config import CopilotLlmAuthProvider, CopilotLLMModel
-from backend.copilot.constants import EMPTY_COMPLETION_NOTICE
+from backend.copilot.constants import BUDGET_EXHAUSTED_NOTICE, EMPTY_COMPLETION_NOTICE
 from backend.copilot.context import (
     get_workspace_manager,
     is_unattended_turn,
@@ -275,10 +275,7 @@ _LAST_ITERATION_HINT = (
 
 # Fallback surfaced when the tool-round budget is exhausted *and* the forced-
 # text last round left the user with zero visible response.
-_BUDGET_EXHAUSTED_FALLBACK_TEXT = (
-    "Reached the tool-call budget for this turn. "
-    "Send a follow-up message to continue from here."
-)
+_BUDGET_EXHAUSTED_FALLBACK_TEXT = BUDGET_EXHAUSTED_NOTICE
 
 
 def _silent_finish_fallback_events(
@@ -1892,6 +1889,18 @@ async def stream_chat_completion_baseline(
         raise NotFoundError(
             f"Session {session_id} not found. Please create a new session first."
         )
+
+    # Only the SDK engine is bound to the user's machine; running a Local PC
+    # chat here would put its tools in a cloud sandbox.
+    if session.metadata.execution_target.kind == "local":
+        yield StreamError(
+            errorText=(
+                "This chat runs on your Local PC, which this deployment's "
+                "chat engine cannot reach. Start a Cloud chat instead."
+            ),
+            code="local_pc_requires_sdk_engine",
+        )
+        return
 
     expert_session_suffix = await build_expert_identity_suffix(
         session.user_id,
