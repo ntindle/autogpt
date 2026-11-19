@@ -385,7 +385,7 @@ export const auth = betterAuth({
   },
   // Table names are overridden away from Better Auth's defaults (user,
   // session, ...) so the auth tables read unambiguously next to the platform
-  // tables â€” most importantly no `user` table case-colliding with `User`.
+  // tables — most importantly no `user` table case-colliding with `User`.
   account: {
     modelName: "UserAuthAccount",
   },
@@ -395,14 +395,14 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     // The 12-char policy has to hold on the raw Better Auth endpoints too
-    // (/sign-up/email, /reset-password, /change-password) â€” the signup server
+    // (/sign-up/email, /reset-password, /change-password) — the signup server
     // action's zod schema only guards the form path, so a direct POST would
     // otherwise slip a 6-char password through. minPasswordLength is checked
     // when a password is *set* (sign-up / reset / change), never on sign-in,
     // so this does NOT lock out migrated users whose old password is shorter.
     minPasswordLength: AUTH_PASSWORD_MIN_LENGTH,
     // A password reset kicks every active session, matching the previous
-    // flow's signOut({ scope: "global" }) â€” the standard defense when a
+    // flow's signOut({ scope: "global" }) — the standard defense when a
     // user resets their password to evict a stolen session.
     revokeSessionsOnPasswordReset: true,
     requireEmailVerification,
@@ -524,13 +524,13 @@ export const auth = betterAuth({
         jwks: { modelName: "UserAuthJwks" },
       },
       jwks: {
-        // Shared with mintServiceToken â€” whichever signs first creates the
+        // Shared with mintServiceToken — whichever signs first creates the
         // JWKS keypair, so the two must never disagree.
         keyPairConfig: { alg: JWKS_ALG },
       },
       jwt: {
         issuer: baseURL,
-        // The Python backend validates `aud == "authenticated"` â€” the same
+        // The Python backend validates `aud == "authenticated"` — the same
         // audience Supabase GoTrue used, so old and new tokens are
         // interchangeable during the migration window.
         audience: "authenticated",
