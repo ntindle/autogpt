@@ -11,6 +11,7 @@ from prisma.errors import UniqueViolationError
 from prisma.models import TeamMember
 from prisma.types import TeamMemberUpdateInput, TeamUpdateInput, TeamWhereInput
 
+from backend.data.auth.api_key import revoke_api_keys
 from backend.data.db import (
     TRANSACTION_TIMEOUT,
     execute_raw_with_schema,
@@ -325,6 +326,7 @@ async def delete_team(
                 "slug": None,
             },
         )
+        await revoke_api_keys(tx, {"teamIdRestriction": ws_id})
 
 
 async def join_team(ws_id: str, user_id: str, org_id: str) -> TeamResponse:
@@ -473,6 +475,7 @@ async def _finalize_team_member_removal(
         await tx.teammember.delete(
             where={"teamId_userId": {"teamId": ws_id, "userId": user_id}}
         )
+        await revoke_api_keys(tx, {"userId": user_id, "teamIdRestriction": ws_id})
 
 
 async def _remove_team_membership(

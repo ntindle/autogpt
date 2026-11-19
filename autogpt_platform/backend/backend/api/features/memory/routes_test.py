@@ -27,6 +27,8 @@ app.include_router(memory_router)
 
 client = fastapi.testclient.TestClient(app)
 
+# The erase runs in the shared graphiti helper, which opens its own driver.
+_ERASE_OPEN_DRIVER = "backend.copilot.graphiti.erase.open_driver"
 _MOCK_MODULE = "backend.api.features.memory.routes"
 
 _EXPERT_ID = "11111111-2222-3333-4444-555555555555"
@@ -302,7 +304,7 @@ class TestEraseScope:
         self, clear_understanding, test_user_id
     ) -> None:
         driver = _driver_returning([{"c": 2}], [])
-        with patch(f"{_MOCK_MODULE}.open_driver", return_value=driver):
+        with patch(_ERASE_OPEN_DRIVER, return_value=driver):
             resp = client.delete("/memory")
         assert resp.status_code == 200
         clear_understanding.assert_awaited_once_with(test_user_id)
@@ -310,7 +312,7 @@ class TestEraseScope:
     def test_expert_erase_keeps_the_understanding(self, clear_understanding) -> None:
         driver = _driver_returning([{"c": 3}], [])
         with (
-            patch(f"{_MOCK_MODULE}.open_driver", return_value=driver),
+            patch(_ERASE_OPEN_DRIVER, return_value=driver),
             patch(
                 f"{_MOCK_MODULE}.experts_db.get_expert",
                 new=AsyncMock(return_value=_expert()),
@@ -322,7 +324,7 @@ class TestEraseScope:
 
     def test_erases_all_nodes(self) -> None:
         driver = _driver_returning([{"c": 214}], [])
-        with patch(f"{_MOCK_MODULE}.open_driver", return_value=driver):
+        with patch(_ERASE_OPEN_DRIVER, return_value=driver):
             resp = client.delete("/memory")
         assert resp.status_code == 200
         body = resp.json()
@@ -335,7 +337,7 @@ class TestEraseScope:
         driver = AsyncMock()
         driver.execute_query.side_effect = ResponseError("no such graph")
         driver.close = AsyncMock()
-        with patch(f"{_MOCK_MODULE}.open_driver", return_value=driver):
+        with patch(_ERASE_OPEN_DRIVER, return_value=driver):
             resp = client.delete("/memory")
         assert resp.status_code == 200
         assert resp.json()["deleted_nodes"] == 0
@@ -344,7 +346,7 @@ class TestEraseScope:
     def test_expert_erase_resolves_ownership(self, test_user_id) -> None:
         driver = _driver_returning([{"c": 3}], [])
         with (
-            patch(f"{_MOCK_MODULE}.open_driver", return_value=driver),
+            patch(_ERASE_OPEN_DRIVER, return_value=driver),
             patch(
                 f"{_MOCK_MODULE}.experts_db.get_expert",
                 new=AsyncMock(return_value=_expert()),

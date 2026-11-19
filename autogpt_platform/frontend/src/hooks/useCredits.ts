@@ -110,6 +110,8 @@ export default function useCredits({
     };
   }
   const identityScope = identityScopeRef.current.token;
+  const latestCreditsReadRef = useRef(0);
+  const appliedCreditsReadRef = useRef(0);
   const [billingState, setBillingState] = useState(() =>
     emptyBillingState(identityScope),
   );
@@ -158,7 +160,15 @@ export default function useCredits({
     if (scopedIdentityKey === null || isStale(identityScopeRef, requestScope)) {
       return;
     }
+    const read = ++latestCreditsReadRef.current;
     const response = await api.getUserCredit();
+    // Once a newer read has applied its answer, an older one would put back a
+    // stale balance; a newer read that failed applied nothing and blocks nothing.
+    if (read < appliedCreditsReadRef.current) return;
+    // A failed read keeps the last balance; the wallet hides itself on null.
+    const balance = response.credits;
+    if (balance == null && !response.forbidden) return;
+    appliedCreditsReadRef.current = read;
     setBillingState((current) =>
       current.identityScope === requestScope
         ? {

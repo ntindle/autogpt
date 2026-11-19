@@ -1,12 +1,10 @@
 import { act, renderHook, waitFor } from "@/tests/integrations/test-utils";
-import type { UseChatHelpers } from "@ai-sdk/react";
-import type { UIMessage } from "ai";
 import type { MutableRefObject } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useCopilotStreamStore } from "../copilotStreamStore";
 import { useSendMessage } from "../useSendMessage";
 
-type SendMessageFn = UseChatHelpers<UIMessage>["sendMessage"];
+type SendMessageFn = Parameters<typeof useSendMessage>[0]["sendMessage"];
 type CreateSessionFn = (options?: {
   expertKickoff?: boolean;
 }) => Promise<string | undefined>;
@@ -92,11 +90,14 @@ describe("useSendMessage first-send handoff", () => {
       });
 
       await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce());
-      expect(sendMessage).toHaveBeenCalledWith({
-        text: "first prompt",
-        files: undefined,
-        metadata: undefined,
-      });
+      expect(sendMessage).toHaveBeenCalledWith(
+        {
+          text: "first prompt",
+          files: undefined,
+          metadata: undefined,
+        },
+        undefined,
+      );
       expect(useCopilotStreamStore.getState().pendingFirstSend).toBeNull();
     },
   );

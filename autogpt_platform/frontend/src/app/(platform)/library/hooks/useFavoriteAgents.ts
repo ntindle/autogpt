@@ -14,6 +14,8 @@ import {
   getTeamScopedQueryKey,
   getTenantRequestInit,
 } from "@/components/contextual/TeamPicker/helpers";
+import { hasUnknownSchedules } from "@/services/schedules/scheduler-availability";
+import { useRecheckWhileSchedulesUnknown } from "@/services/schedules/useRecheckWhileSchedulesUnknown";
 
 interface Props {
   searchTerm: string;
@@ -31,16 +33,24 @@ export function useFavoriteAgents({
     page_size: 10,
     search_term: searchTerm || undefined,
   };
+  const recheckWhileSchedulesUnknown = useRecheckWhileSchedulesUnknown();
   const {
     data: agentsQueryData,
     fetchNextPage,
     hasNextPage,
+    isFetching,
     isFetchingNextPage,
     isLoading,
     isPlaceholderData,
   } = useGetV2ListFavoriteLibraryAgentsInfinite(params, {
     query: {
       getNextPageParam: getPaginationNextPageNumber,
+      refetchInterval: (query) =>
+        recheckWhileSchedulesUnknown(
+          hasUnknownSchedules(
+            query.state.data ? unpaginate(query.state.data, "agents") : [],
+          ),
+        ),
       placeholderData: keepPreviousData,
       queryKey: getTeamScopedQueryKey(
         getGetV2ListFavoriteLibraryAgentsQueryKey(params),
@@ -64,6 +74,7 @@ export function useFavoriteAgents({
     agentLoading,
     hasNextPage: hasNextPage && !isPlaceholderData,
     agentCount,
+    isFetching,
     isFetchingNextPage,
     fetchNextPage,
   };

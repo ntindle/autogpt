@@ -1,13 +1,20 @@
-"""Tests for run-health helpers in execution_utils."""
+"""Tests for execution waiting and run-health helpers in execution_utils."""
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from backend.data.execution import ExecutionStatus, NodeExecutionResult
+from backend.data.execution import (
+    ExecutionStatus,
+    GraphExecutionEvent,
+    NodeExecutionResult,
+)
 
+from . import execution_utils
 from .execution_utils import (
+    _subscribe_and_wait,
     build_run_health_warning,
     summarize_node_failures,
     wait_for_execution,
@@ -194,3 +201,82 @@ async def test_wait_for_execution_returns_exact_team_result():
         )
 
     assert result is execution
+
+
+class _Stream:
+    """The execution event bus: ``listen_with_resync`` yields ``items``, then
+    stays quiet. ``None`` marks a confirmed (re)subscription."""
+
+    def __init__(self, *items: object) -> None:
+        self._items = items
+
+    async def listen_with_resync(self, channel_key: str):
+        for item in self._items:
+            yield item
+        await asyncio.Event().wait()
+
+
+def _with_status(status: ExecutionStatus) -> MagicMock:
+    execution = MagicMock()
+    execution.status = status
+    return execution
+
+
+def _wire(monkeypatch: pytest.MonkeyPatch, stream: _Stream, *reads: object):
+    """Each DB read returns the next of ``reads`` (raising an exception one)."""
+    db = MagicMock()
+    db.get_graph_execution = AsyncMock(side_effect=list(reads))
+    monkeypatch.setattr(execution_utils, "execution_db", lambda: db)
+    monkeypatch.setattr(execution_utils, "AsyncRedisExecutionEventBus", lambda: stream)
+    return db
+
+
+async def test_wait_returns_when_the_end_arrives_live():
+    """Called directly: through ``wait_for_execution`` an error here would be
+    hidden by its fallback read."""
+    running = _with_status(ExecutionStatus.RUNNING)
+    done = _with_status(ExecutionStatus.COMPLETED)
+    finished = MagicMock(spec=GraphExecutionEvent)
+    finished.status = ExecutionStatus.COMPLETED
+    db = MagicMock()
+    # The recheck once subscribed, then the read after the live end.
+    db.get_graph_execution = AsyncMock(side_effect=[running, done])
+    stream = _Stream(None, finished)
+
+    async with asyncio.timeout(5):
+        result = await _subscribe_and_wait(stream, "chan", "u", "e", db)
+
+    assert result is done
+
+
+async def test_wait_sees_an_end_reached_while_the_stream_was_down(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    running = _with_status(ExecutionStatus.RUNNING)
+    done = _with_status(ExecutionStatus.COMPLETED)
+    # First check, the recheck once subscribed, the recheck after a resubscribe.
+    _wire(monkeypatch, _Stream(None, None), running, running, done)
+
+    async with asyncio.timeout(5):
+        result = await wait_for_execution("u", "g", "e", timeout_seconds=300)
+
+    assert result is done
+
+
+async def test_a_failed_recheck_returns_the_current_state_without_waiting_out_the_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    running = _with_status(ExecutionStatus.RUNNING)
+    db = _wire(
+        monkeypatch,
+        _Stream(None),
+        running,
+        ConnectionError("database manager unreachable"),
+        running,
+    )
+
+    async with asyncio.timeout(5):
+        result = await wait_for_execution("u", "g", "e", timeout_seconds=300)
+
+    assert result is running
+    assert db.get_graph_execution.await_count == 3

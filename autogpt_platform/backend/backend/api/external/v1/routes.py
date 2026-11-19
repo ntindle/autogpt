@@ -15,6 +15,7 @@ from backend.api.external.middleware import (
     permission_dependency,
     require_auth,
     require_permission,
+    require_resource_permission,
 )
 from backend.api.external.rate_limit import EXECUTION_LIMIT, READ_LIMIT
 from backend.blocks._base import AnyBlockSchema
@@ -230,8 +231,10 @@ async def _run_direct_block(
 )
 async def create_graph(
     graph: graph_db.Graph,
-    auth: APIAuthorizationInfo = require_permission(
-        APIKeyPermission.WRITE_GRAPH, APIKeyPermission.WRITE_LIBRARY
+    auth: APIAuthorizationInfo = Security(
+        require_resource_permission(
+            APIKeyPermission.WRITE_GRAPH, APIKeyPermission.WRITE_LIBRARY
+        )
     ),
 ) -> graph_db.GraphModel:
     """
@@ -289,7 +292,9 @@ async def execute_graph(
     graph_id: str,
     graph_version: int,
     node_input: Annotated[dict[str, Any], Body(..., embed=True, default_factory=dict)],
-    auth: APIAuthorizationInfo = require_permission(APIKeyPermission.EXECUTE_GRAPH),
+    auth: APIAuthorizationInfo = Security(
+        require_resource_permission(APIKeyPermission.EXECUTE_GRAPH)
+    ),
 ) -> dict[str, Any]:
     # Strict route-level paywall: 503 on tier-lookup failure (rather
     # than fail-open via the deep gate inside add_graph_execution).
@@ -393,7 +398,9 @@ class GraphExecutionResult(TypedDict):
 async def get_graph_execution_results(
     graph_id: str,
     graph_exec_id: str,
-    auth: APIAuthorizationInfo = require_permission(APIKeyPermission.READ_GRAPH),
+    auth: APIAuthorizationInfo = Security(
+        require_resource_permission(APIKeyPermission.READ_GRAPH)
+    ),
 ) -> GraphExecutionResult:
     async with live_resource_access_barrier(
         auth.user_id,

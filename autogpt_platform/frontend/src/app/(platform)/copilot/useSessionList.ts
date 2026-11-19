@@ -1,5 +1,4 @@
 import { getV2ListSessions } from "@/app/api/__generated__/endpoints/chat/chat";
-import type { SessionSummaryResponse } from "@/app/api/__generated__/models/sessionSummaryResponse";
 import {
   type InfiniteData,
   type QueryClient,
@@ -93,11 +92,7 @@ export function useSessionList({ enabled = true }: Args = {}) {
         getTenantRequestInit(activeOrgID, activeTeamID, isTenantReady),
       ),
     initialPageParam: 0,
-    getNextPageParam: (lastPage, allPages) => {
-      if (lastPage.status !== 200) return undefined;
-      const loaded = countLoadedSessions(allPages);
-      return loaded < lastPage.data.total ? loaded : undefined;
-    },
+    getNextPageParam: getNextSessionListOffset,
     structuralSharing: shareSessionListData,
     refetchInterval: (listQuery) =>
       hasOlderPages(listQuery.state.data)
@@ -175,6 +170,17 @@ export function useSessionList({ enabled = true }: Args = {}) {
   };
 }
 
+/** `getNextPageParam` for a paged session list: the next offset, or none
+ *  once every session the server counts is loaded. */
+export function getNextSessionListOffset(
+  lastPage: SessionListPage,
+  allPages: SessionListPage[],
+) {
+  if (lastPage.status !== 200) return undefined;
+  const loaded = countLoadedSessions(allPages);
+  return loaded < lastPage.data.total ? loaded : undefined;
+}
+
 export function flattenSessions(data: SessionListInfiniteData | undefined) {
   if (!data) return [];
   return data.pages.flatMap((page) =>
@@ -230,32 +236,13 @@ export function removeSessionFromList(
   };
 }
 
-export interface SessionGroup {
-  expertId: string | null;
-  sessions: SessionSummaryResponse[];
-}
-
-export function groupSessionsByExpert(
-  sessions: SessionSummaryResponse[],
-): SessionGroup[] {
-  const byExpert = new Map<string | null, SessionSummaryResponse[]>();
-  for (const session of sessions) {
-    const key = session.expert_id ?? null;
-    const bucket = byExpert.get(key);
-    if (bucket) {
-      bucket.push(session);
-    } else {
-      byExpert.set(key, [session]);
-    }
-  }
-  return [...byExpert.entries()]
-    .map(([expertId, grouped]) => ({ expertId, sessions: grouped }))
-    .sort((a, b) => {
-      if (a.expertId === b.expertId) return 0;
-      if (a.expertId === null) return -1;
-      if (b.expertId === null) return 1;
-      return 0;
-    });
+/** Ids of the chats with a delete in flight, which every list leaves out
+ *  whatever a refetch returns before the server has removed them. */
+export function useDeletingSessionIds() {
+  return useMutationState({
+    filters: { mutationKey: SESSION_DELETE_MUTATION_KEY, status: "pending" },
+    select: (mutation) => (mutation.state.variables as { id: string }).id,
+  });
 }
 
 function hasOlderPages(data: SessionListInfiniteData | undefined) {

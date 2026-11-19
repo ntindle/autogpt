@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal, Mapping, Sequence
 
@@ -34,6 +34,7 @@ from backend.data.tenancy import (
     agent_graph_attachment_barrier,
     agent_graph_attachment_barriers,
     live_resource_access_barrier,
+    require_role_where_resource_lives,
 )
 from backend.executor import utils as execution_utils
 from backend.integrations.webhooks.graph_lifecycle_hooks import (
@@ -47,6 +48,24 @@ from backend.util.exceptions import GraphInUseError, GraphValidationError
 # Every route here is authenticated by the router and tagged "graphs" at the
 # mount; execute_graph adds Depends(enforce_payment_paywall) on top.
 router = APIRouter(dependencies=[Security(requires_user)])
+
+# The request's org (and team) must let the caller see, change or run its
+# workflows. Deleting checks the create actions: the matrix's DELETE_AGENTS is
+# for team admins only, and plain team members delete their own workflows.
+GraphViewContext = Annotated[
+    RequestContext,
+    requires_resource_permission(OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS),
+]
+GraphChangeContext = Annotated[
+    RequestContext,
+    requires_resource_permission(OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS),
+]
+GraphRunContext = Annotated[
+    RequestContext,
+    requires_resource_permission(
+        OrgAction.EXECUTE_RESOURCES, TeamAction.EXECUTE_AGENTS
+    ),
+]
 
 
 @asynccontextmanager
@@ -298,6 +317,9 @@ async def create_new_graph(
 
     graph = graph_db.make_graph_model(create_graph.graph, user_id)
     submitted_node_ids = graph.reassign_ids(user_id=user_id, reassign_graph_id=True)
+    if create_graph.source == "upload":
+        # An uploaded file is a copy too: it may come from someone else.
+        await graph_db.clear_sub_graph_refs_owned_by(graph, user_id)
     _validate_graph_to_save(graph, submitted_node_ids)
 
     async with _live_graph_mutation(user_id, ctx.org_id, team_id, graph.id, "create"):
@@ -346,6 +368,12 @@ async def delete_graph(
         team_id_restriction=target_team_id,
     ):
         return {"version_counts": 0}
+    await _require_role_where_versions_live(
+        user_id,
+        await graph_db.owned_graph_scopes(
+            graph_id, user_id=user_id, organization_id=ctx.org_id
+        ),
+    )
 
     try:
         # Refuse before touching anything, so a rejected delete leaves the
@@ -431,6 +459,9 @@ async def update_graph(
     )
     if not existing_versions:
         raise HTTPException(404, detail=f"Workflow #{graph_id} not found")
+    await _require_role_where_versions_live(
+        user_id, {(v.organization_id, v.team_id) for v in existing_versions}
+    )
 
     latest_version = max(g.version for g in existing_versions)
     graph.version = latest_version + 1
@@ -568,6 +599,14 @@ async def set_graph_active_version(
         organization_id=ctx.org_id,
         team_id=target_team_id,
     )
+    await _require_role_where_versions_live(
+        user_id,
+        {
+            (g.organization_id, g.team_id)
+            for g in (new_active_graph, current_active_graph)
+            if g is not None
+        },
+    )
 
     # Validate the new graph's credentials before flipping the active version.
     # Capture the returned graph: before_graph_activate may clear stale
@@ -686,6 +725,12 @@ async def execute_graph(
     preset_id: Optional[str] = None,
     dry_run: Annotated[bool, Body(embed=True)] = False,
 ) -> execution_db.GraphExecutionMeta:
+    # The run is billed to the request's org, so the workflow must be one it can see.
+    if not await graph_db.get_graph(
+        graph_id, graph_version, user_id=user_id, organization_id=ctx.org_id
+    ):
+        raise HTTPException(status_code=404, detail=f"Workflow #{graph_id} not found.")
+
     if not dry_run:
         credit_model = await get_credit_model(user_id, ctx.org_id)
         current_balance = await credit_model.get_credits(user_id)
@@ -771,6 +816,22 @@ async def execute_graph(
     except Exception:
         record_graph_operation(operation="execute", status="error")
         raise
+
+
+async def _require_role_where_versions_live(
+    user_id: str, scopes: Iterable[tuple[str | None, str | None]]
+) -> None:
+    """Refuse a change to the caller's own workflow when their role in an org
+    or team its versions live in withholds it, whatever org the request names.
+    """
+    for organization_id, team_id in scopes:
+        await require_role_where_resource_lives(
+            user_id,
+            organization_id,
+            team_id,
+            OrgAction.CREATE_RESOURCES,
+            TeamAction.CREATE_AGENTS,
+        )
 
 
 async def _save_as_fork(

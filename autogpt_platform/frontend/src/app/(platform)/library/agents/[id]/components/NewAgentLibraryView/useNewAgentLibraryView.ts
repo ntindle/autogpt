@@ -22,6 +22,8 @@ import {
 } from "@/components/contextual/TeamPicker/helpers";
 import { Flag, useFlagStatus } from "@/services/feature-flags/use-get-flag";
 import { useOrgTeamStore } from "@/services/org-team/store";
+import { useSchedulerOutage } from "@/services/schedules/useSchedulerOutage";
+import { useSchedulerRetryOptions } from "@/services/schedules/useSchedulerQueryOptions";
 import { useParams } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 import { parseAsString, useQueryStates } from "nuqs";
@@ -229,7 +231,8 @@ export function useNewAgentLibraryView() {
     });
   }
 
-  const { data: schedules } = useGetV1ListExecutionSchedulesForAGraph(
+  const schedulerRetryOptions = useSchedulerRetryOptions();
+  const schedulesQuery = useGetV1ListExecutionSchedulesForAGraph(
     agent?.graph_id || "",
     {
       request: getTenantRequestInit(agentOrgID, agentTeamID),
@@ -243,9 +246,13 @@ export function useNewAgentLibraryView() {
         ),
         enabled: !!agent?.graph_id,
         select: okData,
+        ...schedulerRetryOptions,
       },
     },
   );
+  const schedules = schedulesQuery.data;
+  // Unknown, not none: a workflow with schedules but no runs yet isn't empty.
+  const schedulesUnavailable = useSchedulerOutage(schedulesQuery);
 
   function handleScheduleDeleted(deletedScheduleId: string) {
     if (activeItem !== deletedScheduleId) {
@@ -365,7 +372,11 @@ export function useNewAgentLibraryView() {
     activeTemplate,
     isTemplateLoading,
     error: error || templateError,
-    hasAnyItems,
+    // The sidebar reports its counts after it renders; the page's own read
+    // already has the schedules, so a schedule-only workflow that comes back
+    // from an outage never drops to the first-run screen meanwhile.
+    hasAnyItems: hasAnyItems || (schedules?.length ?? 0) > 0,
+    schedulesUnavailable,
     showSidebarLayout,
     activeItemId,
     selectedTriggerKind,

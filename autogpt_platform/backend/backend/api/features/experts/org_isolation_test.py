@@ -33,7 +33,7 @@ async def test_private_expert_uses_saved_business_org(mocker):
 
 @pytest.mark.asyncio
 async def test_private_expert_denies_revoked_membership(mocker):
-    row = SimpleNamespace(organizationId="personal", teamId="default")
+    row = SimpleNamespace(id="expert", organizationId="personal", teamId="default")
     mocker.patch(
         "prisma.models.Expert.prisma",
         return_value=MagicMock(find_first=AsyncMock(return_value=row)),

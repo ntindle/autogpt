@@ -8,6 +8,8 @@ import {
   getTenantRequestInit,
 } from "@/components/contextual/TeamPicker/helpers";
 import { useOrgTeamStore } from "@/services/org-team/store";
+import { hasUnknownSchedules } from "@/services/schedules/scheduler-availability";
+import { useRecheckWhileSchedulesUnknown } from "@/services/schedules/useRecheckWhileSchedulesUnknown";
 import { useEffect, useMemo } from "react";
 import { buildAgentInfoMap } from "./store";
 
@@ -26,6 +28,7 @@ export function useLibraryAgents() {
     page_size: PAGE_SIZE,
     is_hidden: false,
   };
+  const recheckWhileSchedulesUnknown = useRecheckWhileSchedulesUnknown();
   const {
     data: agentsQueryData,
     isLoading: isRefreshing,
@@ -37,6 +40,12 @@ export function useLibraryAgents() {
     query: {
       enabled: isTenantReady,
       getNextPageParam: getPaginationNextPageNumber,
+      refetchInterval: (query) =>
+        recheckWhileSchedulesUnknown(
+          hasUnknownSchedules(
+            query.state.data ? unpaginate(query.state.data, "agents") : [],
+          ),
+        ),
       queryKey: getTeamScopedQueryKey(
         getGetV2ListLibraryAgentsQueryKey(params),
         activeOrgID,

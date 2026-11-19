@@ -1,8 +1,17 @@
 import { deleteV2DeleteSession } from "@/app/api/__generated__/endpoints/chat/chat";
-import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+import {
+  getTeamScopedQueryKey,
+  getTenantRequestInit,
+} from "@/components/contextual/TeamPicker/helpers";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { parseAsString, useQueryStates } from "nuqs";
+import {
+  SESSION_GROUP_PAGES_QUERY_KEY,
+  SESSION_GROUPS_QUERY_KEY,
+  type SessionGroupsResult,
+  removeSessionFromGroups,
+} from "./sessionGroups";
 import { useCopilotUIStore, type DeleteTarget } from "./store";
 import {
   getSessionListQueryKey,
@@ -17,7 +26,8 @@ import {
  * the open one (with its `expertId`, so the expert's latest-thread adoption
  * cannot select it again), and fires the delete mutation. `useSessionList`
  * hides the chat while the mutation is pending. On success it is dropped from
- * the cached list; on error the chat shows again and a toast is shown.
+ * the cached lists, the sidebar's groups included; on error the chat shows
+ * again and a toast is shown.
  *
  * Consumed by the app sidebar's recent-chats list so it can render its own
  * `DeleteChatDialog` without duplicating the mutation wiring.
@@ -48,6 +58,26 @@ export function useSessionDeletion() {
         },
         (data) => removeSessionFromList(data, target.id),
       );
+      queryClient.setQueriesData<SessionGroupsResult>(
+        {
+          queryKey: getTeamScopedQueryKey(
+            SESSION_GROUPS_QUERY_KEY,
+            target.organizationId,
+            target.teamId,
+          ),
+        },
+        (data) => removeSessionFromGroups(data, target.id),
+      );
+      queryClient.setQueriesData<SessionListInfiniteData>(
+        {
+          queryKey: getTeamScopedQueryKey(
+            SESSION_GROUP_PAGES_QUERY_KEY,
+            target.organizationId,
+            target.teamId,
+          ),
+        },
+        (data) => removeSessionFromList(data, target.id),
+      );
       if (target.id === sessionId) leaveChat();
     },
     onError: (error) => {
@@ -62,6 +92,18 @@ export function useSessionDeletion() {
       queryClient.invalidateQueries({
         queryKey: getSessionListQueryKey(target.organizationId, target.teamId),
       });
+      for (const prefix of [
+        SESSION_GROUPS_QUERY_KEY,
+        SESSION_GROUP_PAGES_QUERY_KEY,
+      ]) {
+        void queryClient.invalidateQueries({
+          queryKey: getTeamScopedQueryKey(
+            prefix,
+            target.organizationId,
+            target.teamId,
+          ),
+        });
+      }
     },
   });
 

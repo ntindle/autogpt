@@ -12,6 +12,9 @@ from backend.api.features.schedules import routes as schedules
 
 @pytest.mark.asyncio
 async def test_org_home_execute_rejects_team_only_graph_before_create(mocker) -> None:
+    mocker.patch.object(
+        graphs.graph_db, "get_graph", AsyncMock(return_value=MagicMock())
+    )
     credit_model = MagicMock(get_credits=AsyncMock(return_value=1))
     mocker.patch.object(
         graphs, "get_credit_model", AsyncMock(return_value=credit_model)
@@ -62,6 +65,9 @@ async def test_org_home_execute_rejects_team_only_graph_before_create(mocker) ->
 
 @pytest.mark.asyncio
 async def test_execute_rejects_foreign_preset_before_graph_lookup(mocker) -> None:
+    mocker.patch.object(
+        graphs.graph_db, "get_graph", AsyncMock(return_value=MagicMock())
+    )
     credit_model = MagicMock(get_credits=AsyncMock(return_value=1))
     mocker.patch.object(
         graphs, "get_credit_model", AsyncMock(return_value=credit_model)
@@ -204,6 +210,7 @@ async def test_team_schedule_accepts_exact_consumer_authorization(
 
 @pytest.mark.asyncio
 async def test_api_key_body_team_checks_target_manage_permission(mocker) -> None:
+    mocker.patch.object(api_keys, "refuse_closed_account", AsyncMock())
     mocker.patch.object(
         api_keys, "resolve_write_team_id", AsyncMock(return_value="team-a")
     )

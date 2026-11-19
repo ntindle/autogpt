@@ -13,6 +13,7 @@ import { useActiveOrgWallet } from "@/services/org-team/useActiveOrgWallet";
 import confetti, { type Options as ConfettiOptions } from "canvas-confetti";
 import { useEffect, useRef, useState } from "react";
 import { getTaskGroups } from "./helpers";
+import { useRefreshBalanceOnSpend } from "./useRefreshBalanceOnSpend";
 
 export function useWallet() {
   const { state, updateState } = useOnboarding();
@@ -165,6 +166,8 @@ export function useWallet() {
       detachMessage();
     };
   }, [api]);
+
+  useRefreshBalanceOnSpend(fetchCredits);
 
   // Wallet flash on credits change
   useEffect(() => {

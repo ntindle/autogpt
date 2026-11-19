@@ -14,6 +14,7 @@ import fastapi
 import fastapi.testclient
 import pytest
 from autogpt_libs.auth.models import RequestContext
+from prisma.enums import APIKeyStatus
 
 from backend.util.exceptions import (
     InsufficientBalanceError,
@@ -662,6 +663,7 @@ class TestOrgDbMembers:
         self.prisma.user.find_unique = AsyncMock(return_value=None)
         self.prisma.orginvitation.update_many = AsyncMock()
         self.prisma.orgmember.count = AsyncMock(return_value=0)
+        self.prisma.apikey.update_many = AsyncMock(return_value=0)
         mocker.patch("backend.api.features.orgs.db.prisma", self.prisma)
         mocker.patch(
             "backend.api.features.orgs.db.transaction",
@@ -789,6 +791,15 @@ class TestOrgDbMembers:
         assert invitation_where["orgId"] == ORG_ID
         assert {"targetUserId": OTHER_USER_ID} in invitation_where["OR"]
         assert any("email" in identity for identity in invitation_where["OR"])
+
+        # The keys the member made in this org go with it, and only those.
+        revoked = self.prisma.apikey.update_many.await_args.kwargs
+        assert revoked["where"] == {
+            "userId": OTHER_USER_ID,
+            "organizationId": ORG_ID,
+            "status": {"not": APIKeyStatus.REVOKED},
+        }
+        assert revoked["data"]["status"] == APIKeyStatus.REVOKED
 
     @pytest.mark.asyncio
     async def test_remove_owner_raises_value_error(self):
@@ -1387,6 +1398,9 @@ class TestWorkspaceDbJoinLeave:
     def _mock_prisma(self, mocker):
         self.prisma = MagicMock()
         _configure_mock_client_tx(self.prisma)
+        self.prisma.execute_raw = AsyncMock()
+        self.prisma.teammember.find_unique = AsyncMock(return_value=None)
+        self.prisma.apikey.update_many = AsyncMock(return_value=0)
         mocker.patch("backend.api.features.orgs.team_db.prisma", self.prisma)
         _configure_team_removal_mocks(mocker, self.prisma)
 
@@ -1476,6 +1490,7 @@ class TestWorkspaceDbDelete:
     @pytest.fixture(autouse=True)
     def _mock_prisma(self, mocker):
         self.prisma = MagicMock()
+        self.prisma.apikey.update_many = AsyncMock(return_value=0)
         mocker.patch("backend.api.features.orgs.team_db.prisma", self.prisma)
         tx = MagicMock()
         tx.__aenter__ = AsyncMock(return_value=self.prisma)
@@ -3143,6 +3158,7 @@ class TestSelfRemovalPrevention:
     @pytest.fixture(autouse=True)
     def setup(self, mocker):
         self.prisma = MagicMock()
+        self.prisma.apikey.update_many = AsyncMock(return_value=0)
         mocker.patch("backend.api.features.orgs.db.prisma", self.prisma)
         _configure_member_removal_mocks(mocker, self.prisma)
 
@@ -3290,6 +3306,7 @@ class TestLastAdminGuard:
     def setup(self, mocker):
         self.prisma = MagicMock()
         self.prisma.execute_raw = AsyncMock()
+        self.prisma.apikey.update_many = AsyncMock(return_value=0)
         mocker.patch("backend.api.features.orgs.team_db.prisma", self.prisma)
         self.prisma.team.find_unique = AsyncMock(return_value=_make_workspace())
         _configure_team_removal_mocks(mocker, self.prisma)
@@ -3335,6 +3352,12 @@ class TestLastAdminGuard:
         self.prisma.teammember.delete.assert_called_once()
         # Should NOT have checked admin count
         self.prisma.teammember.count.assert_not_called()
+        revoked = self.prisma.apikey.update_many.await_args.kwargs
+        assert revoked["where"] == {
+            "userId": "regular-1",
+            "teamIdRestriction": WS_ID,
+            "status": {"not": APIKeyStatus.REVOKED},
+        }
 
     @pytest.mark.parametrize("resource", ["userworkspacefile", "userworkspacefolder"])
     @pytest.mark.asyncio
@@ -4232,6 +4255,7 @@ class TestTeamManagementByTeamId:
     def _mock_prisma(self, mocker):
         self.prisma = MagicMock()
         self.prisma.execute_raw = AsyncMock()
+        self.prisma.apikey.update_many = AsyncMock(return_value=0)
         mocker.patch("backend.api.features.orgs.team_db.prisma", self.prisma)
         # Routes team_db's transactions through the mocked client and stubs the
         # owned-resource checks a removal runs.

@@ -33,6 +33,7 @@ from backend.data.db_accessors import (
     execution_db,
     graph_db,
     library_db,
+    orgs_db,
     user_db,
 )
 from backend.data.execution import (
@@ -53,6 +54,7 @@ from backend.util.exceptions import (
     InvalidInputError,
     MissingConfigError,
     NotFoundError,
+    UserPaywalledError,
 )
 from backend.util.tenancy_urls import library_agent_path
 from backend.util.timezone_utils import (
@@ -95,6 +97,7 @@ from .models import (
     ToolResponseBase,
     UserReadiness,
 )
+from .schedule_duplicates import find_duplicate_graph_schedule
 from .utils import (
     build_missing_credentials_from_graph,
     extract_credentials_from_schema,
@@ -1147,6 +1150,13 @@ class RunAgentTool(BaseTool):
                 expert_id=session.expert_id,
                 inputs=inputs,
             )
+        except UserPaywalledError as e:
+            logger.info(f"run_agent refused for user {user_id}: no subscription")
+            return ErrorResponse(
+                message=str(e),
+                error="subscription_required",
+                session_id=session_id,
+            ).from_outside()
 
         library_agent_link = library_agent_path(
             library_agent.id, library_agent.organization_id, library_agent.team_id
@@ -1463,7 +1473,27 @@ class RunAgentTool(BaseTool):
                     session.organization_id,
                     session.team_id,
                 )
-                result = await get_scheduler_client().add_execution_schedule(
+                org_id, team_id = session.organization_id, session.team_id
+                if org_id is None:
+                    org_id, team_id = await orgs_db().get_user_default_team(user_id)
+                scheduler = get_scheduler_client()
+                existing = await find_duplicate_graph_schedule(
+                    scheduler,
+                    user_id,
+                    session,
+                    graph_id=library_agent.graph_id,
+                    graph_version=graph.version,
+                    cron=cron,
+                    timezone=user_timezone,
+                    inputs=inputs,
+                    input_defaults=_input_defaults(graph),
+                    credentials=graph_credentials,
+                    tenant=(org_id, team_id),
+                    default_tenant=lambda: orgs_db().get_user_default_team(user_id),
+                )
+                if existing is not None:
+                    return library_agent, existing, True
+                result = await scheduler.add_execution_schedule(
                     user_id=user_id,
                     graph_id=library_agent.graph_id,
                     graph_version=graph.version,
@@ -1477,12 +1507,34 @@ class RunAgentTool(BaseTool):
                     expert_id=session.expert_id,
                 )
                 emit_tool_display_name(library_agent.name)
-                return library_agent, result
+                return library_agent, result, False
 
             async with agent_graph_attachment_lease([graph.id]) as attachment_guard:
-                library_agent, result = await attachment_guard.run(
+                library_agent, result, duplicate = await attachment_guard.run(
                     attach_and_schedule()
                 )
+            if duplicate:
+                return ExecutionStartedResponse(
+                    message=(
+                        f"Already scheduled: '{result.name}' runs workflow "
+                        f"'{library_agent.name}' on '{cron}' with these inputs, so "
+                        "no second schedule was added. To change it, delete it with "
+                        "tool:delete_schedule and schedule the new one. "
+                        f"{MSG_DO_NOT_SCHEDULE_AGAIN}"
+                    ),
+                    session_id=session_id,
+                    execution_id=result.id,
+                    graph_id=library_agent.graph_id,
+                    graph_name=library_agent.name,
+                    library_agent_id=library_agent.id,
+                    library_agent_link=library_agent_path(
+                        library_agent.id,
+                        library_agent.organization_id,
+                        library_agent.team_id,
+                    ),
+                    status=SCHEDULED_STATUS,
+                ).from_outside()
+
         except GraphValidationError as e:
             return await self._handle_graph_validation_race(
                 error=e,
@@ -1534,6 +1586,15 @@ class RunAgentTool(BaseTool):
             library_agent_link=library_agent_link,
             status=SCHEDULED_STATUS,
         ).from_outside()
+
+
+def _input_defaults(graph: GraphModel) -> dict[str, Any]:
+    """What a run fills an omitted input with."""
+    return {
+        name: field["default"]
+        for name, field in graph.input_schema.get("properties", {}).items()
+        if "default" in field
+    }
 
 
 def _unexpected_error(error: Exception, session: ChatSession) -> ErrorResponse:

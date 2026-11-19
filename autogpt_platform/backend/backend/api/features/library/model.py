@@ -265,6 +265,18 @@ class RecentExecution(pydantic.BaseModel):
     activity_summary: str | None = None
 
 
+class ScheduleInfo(pydantic.BaseModel):
+    """Each graph's earliest next run, and whether the scheduler answered.
+
+    ``available=False`` means the schedules are unknown, not absent.
+    """
+
+    next_runs: dict[str | tuple[str, int, str | None, str | None], str] = (
+        pydantic.Field(default_factory=dict)
+    )
+    available: bool = True
+
+
 def parse_settings(settings: dict | str | None) -> GraphSettings:
     """Parse settings from database, handling both dict and string formats."""
     if settings is None:
@@ -349,6 +361,13 @@ class LibraryAgent(pydantic.BaseModel):
         default=None,
         description="ISO 8601 timestamp of the next scheduled run, if any",
     )
+    schedule_info_unavailable: bool = pydantic.Field(
+        default=False,
+        description=(
+            "The scheduler didn't answer, so is_scheduled and next_scheduled_run "
+            "are unknown rather than false"
+        ),
+    )
     settings: GraphSettings = pydantic.Field(default_factory=GraphSettings)
     marketplace_listing: Optional["MarketplaceListing"] = None
     store_listing_version_id: str | None = None
@@ -359,9 +378,7 @@ class LibraryAgent(pydantic.BaseModel):
         sub_graphs: Optional[list[prisma.models.AgentGraph]] = None,
         store_listing: Optional[prisma.models.StoreListing] = None,
         execution_count_override: Optional[int] = None,
-        schedule_info: Optional[
-            dict[str | tuple[str, int, str | None, str | None], str]
-        ] = None,
+        schedule_info: Optional[ScheduleInfo] = None,
         store_listing_version_id: Optional[str] = None,
     ) -> "LibraryAgent":
         """
@@ -370,6 +387,7 @@ class LibraryAgent(pydantic.BaseModel):
         """
         if not agent.AgentGraph:
             raise ValueError("Associated Agent record is required.")
+        next_runs = schedule_info.next_runs if schedule_info else {}
 
         graph = GraphModel.from_db(agent.AgentGraph, sub_graphs=sub_graphs)
         if agent.AgentGraph.userId != agent.userId:
@@ -485,8 +503,7 @@ class LibraryAgent(pydantic.BaseModel):
             agent.teamId,
         )
         next_scheduled_run = (
-            schedule_info.get(schedule_scope_key)
-            or schedule_info.get(agent.agentGraphId)
+            next_runs.get(schedule_scope_key) or next_runs.get(agent.agentGraphId)
             if schedule_info
             else None
         )
@@ -539,6 +556,9 @@ class LibraryAgent(pydantic.BaseModel):
             is_scheduled=next_scheduled_run is not None,
             next_scheduled_run=next_scheduled_run,
             settings=parse_settings(agent.settings),
+            schedule_info_unavailable=bool(
+                schedule_info and not schedule_info.available
+            ),
             marketplace_listing=marketplace_listing_info,
             store_listing_version_id=store_listing_version_id,
         )

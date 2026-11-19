@@ -47,6 +47,12 @@ export function ScheduleAgentModal({
     onClose: onClose,
   });
 
+  const canSchedule =
+    scheduleName.trim() !== "" &&
+    isScheduleFormValid &&
+    cronExpression !== "" &&
+    isReady;
+
   function handleClose() {
     resetForm();
     setIsScheduleFormValid(true);
@@ -54,7 +60,7 @@ export function ScheduleAgentModal({
   }
 
   async function handleScheduleClick() {
-    if (!scheduleName.trim() || !isScheduleFormValid) return;
+    if (!canSchedule) return;
 
     try {
       await handleSchedule(scheduleName, cronExpression);
@@ -63,8 +69,6 @@ export function ScheduleAgentModal({
       console.error("Failed to create schedule:", error);
     }
   }
-
-  const canSchedule = scheduleName.trim() && isScheduleFormValid && isReady;
 
   return (
     <Dialog

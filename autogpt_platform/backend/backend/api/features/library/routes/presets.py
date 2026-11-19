@@ -9,6 +9,7 @@ from backend.api.live_auth import live_dependency, requires_live_resource_permis
 from backend.data.entitlement import enforce_payment_paywall
 from backend.data.execution import ExecutionTrigger, GraphExecutionMeta
 from backend.data.model import CredentialsMetaInput
+from backend.data.tenancy import require_role_where_resource_lives
 from backend.executor.utils import add_graph_execution
 from backend.util.exceptions import (
     ExpertRunPausedError,
@@ -368,6 +369,24 @@ async def execute_preset(
     # Merge input overrides with preset inputs
     merged_node_input = preset.inputs | inputs
     merged_credential_inputs = preset.credentials | credential_inputs
+
+    # Resource-follows-parent: the execution attributes (visibility + org
+    # credit spend) to the preset's own org/team — set from its parent
+    # graph at creation — not the caller's active header org. Untagged
+    # legacy presets fall back to the caller's context.
+    exec_org_id, exec_team_id = (
+        (preset.organization_id, preset.team_id)
+        if preset.organization_id
+        else (ctx.org_id, ctx.team_id)
+    )
+    # So the caller's role there must allow the run, not only in the request's.
+    await require_role_where_resource_lives(
+        user_id,
+        exec_org_id,
+        exec_team_id,
+        autogpt_auth_lib.OrgAction.EXECUTE_RESOURCES,
+        autogpt_auth_lib.TeamAction.EXECUTE_AGENTS,
+    )
 
     try:
         return await add_graph_execution(
