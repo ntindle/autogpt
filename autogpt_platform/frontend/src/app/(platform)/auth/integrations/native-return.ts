@@ -3,10 +3,6 @@ import { NextResponse } from "next/server";
 
 // Matches NATIVE_STATE_PREFIX in backend/integrations/credentials_store.py.
 const NATIVE_STATE_PREFIX = "native.";
-// Fixed: the app registers this scheme and waits for exactly this address
-// (OAUTH_RETURN_URL in mobile-app/src/lib/api/integrations.ts).
-
-
 interface NativeCallback {
   state: string;
   code: string | null;
@@ -26,7 +22,9 @@ export function redirectToNativeApp({
   error,
   errorDescription,
 }: NativeCallback) {
-  const url = new URL(`${getMobileAppConfig()?.scheme ?? "autogpt-app"}://integrations/oauth`);
+  const url = new URL(
+    `${getMobileAppConfig()?.scheme ?? "autogpt-app"}://integrations/oauth`,
+  );
   const params = code
     ? { code, state, iss }
     : {
