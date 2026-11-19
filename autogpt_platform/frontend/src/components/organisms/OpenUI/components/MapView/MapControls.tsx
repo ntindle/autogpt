@@ -20,8 +20,8 @@ export function MapControls({
   const id = useId();
   return (
     <div className="space-y-3 p-4">
-      <h3 className="text-sm font-semibold text-zinc-800">{title}</h3>
-      <p className="text-xs leading-relaxed text-zinc-500">{description}</p>
+      <h3 className="text-sm text-zinc-800 font-semibold">{title}</h3>
+      <p className="text-xs text-zinc-500 leading-relaxed">{description}</p>
       <div className="flex flex-wrap items-start gap-2">
         <Input
           id={id}

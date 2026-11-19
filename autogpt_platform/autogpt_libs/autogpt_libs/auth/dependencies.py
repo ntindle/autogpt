@@ -696,20 +696,39 @@ def requires_resource_permission(
     org_action: OrgAction,
     team_action: TeamAction,
 ):
-    """Enforce the appropriate permission for org-home or team resources."""
+    """Factory returning a FastAPI dependency for routes that read or change
+    an org's workflows, runs, library or marketplace submissions.
+
+    In org-home context the user must hold *org_action*; in a team context,
+    *team_action* in that team as well. The matrix gives billing managers none
+    of the resource actions, so a membership whose only role is billing
+    manager is refused with 403.
+
+    Example::
+
+        @router.get("/executions")
+        async def list_executions(
+            ctx: RequestContext = Security(
+                requires_resource_permission(
+                    OrgAction.VIEW_RESOURCES, TeamAction.VIEW_EXECUTIONS
+                )
+            ),
+        ):
+            ...
+    """
 
     async def _dependency(
         ctx: RequestContext = fastapi.Security(get_request_context),
     ) -> RequestContext:
-        allowed = check_org_permission(ctx, org_action)
-        if ctx.team_id is not None:
-            allowed = allowed and check_team_permission(ctx, team_action)
-        if not allowed:
-            scope = "workspace" if ctx.team_id is not None else "org"
-            action = team_action.value if ctx.team_id is not None else org_action.value
+        if not check_org_permission(ctx, org_action):
             raise fastapi.HTTPException(
                 status_code=403,
-                detail=f"Missing {scope} permission: {action}",
+                detail="Your role in this organization doesn't allow this.",
+            )
+        if ctx.team_id is not None and not check_team_permission(ctx, team_action):
+            raise fastapi.HTTPException(
+                status_code=403,
+                detail="Your role in this workspace doesn't allow this.",
             )
         return ctx
 

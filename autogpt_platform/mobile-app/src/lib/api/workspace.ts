@@ -1,10 +1,15 @@
 import {
   decodeUtf8,
+  FULL_TEXT_LIMIT,
   isPreviewed,
   PREVIEW_BYTES,
   trimPartialUtf8,
 } from "@/features/files/helpers";
-import { clearAccessToken } from "@/lib/auth/token";
+import {
+  assertSameSession,
+  clearAccessToken,
+  sessionMark,
+} from "@/lib/auth/token";
 import { workspaceAccessHeaders, workspaceFetch } from "@/lib/workspaceAccess";
 
 import {
@@ -48,20 +53,33 @@ export const workspaceKeys = {
   fileText: (fileID: string) => ["workspace", "file-text", fileID] as const,
   imageHeaders: (file: WorkspaceFile) =>
     ["workspace", "image-headers", ...resourceKey(file)] as const,
+  thumbnailHeaders: (file: WorkspaceFile) =>
+    ["workspace", "thumbnail-headers", ...resourceKey(file)] as const,
 };
 
-export async function listSessionFiles(sessionID: string) {
-  const data = await apiRequest<FileList>("/api/workspace/files", {
-    query: { session_id: sessionID },
-  });
-  return data.files;
+const FILES_PAGE_SIZE = 200;
+// A guard against a server that keeps saying there is more.
+const MAX_FILE_PAGES = 25;
+
+export function listSessionFiles(sessionID: string) {
+  return listAllFiles({ session_id: sessionID });
 }
 
-export async function listExpertFiles(expertID: string) {
-  const data = await apiRequest<FileList>("/api/workspace/files", {
-    query: { expert_id: expertID, origin: "generated", limit: 200 },
-  });
-  return data.files;
+export function listExpertFiles(expertID: string) {
+  return listAllFiles({ expert_id: expertID, origin: "generated" });
+}
+
+/** Every page of a file listing; the route answers 200 at a time. */
+async function listAllFiles(filter: Record<string, string>) {
+  const files: WorkspaceFile[] = [];
+  for (let page = 0; page < MAX_FILE_PAGES; page += 1) {
+    const data = await apiRequest<FileList>("/api/workspace/files", {
+      query: { ...filter, limit: FILES_PAGE_SIZE, offset: files.length },
+    });
+    files.push(...data.files);
+    if (!data.has_more || data.files.length === 0) break;
+  }
+  return files;
 }
 
 export function fileDownloadURL(fileID: string) {
@@ -95,6 +113,10 @@ export async function downloadFileText(file: WorkspaceFile): Promise<FileText> {
       const bytes = new Uint8Array(await response.arrayBuffer());
       return { text: decodeUtf8(trimPartialUtf8(bytes)), isPreview: true };
     }
+  }
+  // The whole file is read into memory, so a large one is refused first.
+  if (file.size_bytes > FULL_TEXT_LIMIT) {
+    throw new ApiError(413, "Too large to show");
   }
   const response = await fetchWithFreshToken(
     fileDownloadURL(file.id),
@@ -155,7 +177,9 @@ export async function uploadSessionFile(
     session_id: sessionID ?? undefined,
   });
   // A fresh body per request: React Native reads the file as it sends.
+  const mark = sessionMark();
   const scopeHeaders = sessionID ? await sessionScopeHeaders(sessionID) : {};
+  assertSameSession(mark);
   const response = await fetchWithFreshToken(
     url,
     () => {
@@ -191,17 +215,19 @@ async function fetchWithFreshToken(
   init: () => RequestInit = () => ({}),
   scopeHeaders: Record<string, string> = {},
 ) {
+  const mark = sessionMark();
   let response = await workspaceFetch(url, {
     ...init(),
     headers: { ...(await authHeaders()), ...scopeHeaders },
   });
-  // Same as apiRequest: one retry with a fresh token before the session counts as gone.
   if (response.status === 401) {
+    assertSameSession(mark);
     clearAccessToken();
     response = await workspaceFetch(url, {
       ...init(),
       headers: { ...(await authHeaders()), ...scopeHeaders },
     });
+    assertSameSession(mark);
   }
   return response;
 }

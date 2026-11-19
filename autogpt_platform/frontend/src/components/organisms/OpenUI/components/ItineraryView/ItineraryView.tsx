@@ -106,7 +106,7 @@ export function ItineraryView({ props }: ComponentRenderProps<ItineraryProps>) {
       {plan.result && (
         <ul
           aria-label="Transfers"
-          className="space-y-2 text-xs text-muted-foreground"
+          className="text-xs space-y-2 text-muted-foreground"
         >
           {plan.result.allocations
             .filter(

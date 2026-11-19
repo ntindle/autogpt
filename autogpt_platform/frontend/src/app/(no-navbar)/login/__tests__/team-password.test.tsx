@@ -49,14 +49,6 @@ describe.each([
     fireEvent.change(screen.getByLabelText("Password", { selector: "input" }), {
       target: { value: "local-preview-password" },
     });
-    if (name === "signup") {
-      fireEvent.change(
-        screen.getByLabelText("Confirm Password", { selector: "input" }),
-        {
-          target: { value: "local-preview-password" },
-        },
-      );
-    }
     fireEvent.click(screen.getByRole("button", { name: submit }));
   }
 

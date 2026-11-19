@@ -104,6 +104,13 @@ class _Store:
         # What ran, in order: "lock" for each live tenancy lock, "count" for
         # each admin count.
         self.events: list[str] = []
+        self.apikey = SimpleNamespace(update_many=self._revoke_keys)
+        self.locked: list[str] = []
+        self.revoked_keys: list[dict] = []
+
+    async def _revoke_keys(self, where, data):
+        self.revoked_keys.append(where)
+        return 0
 
     def tx(self, timeout=None):
         @asynccontextmanager
@@ -206,6 +213,8 @@ async def test_non_admin_can_leave(store):
 
     await team_db.leave_team(WS, "member", ORG)
     assert (WS, "member") not in store.teammember.rows
+    assert [w["teamIdRestriction"] for w in store.revoked_keys] == [WS]
+    assert [w["userId"] for w in store.revoked_keys] == ["member"]
 
 
 @pytest.mark.asyncio

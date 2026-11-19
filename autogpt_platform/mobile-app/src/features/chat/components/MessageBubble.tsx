@@ -9,10 +9,12 @@ import { messageFiles } from "../attachmentHelpers";
 import { groupParts } from "../steps";
 import { Markdown } from "./Markdown";
 import { OnboardingCard } from "./OnboardingCard/OnboardingCard";
+import { SetupCard } from "./SetupCard/SetupCard";
 import { StepsBlock } from "./StepsBlock";
 
 interface Props {
   message: UIMessage;
+  sessionID: string;
   isLive?: boolean;
   /** Text of the next message, or null when this one is the last. */
   replyText: string | null;
@@ -22,6 +24,7 @@ interface Props {
 
 export function MessageBubble({
   message,
+  sessionID,
   isLive = false,
   replyText,
   isBusy,
@@ -41,8 +44,16 @@ export function MessageBubble({
           <View style={styles.files}>
             {fileNames.map((name, index) => (
               <View key={`${index}-${name}`} style={styles.file}>
-                <Icon icon={File01Icon} size={14} color={colors.textSecondary} />
-                <Text style={styles.fileName} numberOfLines={1} ellipsizeMode="middle">
+                <Icon
+                  icon={File01Icon}
+                  size={14}
+                  color={colors.textSecondary}
+                />
+                <Text
+                  style={styles.fileName}
+                  numberOfLines={1}
+                  ellipsizeMode="middle"
+                >
                   {name}
                 </Text>
               </View>
@@ -78,6 +89,19 @@ export function MessageBubble({
             />
           );
         }
+        if (block.kind === "setup") {
+          return (
+            <SetupCard
+              key={block.key}
+              sessionID={sessionID}
+              toolCallID={block.key}
+              setup={block.setup}
+              replyText={replyText}
+              isBusy={isBusy}
+              onSend={onSend}
+            />
+          );
+        }
         return (
           <StepsBlock
             key={block.key}
@@ -100,7 +124,12 @@ const useStyles = createStyles((colors) => ({
     backgroundColor: colors.surfaceRaised,
   },
   userText: { ...type.body, color: colors.text },
-  files: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs, marginTop: spacing.xs },
+  files: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginTop: spacing.xs,
+  },
   file: {
     flexDirection: "row",
     alignItems: "center",

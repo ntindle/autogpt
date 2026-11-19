@@ -13,9 +13,9 @@ export function DataTableView({
     props.rows ?? [],
   );
   return (
-    <section className="min-w-0 overflow-hidden rounded-xl border border-zinc-200 bg-white">
+    <section className="border-zinc-200 bg-white min-w-0 overflow-hidden rounded-xl border">
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
-        <h3 className="text-sm font-semibold text-zinc-800">{props.title}</h3>
+        <h3 className="text-sm text-zinc-800 font-semibold">{props.title}</h3>
         <Input
           id={id}
           label={`Filter ${props.title}`}
@@ -24,13 +24,13 @@ export function DataTableView({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           size="small"
-          className="!h-8 !text-xs"
+          className="!text-xs !h-8"
           wrapperClassName="w-36"
         />
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-left text-xs">
-          <thead className="border-y border-zinc-100 bg-zinc-50 text-zinc-500">
+        <table className="text-xs w-full text-left">
+          <thead className="border-zinc-100 bg-zinc-50 text-zinc-500 border-y">
             <tr>
               {props.columns?.slice(0, 6).map((column, index) => (
                 <th
@@ -46,10 +46,10 @@ export function DataTableView({
                 >
                   <button
                     onClick={() => toggleSort(index)}
-                    className="whitespace-nowrap rounded-sm text-left focus-visible:outline-purple-500"
+                    className="focus-visible:outline-purple-500 rounded-sm text-left whitespace-nowrap"
                   >
                     {column}
-                    <span aria-hidden className="ml-1 text-zinc-400">
+                    <span aria-hidden className="text-zinc-400 ml-1">
                       {sort.column === index
                         ? sort.ascending
                           ? "↑"
@@ -61,13 +61,13 @@ export function DataTableView({
               ))}
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-100">
+          <tbody className="divide-zinc-100 divide-y">
             {visibleRows.map((row, index) => (
               <tr key={index} className="hover:bg-zinc-50">
                 {props.columns?.slice(0, 6).map((column, cellIndex) => (
                   <td
                     key={`${cellIndex}-${column}`}
-                    className="px-5 py-3 text-zinc-700 first:font-medium first:text-zinc-900"
+                    className="text-zinc-700 first:text-zinc-900 px-5 py-3 first:font-medium"
                   >
                     {row[cellIndex]}
                   </td>
@@ -77,7 +77,7 @@ export function DataTableView({
           </tbody>
         </table>
         {!visibleRows.length && (
-          <p className="p-5 text-sm text-zinc-500">
+          <p className="text-sm text-zinc-500 p-5">
             No matching results. Try another filter.
           </p>
         )}

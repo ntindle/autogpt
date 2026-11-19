@@ -21,12 +21,14 @@ _PAYWALL_CHECK_SITES = (
     "backend.data.entitlement.paywall_reason",
     "backend.api.external.v2.mcp_calls.paywall_reason",
 )
+
 _REAL_PAYWALL_REASON = entitlement.paywall_reason
 _BAN_CHECK_SITES = (
     "backend.data.user.is_user_banned",
     "backend.api.external.middleware.is_user_banned",
     "backend.api.ws_api.is_user_banned",
     "backend.data.auth.oauth.is_user_banned",
+    "backend.api.features.account_deletion.restore.is_user_banned",
 )
 # Background work is refused for a banned or a closed account.
 _REFUSAL_CHECK_SITES = (

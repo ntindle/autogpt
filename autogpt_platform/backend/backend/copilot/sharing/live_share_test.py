@@ -36,6 +36,7 @@ async def test_an_allowlisted_file_needs_the_chat_still_shared_under_its_token()
     query, token = tx.query_raw.await_args.args
     assert '"shareToken" = $1' in query
     assert '"isShared" = true' in query
+    assert '"archivedAt" IS NULL' in query
     assert "FOR SHARE" in query
     assert token == TOKEN
     file_prisma.assert_not_called()

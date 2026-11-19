@@ -47,7 +47,7 @@ export function OpenUIFileView({
   if (isMissing) return <>{fallback}</>;
   if (isError || !view || !meta)
     return (
-      <div role="alert" className="my-3 space-y-2 text-sm">
+      <div role="alert" className="text-sm my-3 space-y-2">
         <p>This view couldn&apos;t be loaded.</p>
         <Button
           type="button"

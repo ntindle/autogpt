@@ -23,7 +23,11 @@ export function useShareSheet(sessionID: string) {
   const queryClient = useQueryClient();
   // The web's default: share the chat's runs too, unless the owner says no.
   const [includeRuns, setIncludeRuns] = useState(true);
-  const [createdUrl, setCreatedUrl] = useState<string | null>(null);
+  // The link this sheet made, kept with its token: another device enabling
+  // sharing again replaces the token, and this link then stops working.
+  const [created, setCreated] = useState<{ url: string; token: string } | null>(
+    null,
+  );
   // As on the web: the first tap arms the button, the second stops sharing.
   const [isConfirmingStop, setIsConfirmingStop] = useState(false);
   const state = useQuery({
@@ -32,16 +36,22 @@ export function useShareSheet(sessionID: string) {
   });
 
   function updateState(patch: Partial<ChatShareState>) {
-    queryClient.setQueryData<ChatShareState>(shareKeys.state(sessionID), (old) =>
-      old ? { ...old, ...patch } : old,
+    queryClient.setQueryData<ChatShareState>(
+      shareKeys.state(sessionID),
+      (old) => (old ? { ...old, ...patch } : old),
     );
-    void queryClient.invalidateQueries({ queryKey: shareKeys.state(sessionID) });
+    void queryClient.invalidateQueries({
+      queryKey: shareKeys.state(sessionID),
+    });
   }
 
   const create = useMutation({
     mutationFn: () => enableSharing(sessionID, includeRuns),
     onSuccess(share) {
-      setCreatedUrl(absoluteShareUrl(share.share_url, FRONTEND_URL));
+      setCreated({
+        url: absoluteShareUrl(share.share_url, FRONTEND_URL),
+        token: share.share_token,
+      });
       updateState({
         is_shared: true,
         share_token: share.share_token,
@@ -52,13 +62,14 @@ export function useShareSheet(sessionID: string) {
   const stop = useMutation({
     mutationFn: () => disableSharing(sessionID),
     onSuccess() {
-      setCreatedUrl(null);
+      setCreated(null);
       updateState({ is_shared: false, share_token: null });
     },
   });
 
   const isShared = !!state.data?.is_shared;
   const token = state.data?.share_token ?? null;
+  const createdUrl = created && created.token === token ? created.url : null;
   const url = isShared
     ? (createdUrl ?? (token ? shareUrlForToken(token, FRONTEND_URL) : null))
     : null;

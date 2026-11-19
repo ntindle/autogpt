@@ -66,7 +66,9 @@ export function parseOnboarding(output: unknown): OnboardingStep[] | null {
   const record = toRecord(output);
   if (!record || record.type !== ONBOARDING_TOOL) return null;
   if (!Array.isArray(record.steps)) return null;
-  const steps = record.steps.flatMap((step, index) => toStep(step, index) ?? []);
+  const steps = record.steps.flatMap(
+    (step, index) => toStep(step, index) ?? [],
+  );
   return steps.length > 0 ? steps : null;
 }
 
@@ -118,13 +120,23 @@ export function setCustomText(
   return { picks: answer?.picks ?? [], custom: text };
 }
 
+/** The answer to a step. Own keys only: a keyword like "constructor" must not read Object's. */
+export function answerFor(
+  answers: Record<string, StepAnswer>,
+  keyword: string,
+) {
+  return Object.prototype.hasOwnProperty.call(answers, keyword)
+    ? answers[keyword]
+    : undefined;
+}
+
 export function buildAnswersMessage(
   steps: OnboardingStep[],
   answers: Record<string, StepAnswer>,
 ) {
   const body = steps
     .flatMap((step) => {
-      const answer = formatAnswer(answers[step.keyword]);
+      const answer = formatAnswer(answerFor(answers, step.keyword));
       return answer ? [`> ${step.question}\n\n${answer}`] : [];
     })
     .join("\n\n");

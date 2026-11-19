@@ -38,7 +38,7 @@ interface Props {
 
 /** The web's file tile: an image's thumbnail, or an icon for its type. */
 export function FileThumbnail({ file }: Props) {
-  const { image, handleError } = useFileThumbnail(file);
+  const { image, imageKey, handleError } = useFileThumbnail(file);
   const styles = useStyles();
   const colors = useColors();
 
@@ -46,13 +46,18 @@ export function FileThumbnail({ file }: Props) {
     <View style={styles.tile}>
       {image ? (
         <Image
+          key={imageKey}
           source={image}
           contentFit="cover"
           onError={handleError}
           style={styles.image}
         />
       ) : (
-        <Icon icon={ICONS[fileTypeIcon(file)]} size={18} color={colors.textTertiary} />
+        <Icon
+          icon={ICONS[fileTypeIcon(file)]}
+          size={18}
+          color={colors.textTertiary}
+        />
       )}
     </View>
   );

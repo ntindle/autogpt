@@ -39,7 +39,7 @@ export function ScheduleTaskRow({
       className={`space-y-2 border-b border-border p-3 ${highlighted ? "rounded-lg bg-muted/40" : ""}`}
     >
       {children}
-      <label className="flex min-h-11 items-center gap-2 text-sm font-medium text-foreground">
+      <label className="text-sm flex min-h-11 items-center gap-2 font-medium text-foreground">
         <input
           type="checkbox"
           checked={task.done}

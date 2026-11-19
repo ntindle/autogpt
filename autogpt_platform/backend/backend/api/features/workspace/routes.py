@@ -5,6 +5,7 @@ Workspace API routes for managing user file storage.
 import asyncio
 import logging
 import re
+from collections.abc import AsyncIterator
 from typing import Annotated, Any, Literal
 from urllib.parse import quote
 
@@ -13,13 +14,14 @@ import fastapi
 from autogpt_libs.auth.dependencies import get_request_context, requires_user
 from autogpt_libs.auth.models import RequestContext
 from fastapi import Depends, Query, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from prisma.errors import UniqueViolationError
 from pydantic import BaseModel, Field, field_validator
 
 from backend.api.features.workspace.preview import build_preview_response
 from backend.api.features.workspace.service import store_workspace_upload
 from backend.copilot.db import get_chat_session_expert_ids
+from backend.copilot.tools.skills import invalidate_skills_index_for_path
 from backend.data import workspace as workspace_db
 from backend.data.db_accessors import LiveResourceAccessRevoked, live_resource_lease
 from backend.data.entitlement import enforce_payment_paywall
@@ -78,20 +80,23 @@ router = fastapi.APIRouter(
 
 
 def _create_streaming_response(
-    content: bytes, file: WorkspaceFile, *, inline: bool = False
-) -> Response:
-    """Create a streaming response for file content."""
+    content: AsyncIterator[bytes], file: WorkspaceFile, *, inline: bool = False
+) -> StreamingResponse:
+    """Create a streaming response for file content.
+
+    Sent chunked, without Content-Length: the size on the file record is not
+    measured from the stored bytes, and a wrong one would break the download.
+    """
     disposition = _sanitize_filename_for_header(
         file.name, disposition="inline" if inline else "attachment"
     )
-    return Response(
+    return StreamingResponse(
         content=content,
         media_type=file.mime_type,
         headers={
             "Content-Disposition": disposition,
             "Content-Security-Policy": "sandbox",
             "X-Content-Type-Options": "nosniff",
-            "Content-Length": str(len(content)),
         },
     )
 
@@ -99,19 +104,22 @@ def _create_streaming_response(
 _STORAGE_READ_ATTEMPTS = 2
 
 
-async def _read_file_content(
+async def _stream_file_content(
     storage: WorkspaceStorageBackend, file: WorkspaceFile
-) -> bytes:
-    """Read a file's bytes, retrying once on a transient storage error.
+) -> AsyncIterator[bytes]:
+    """Stream a file's bytes, retrying the first read once on a transient error.
 
-    Content missing from storage is a 404, not a server error. A storage read
-    that keeps failing (a GCS body cut off mid-transfer, a timeout, a 5xx from
-    the bucket) is a 502, logged with its traceback so it reaches Sentry.
+    The first chunk is read here, while the status can still change. Content
+    missing from storage is a 404, not a server error. A first read that keeps
+    failing (a timeout, a 5xx from the bucket) is a 502, logged with its
+    traceback so it reaches Sentry; a failure after it ends the response early.
     """
     attempt = 1
     while True:
+        chunks = storage.retrieve_stream(file.storage_path)
         try:
-            return await storage.retrieve(file.storage_path)
+            first_chunk = await anext(chunks, b"")
+            return _prepend(first_chunk, chunks)
         except FileNotFoundError:
             logger.warning(
                 f"File {file.id} has a record but no content in storage "
@@ -120,12 +128,14 @@ async def _read_file_content(
             raise fastapi.HTTPException(status_code=404, detail="File not found")
         except (aiohttp.ClientError, OSError) as e:
             if attempt < _STORAGE_READ_ATTEMPTS:
-                logger.warning(f"Retrying read of file {file.id} after {e!r}")
+                logger.warning(
+                    f"Retrying read of file {file.id} after {type(e).__name__}"
+                )
                 attempt += 1
                 continue
             logger.error(
                 f"Failed to read file {file.id} from storage after {attempt} "
-                f"attempts (storagePath={file.storage_path}): {e!r}",
+                f"attempts (storagePath={file.storage_path}): {type(e).__name__}",
                 exc_info=True,
             )
             raise fastapi.HTTPException(
@@ -159,8 +169,14 @@ async def create_file_download_response(
         if url and not url.startswith("/api/"):
             return fastapi.responses.RedirectResponse(url=url, status_code=302)
 
-    content = await _read_file_content(storage, file)
+    content = await _stream_file_content(storage, file)
     return _create_streaming_response(content, file, inline=inline)
+
+
+async def _prepend(first: bytes, rest: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
+    yield first
+    async for chunk in rest:
+        yield chunk
 
 
 class WorkspaceFileUploadResponse(BaseModel):
@@ -354,12 +370,18 @@ async def delete_workspace_file(
         raise fastapi.HTTPException(status_code=404, detail="Workspace not found")
 
     manager = _manager(ctx, workspace.id, access="create")
+    file = await manager.get_file_info(file_id)
+    if file is None:
+        raise fastapi.HTTPException(status_code=404, detail="File not found")
     try:
-        deleted = await manager.delete_file(file_id)
+        if not await manager.delete_file(file_id):
+            raise fastapi.HTTPException(status_code=404, detail="File not found")
     except LiveResourceAccessRevoked as exc:
         raise fastapi.HTTPException(status_code=404, detail="File not found") from exc
-    if not deleted:
-        raise fastapi.HTTPException(status_code=404, detail="File not found")
+    finally:
+        await invalidate_skills_index_for_path(
+            ctx.user_id, file.path, organization_id=ctx.org_id
+        )
 
     return DeleteFileResponse(deleted=True)
 
@@ -382,6 +404,10 @@ async def rename_workspace_file_route(
     workspace = await get_workspace(ctx.user_id)
     if workspace is None:
         raise fastapi.HTTPException(status_code=404, detail="Workspace not found")
+    manager = _manager(ctx, workspace.id, access="view")
+    file = await manager.get_file_info(file_id)
+    if file is None:
+        raise fastapi.HTTPException(status_code=404, detail="File not found")
     try:
         async with live_resource_lease(
             ctx.user_id, ctx.org_id, ctx.team_id, "create"
@@ -405,6 +431,11 @@ async def rename_workspace_file_route(
         )
     except SkillLimitError as exc:
         raise fastapi.HTTPException(status_code=409, detail=str(exc))
+    finally:
+        # A rename stays in its folder, including after a lost acknowledgement.
+        await invalidate_skills_index_for_path(
+            ctx.user_id, file.path, organization_id=ctx.org_id
+        )
     if renamed is None:
         raise fastapi.HTTPException(status_code=404, detail="File not found")
     expert_by_session = await _expert_ids_by_session(ctx.user_id, [renamed])

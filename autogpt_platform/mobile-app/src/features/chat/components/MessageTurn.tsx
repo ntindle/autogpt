@@ -19,7 +19,14 @@ interface Props {
   onLayout?: (event: LayoutChangeEvent) => void;
 }
 
-export function MessageTurn({ turn, sessionID, isLast, status, onSend, onLayout }: Props) {
+export function MessageTurn({
+  turn,
+  sessionID,
+  isLast,
+  status,
+  onSend,
+  onLayout,
+}: Props) {
   const styles = useStyles();
   const isBusy = status === "submitted" || status === "streaming";
   const isWaiting = isLast && status === "submitted";
@@ -45,6 +52,7 @@ export function MessageTurn({ turn, sessionID, isLast, status, onSend, onLayout 
             <Pressable delayLongPress={350} onLongPress={handleLongPress}>
               <MessageBubble
                 message={message}
+                sessionID={sessionID}
                 isLive={isBusy && isFinal && message.role === "assistant"}
                 replyText={replyText}
                 isBusy={isBusy}

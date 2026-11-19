@@ -9,6 +9,7 @@ import prisma.enums
 import prisma.errors
 import prisma.models
 import prisma.types
+from autogpt_libs.auth.permissions import OrgAction, TeamAction
 
 from backend.blocks.agent import AgentExecutorBlock
 from backend.data.account_deletion import is_account_closed
@@ -31,6 +32,7 @@ from backend.data.tenancy import (
     agent_graph_attachment_barriers,
     get_user_team_ids,
     live_agent_graph_access_barrier,
+    require_role_where_resource_lives,
 )
 from backend.notifications.queue import queue_notification_async
 from backend.util.exceptions import (
@@ -1301,6 +1303,14 @@ async def create_store_submission(
                     f"Workflow #{graph_id} v{graph_version} not found "
                     f"for this user (#{user_id})"
                 )
+        # The workflow can live in a team the request doesn't name.
+        await require_role_where_resource_lives(
+            user_id,
+            graph.organizationId,
+            graph.teamId,
+            OrgAction.PUBLISH_TO_STORE,
+            TeamAction.PUBLISH_AGENTS,
+        )
 
         if not graph.User or not graph.User.Profile:
             logger.warning(f"User #{user_id} does not have a Profile")
@@ -2505,6 +2515,10 @@ def _is_own_listing(
     if listing.owningUserId != user_id:
         return False
     return organization_id is None or listing.owningOrgId in (None, organization_id)
+
+
+def _format_graph_refs(refs: list[tuple[str, int]]) -> str:
+    return ", ".join(f"#{graph_id} v{version}" for graph_id, version in refs)
 
 
 def _create_sub_agent_version_data(

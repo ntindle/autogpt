@@ -8,18 +8,70 @@ const HIDDEN_FILE_NAMES = new Set(["agent.json"]);
 
 // Older outputs have no purpose metadata. Only the reserved directory directly
 // under the session root is a legacy fallback; nested user folders are not.
-const TOOL_RESULT_PATH = /^\/sessions\/[^/]+\/tool-(?:results|outputs)\/[^/]+$/i;
+const TOOL_RESULT_PATH =
+  /^\/sessions\/[^/]+\/tool-(?:results|outputs)\/[^/]+$/i;
 
 const MARKDOWN_EXTENSIONS = new Set(["md", "markdown", "mdx"]);
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
 const TEXT_EXTENSIONS = new Set([
-  "txt", "log", "ics", "vcf", "json", "jsonl", "csv", "tsv", "xml", "html",
-  "htm", "yaml", "yml", "toml", "ini", "cfg", "conf", "properties", "env",
-  "js", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "java", "c", "cpp", "h",
-  "cs", "php", "swift", "kt", "dart", "sh", "bash", "zsh", "css", "scss",
-  "sass", "less", "graphql", "gql", "proto", "sql", "r", "lua", "pl", "scala",
+  "txt",
+  "log",
+  "ics",
+  "vcf",
+  "json",
+  "jsonl",
+  "csv",
+  "tsv",
+  "xml",
+  "html",
+  "htm",
+  "yaml",
+  "yml",
+  "toml",
+  "ini",
+  "cfg",
+  "conf",
+  "properties",
+  "env",
+  "js",
+  "jsx",
+  "ts",
+  "tsx",
+  "py",
+  "rb",
+  "go",
+  "rs",
+  "java",
+  "c",
+  "cpp",
+  "h",
+  "cs",
+  "php",
+  "swift",
+  "kt",
+  "dart",
+  "sh",
+  "bash",
+  "zsh",
+  "css",
+  "scss",
+  "sass",
+  "less",
+  "graphql",
+  "gql",
+  "proto",
+  "sql",
+  "r",
+  "lua",
+  "pl",
+  "scala",
 ]);
-const IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const IMAGE_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
 const TEXT_MIMES = new Set([
   "application/json",
   "application/xml",
@@ -29,6 +81,9 @@ const TEXT_MIMES = new Set([
 ]);
 
 export const TEXT_DISPLAY_LIMIT = 200 * 1024;
+
+/** Past this, a file the preview route refuses is not downloaded whole: the viewer says it is too large. */
+export const FULL_TEXT_LIMIT = 2 * 1024 * 1024;
 // How much of a larger text file the preview route sends.
 export const PREVIEW_BYTES = 131072;
 
@@ -48,7 +103,9 @@ function isToolOutput(file: WorkspaceFile) {
   return TOOL_RESULT_PATH.test(file.path);
 }
 
-export function fileKind(file: Pick<WorkspaceFile, "name" | "mime_type">): FileKind {
+export function fileKind(
+  file: Pick<WorkspaceFile, "name" | "mime_type">,
+): FileKind {
   const extension = readExtension(file.name);
   if (MARKDOWN_EXTENSIONS.has(extension)) return "markdown";
   if (IMAGE_EXTENSIONS.has(extension)) return "image";

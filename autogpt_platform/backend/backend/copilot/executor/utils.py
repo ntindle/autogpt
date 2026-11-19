@@ -1092,12 +1092,11 @@ async def _schedule_chat_turn_locked(
         if (message_already_persisted or require_fresh_slot) and not slot.admitted:
             return None
         if user_id and not slot.admitted:
-            # Two sends of one text racing past the in-flight check: the
-            # second only refreshed the first's slot, so it rides that turn,
-            # as the save below would collapse it. Any other text is refused
-            # before it is saved, so the client keeps its message and its id.
+            # Legacy sends may ride the turn holding the same text. A distinct
+            # client message ID must stay retryable even when its text matches.
             if (
-                message
+                dedupe_content
+                and message
                 and not message_already_persisted
                 and await _repeats_trailing_message(
                     session_id, message, is_user_message
@@ -1113,8 +1112,6 @@ async def _schedule_chat_turn_locked(
                 content=message,
                 metadata=message_metadata,
             )
-            # A refreshed slot means a turn already runs for this chat, so the
-            # same text again is a double send, whatever id it carries.
             is_duplicate = (
                 await append_and_save_message(
                     session_id,

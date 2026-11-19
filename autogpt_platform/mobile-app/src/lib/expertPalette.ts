@@ -69,10 +69,18 @@ interface TintArgs {
 }
 
 /** The expert's area, as the web's `getExpertVisualCategory` picks it. */
-export function expertFamily({ avatarUrl, categories, role }: TintArgs): Family {
+export function expertFamily({
+  avatarUrl,
+  categories,
+  role,
+}: TintArgs): Family {
   if (/head of ai/i.test(role ?? "")) return "otto";
   const id = MANAGED_URL.exec(avatarUrl?.trim() ?? "")?.[1];
-  const managed = id ? identityFamilies[id] : undefined;
+  // Own keys only: a portrait id like "constructor" must not read Object's.
+  const managed =
+    id && Object.prototype.hasOwnProperty.call(identityFamilies, id)
+      ? identityFamilies[id]
+      : undefined;
   if (managed && managed !== "general") return managed;
   const stored = categories
     ?.map((category) => category.toLowerCase())

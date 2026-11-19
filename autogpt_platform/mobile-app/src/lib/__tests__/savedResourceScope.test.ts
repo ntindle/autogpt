@@ -9,10 +9,17 @@ import {
 } from "../api/workspace";
 import { workspaceFetch } from "../workspaceAccess";
 
+let mockCurrentSession = 0;
+
 jest.mock("../env", () => ({ API_URL: "https://workspace.example.com/_agpt" }));
 jest.mock("../auth/token", () => ({
   getAccessToken: jest.fn().mockResolvedValue("fake-user-token"),
   clearAccessToken: jest.fn(),
+  sessionMark: () => mockCurrentSession,
+  assertSameSession: (mark: number) => {
+    if (mark !== mockCurrentSession)
+      throw new Error("Signed-in account changed");
+  },
 }));
 jest.mock("../workspaceAccess", () => ({
   workspaceFetch: jest.fn(),
@@ -31,7 +38,10 @@ function response(data: unknown, status = 200) {
   } as Response;
 }
 
-beforeEach(() => fetcher.mockReset());
+beforeEach(() => {
+  fetcher.mockReset();
+  mockCurrentSession = 0;
+});
 
 test("resolves the saved conversation scope before a write and keeps it on token retry", async () => {
   fetcher
@@ -117,4 +127,15 @@ test("downloads and image headers retain file scope and separate team caches", a
   expect(workspaceKeys.imageHeaders(file)).not.toEqual(
     workspaceKeys.imageHeaders({ ...file, team_id: "other-team" }),
   );
+});
+
+test("an account change while saved scope loads prevents the conversation write", async () => {
+  fetcher.mockImplementationOnce(async () => {
+    mockCurrentSession += 1;
+    return response(saved);
+  });
+  await expect(
+    apiRequest("/api/chat/sessions/chat-a/cancel", { method: "POST" }),
+  ).rejects.toThrow("Signed-in account changed");
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });

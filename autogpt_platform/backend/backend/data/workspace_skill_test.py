@@ -567,9 +567,12 @@ async def test_a_package_write_swaps_every_file_or_none(
             AsyncMock(),
         ),
     ):
+        changes = []
         await manager.write_skill_package(
-            **package(b"v1", {"a.md": b"a1", "b.md": b"b1"}, [])
+            **package(b"v1", {"a.md": b"a1", "b.md": b"b1"}, []),
+            on_change=lambda: changes.append("published"),
         )
+        assert changes == ["published"]
         before, stored = await contents(), blobs()
         update = package(b"v2", {"a.md": b"a2", "c.md": b"c2"}, ["b.md"])
 

@@ -21,7 +21,10 @@ describe("expertPalette", () => {
     expect(palette).toEqual(catalog.palette);
     expect(identityFamilies).toEqual(
       Object.fromEntries(
-        catalog.identities.map((identity) => [identity.id, identity.visual_category]),
+        catalog.identities.map((identity) => [
+          identity.id,
+          identity.visual_category,
+        ]),
       ),
     );
   });
@@ -32,7 +35,17 @@ describe("expertPalette", () => {
   });
 
   it("gives Otto's role the Otto tint", () => {
-    expect(expertTint({ role: "Head of AI", categories: ["sales"] })).toBe(OTTO_TINT);
+    expect(expertTint({ role: "Head of AI", categories: ["sales"] })).toBe(
+      OTTO_TINT,
+    );
+  });
+
+  it("falls back for a portrait id that names an inherited property", () => {
+    expect(
+      expertTint({
+        avatarUrl: "/autogpt-characters/v2.1/constructor/neutral/128.webp",
+      }),
+    ).toBe(palette.general.hex);
   });
 
   it("takes a managed identity's family from its URL", () => {

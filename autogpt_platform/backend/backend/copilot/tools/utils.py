@@ -264,7 +264,7 @@ async def get_or_create_library_agent(
             made in this scope instead.
 
     Returns:
-        LibraryAgent instance
+        LibraryAgent instance; an archived entry is reused as it is.
     """
     for graph_version in (graph.version, None):
         existing = await library_db().get_library_agent_by_graph_id(

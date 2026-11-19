@@ -10,7 +10,7 @@ export function FieldFeedback({ id, error, children }: Props) {
   return (
     <div>
       {children}
-      <p id={id} aria-live="polite" className="-mt-5 text-xs text-red-600">
+      <p id={id} aria-live="polite" className="text-xs text-red-600 -mt-5">
         {error}
       </p>
     </div>

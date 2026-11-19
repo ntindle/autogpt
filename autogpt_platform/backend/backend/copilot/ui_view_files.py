@@ -241,7 +241,13 @@ async def _save_draft_as_file(
 ) -> SavedUIViewResponse:
     scope = {"organization_id": session.organization_id, "team_id": session.team_id}
     view = await latest_published_view(user_id, session_id, view_id)
-    saved_id = await find_openui_view_file(user_id, session_id, view_id, **scope)
+    saved_id = await find_openui_view_file(
+        user_id,
+        session_id,
+        view_id,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
+    )
     if saved_id is not None:
         return await _saved_response(user_id, saved_id, **scope)
     manager = await get_workspace_manager(user_id, session_id, access="create")
@@ -251,12 +257,24 @@ async def _save_draft_as_file(
         # A concurrent save of this view under the same name won the path.
         if error.status_code != 409:
             raise
-        saved_id = await find_openui_view_file(user_id, session_id, view_id, **scope)
+        saved_id = await find_openui_view_file(
+            user_id,
+            session_id,
+            view_id,
+            organization_id=session.organization_id,
+            team_id=session.team_id,
+        )
         if saved_id is None:
             raise
         return await _saved_response(user_id, saved_id, **scope)
     # Two concurrent saves each wrote a file; both keep the oldest.
-    canonical = await find_openui_view_file(user_id, session_id, view_id, **scope)
+    canonical = await find_openui_view_file(
+        user_id,
+        session_id,
+        view_id,
+        organization_id=session.organization_id,
+        team_id=session.team_id,
+    )
     if canonical is not None and canonical != file.id:
         await manager.delete_file(file.id)
         return await _saved_response(user_id, canonical, **scope)

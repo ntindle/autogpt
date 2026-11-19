@@ -111,6 +111,7 @@ from backend.copilot.tools.skills import (
     delete_user_skill,
     find_user_skill_slugs,
     get_default_skill_with_body,
+    invalidate_skills_index_cache,
     skill_name_key,
 )
 from backend.data.db import prisma as db_client
@@ -163,6 +164,10 @@ def _raised_identity(name: str) -> str:
 # Postgres promises no row order without this, so the profile's workflow grid
 # could reshuffle between loads; createdAt keeps the roster's authored order.
 _WORKFLOW_ORDER = [{"createdAt": "asc"}, {"id": "asc"}]
+# A row whose library agent the owner deleted would link to a page that 404s.
+LIVE_WORKFLOWS: prisma.types.ExpertWorkflowWhereInput = {
+    "OR": [{"libraryAgentId": None}, {"LibraryAgent": {"is": {"isDeleted": False}}}]
+}
 
 _WORKFLOW_ROW_INCLUDE: prisma.types.ExpertWorkflowInclude = {
     # AgentGraph carries the name/description of a user-created library agent;
@@ -171,10 +176,15 @@ _WORKFLOW_ROW_INCLUDE: prisma.types.ExpertWorkflowInclude = {
     "StoreListingVersion": True,
 }
 _WORKFLOW_INCLUDE = {
-    "Workflows": {"include": _WORKFLOW_ROW_INCLUDE, "order_by": _WORKFLOW_ORDER}
+    "Workflows": {
+        "where": LIVE_WORKFLOWS,
+        "include": _WORKFLOW_ROW_INCLUDE,
+        "order_by": _WORKFLOW_ORDER,
+    }
 }
 _ROSTER_WORKFLOW_INCLUDE: prisma.types.ExpertInclude = {
     "Workflows": {
+        "where": LIVE_WORKFLOWS,
         "include": {
             "LibraryAgent": {"include": {"AgentGraph": True}},
             "StoreListingVersion": True,
@@ -1036,6 +1046,8 @@ async def check_private_expert(user_id: str, expert_id: str) -> CheckedExpert:
     organization and team it works in, how far its hire setup got, and the
     columns its identity prompt is built from. The latest run and the weekly
     spend that :func:`get_expert` adds for the roster are not read.
+
+    The saved expert row determines the scope that is checked for live access.
     """
     row = await _active_private_expert_row(user_id, expert_id)
     organization_id, team_id = await _private_expert_owner_scope(user_id, row)
@@ -1774,33 +1786,39 @@ async def update_skills(
             f"Skills cannot be both attached and removed: {', '.join(both)}"
         )
     resolved: list[str] = []
-    for canonical, folder in plan:
-        if folder is not None:
-            # Idempotent: also heals a name kept from before skills were
-            # owned per expert, which had no copy in the expert's folder.
-            if await copy_skill_to_expert(user_id, expert_id, folder) is None:
-                # Resolved moments ago and gone now. Keeping the name would
-                # leave the row listing a skill the expert cannot read, which
-                # is the one state this whole path exists to prevent.
-                logger.warning(
-                    f"Skill {canonical!r} vanished before it could be copied "
-                    f"to expert #{expert_id}; dropping it from the list"
-                )
-                continue
-        resolved.append(canonical)
-    for name in marketplace:
-        if name.lower() not in {r.lower() for r in resolved}:
-            resolved.append(name)
-    for dropped in [n for n in current.values() if skill_name_key(n) in removed]:
-        # delete_user_skill drops the row name itself — except for a built-in,
-        # where it raises first and _detach_expert_skill swallows that.
-        await _detach_expert_skill(user_id, expert_id, dropped)
-        await remove_expert_skill_name(user_id, expert_id, dropped)
-    # Per-name writes that each re-read the row, not one set computed up front:
-    # the expert can append to its own row with store_skill while the copies
-    # above run, and an overwrite from the pre-copy read would silently drop it.
-    for name in resolved:
-        await add_expert_skill_name(user_id, expert_id, name)
+    try:
+        for canonical, folder in plan:
+            if folder is not None:
+                # Idempotent: also heals a name kept from before skills were
+                # owned per expert, which had no copy in the expert's folder.
+                if await copy_skill_to_expert(user_id, expert_id, folder) is None:
+                    # Resolved moments ago and gone now. Keeping the name would
+                    # leave the row listing a skill the expert cannot read, which
+                    # is the one state this whole path exists to prevent.
+                    logger.warning(
+                        f"Skill {canonical!r} vanished before it could be copied "
+                        f"to expert #{expert_id}; dropping it from the list"
+                    )
+                    continue
+            resolved.append(canonical)
+        for name in marketplace:
+            if name.lower() not in {r.lower() for r in resolved}:
+                resolved.append(name)
+        for dropped in [n for n in current.values() if skill_name_key(n) in removed]:
+            # delete_user_skill drops the row name itself — except for a built-in,
+            # where it raises first and _detach_expert_skill swallows that.
+            await _detach_expert_skill(user_id, expert_id, dropped)
+            await remove_expert_skill_name(user_id, expert_id, dropped)
+        # Per-name writes that each re-read the row, not one set computed up front:
+        # the expert can append to its own row with store_skill while the copies
+        # above run, and an overwrite from the pre-copy read would silently drop it.
+        for name in resolved:
+            await add_expert_skill_name(user_id, expert_id, name)
+    finally:
+        # Row-only assignments also change the index. A rebuild can copy an
+        # assigned name only when its personal-library package exists.
+        # Partially applied row updates must invalidate as well.
+        await invalidate_skills_index_cache(user_id, expert_id)
     expert = await get_expert(user_id, expert_id)
     if expert is None:
         raise ExpertNotFoundError(expert_id)
@@ -2465,7 +2483,10 @@ async def _install_marketplace_workflow(
         include=_WORKFLOW_ROW_INCLUDE,
     )
     if existing is not None:
-        return _to_workflow_ref(existing)
+        if existing.LibraryAgent is not None and not existing.LibraryAgent.isDeleted:
+            return _to_workflow_ref(existing)
+        # Its library copy was deleted: drop the stale row and its job, install afresh.
+        await remove_workflow(user_id, expert_id, existing.id)
 
     organization_id, team_id = await resolve_private_expert_tenancy(user_id, expert_id)
     library_agent = await library_db.add_store_agent_to_library(

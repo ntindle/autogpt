@@ -20,7 +20,7 @@ export function OpenUIArtifact({ artifact, content, readOnly }: Props) {
   const tenantScope = useCopilotTenantScope();
   const hasSavedScope = "organizationId" in artifact || "teamId" in artifact;
   const source = (
-    <pre className="whitespace-pre-wrap break-words p-4 font-mono text-sm text-zinc-800">
+    <pre className="text-sm text-zinc-800 p-4 font-mono break-words whitespace-pre-wrap">
       {content}
     </pre>
   );

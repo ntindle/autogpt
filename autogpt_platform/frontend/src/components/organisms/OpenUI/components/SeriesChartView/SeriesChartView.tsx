@@ -18,7 +18,7 @@ export function SeriesChartView({
         {data.series.map((series) => (
           <label
             key={series.key}
-            className="flex min-h-11 items-center gap-2 text-xs"
+            className="text-xs flex min-h-11 items-center gap-2"
           >
             <input
               type="checkbox"
@@ -42,11 +42,11 @@ export function SeriesChartView({
           .filter((key) => !hidden.includes(key))}
       />
       <details>
-        <summary className="min-h-11 cursor-pointer py-3 text-xs">
+        <summary className="text-xs min-h-11 cursor-pointer py-3">
           View chart data
         </summary>
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
+          <table className="text-xs w-full text-left">
             <thead>
               <tr>
                 <th className="p-2">Observation</th>

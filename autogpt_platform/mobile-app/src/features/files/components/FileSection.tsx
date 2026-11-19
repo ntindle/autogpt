@@ -43,10 +43,11 @@ export function FileSection({
   }
 
   function renderBody() {
-    if (isError) return <RetryNotice message="Failed to load files." onRetry={onRetry} />;
+    if (isError)
+      return <RetryNotice message="Failed to load files." onRetry={onRetry} />;
     if (isLoading) {
       return (
-        <View style={styles.skeleton}>
+        <View style={[styles.card, styles.skeleton]}>
           <View style={[styles.bar, styles.fullBar]} />
           <View style={[styles.bar, styles.shortBar]} />
         </View>
@@ -59,13 +60,22 @@ export function FileSection({
     const hiddenCount = files.length - visible.length;
     return (
       <>
-        <View>
+        <View style={styles.card}>
           {visible.map((file, index) => (
-            <FileRow key={file.id} file={file} isFirst={index === 0} onPress={onSelect} />
+            <FileRow
+              key={file.id}
+              file={file}
+              isFirst={index === 0}
+              onPress={onSelect}
+            />
           ))}
         </View>
         {files.length > COLLAPSED_FILE_COUNT ? (
-          <Pressable accessibilityRole="button" onPress={toggleShowAll} hitSlop={8}>
+          <Pressable
+            accessibilityRole="button"
+            onPress={toggleShowAll}
+            hitSlop={8}
+          >
             <Text style={styles.more}>
               {showAll ? "Show less" : `View more (${hiddenCount})`}
             </Text>
@@ -104,8 +114,17 @@ const useStyles = createStyles((colors) => ({
     fontWeight: "500",
     color: colors.textSecondary,
   },
-  skeleton: { gap: 10, paddingHorizontal: spacing.md, paddingVertical: spacing.xs },
-  bar: { height: 20, borderRadius: 8, backgroundColor: colors.surfaceRaised },
+  card: {
+    backgroundColor: colors.panelCard,
+    borderRadius: 16,
+    overflow: "hidden",
+  },
+  skeleton: {
+    gap: 10,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+  },
+  bar: { height: 20, borderRadius: 8, backgroundColor: colors.surfacePressed },
   fullBar: { width: "100%" },
   shortBar: { width: "66%" },
   empty: {

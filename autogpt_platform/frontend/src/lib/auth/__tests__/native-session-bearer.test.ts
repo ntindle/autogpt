@@ -9,13 +9,14 @@ const nativeHeaders = { "X-AutoGPT-Native": "1" };
 
 function createAuth(
   database: Record<string, unknown[]> = { user: [], session: [], account: [] },
+  allowWorkspaceAccessCookie = false,
 ) {
   return betterAuth({
     baseURL: origin,
     secret: "test-only-native-session-secret-32-characters", // pragma: allowlist secret
     database: memoryAdapter(database),
     emailAndPassword: { enabled: true },
-    plugins: [nativeSessionBearer()],
+    plugins: [nativeSessionBearer(allowWorkspaceAccessCookie)],
   });
 }
 
@@ -111,5 +112,36 @@ describe("native session credentials", () => {
     );
     expect(logout.status).toBe(200);
     expect(await (await session(signed!)).json()).toBeNull();
+  });
+});
+
+describe("private workspace native credentials", () => {
+  it("exports a native credential after the configured Access gate", async () => {
+    const auth = createAuth(undefined, true);
+    const response = await auth.handler(
+      signup({ ...nativeHeaders, Cookie: "CF_Authorization=fixture" }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("set-auth-token")).toContain(".");
+  });
+  it.each([
+    { Cookie: "CF_Authorization=fixture; better-auth.session_token=browser" },
+    { Cookie: "CF_Authorization=fixture", Origin: origin },
+    { Cookie: "CF_Authorization=fixture", "Sec-Fetch-Site": "same-origin" },
+  ])(
+    "does not export browser credentials with Access cookies: %j",
+    async (headers) => {
+      const auth = createAuth(undefined, true);
+      const response = await auth.handler(
+        signup({ ...nativeHeaders, ...headers }),
+      );
+      expect(response.headers.has("set-auth-token")).toBe(false);
+    },
+  );
+  it("keeps an unconfigured deployment unchanged", async () => {
+    const response = await createAuth().handler(
+      signup({ ...nativeHeaders, Cookie: "CF_Authorization=fixture" }),
+    );
+    expect(response.headers.has("set-auth-token")).toBe(false);
   });
 });

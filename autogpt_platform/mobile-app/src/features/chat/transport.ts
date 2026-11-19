@@ -3,8 +3,12 @@ import * as Crypto from "expo-crypto";
 import { fetch as expoFetch } from "expo/fetch";
 
 import { apiUrl, authHeaders, sessionScopeHeaders } from "@/lib/api/client";
-import { SignedOutError } from "@/lib/auth/errors";
-import { clearAccessToken } from "@/lib/auth/token";
+import { SessionChangedError, SignedOutError } from "@/lib/auth/errors";
+import {
+  assertSameSession,
+  clearAccessToken,
+  sessionMark,
+} from "@/lib/auth/token";
 import { tapReply } from "@/lib/haptics";
 import { withWorkspaceAccess } from "@/lib/workspaceAccess";
 
@@ -70,12 +74,16 @@ function streamRequestBody(last: UIMessage | undefined) {
 // means the server could not be reached.
 async function streamHeaders(sessionID: string) {
   try {
-    return {
+    const mark = sessionMark();
+    const headers = {
       ...(await authHeaders()),
       ...(await sessionScopeHeaders(sessionID)),
     };
+    assertSameSession(mark);
+    return headers;
   } catch (error) {
-    if (error instanceof SignedOutError) throw error;
+    if (error instanceof SignedOutError || error instanceof SessionChangedError)
+      throw error;
     throw new Error(OFFLINE_MESSAGE);
   }
 }
@@ -87,16 +95,23 @@ async function fetchStream(
   input: RequestInfo | URL,
   init?: RequestInit,
 ) {
+  const mark = sessionMark();
   let response = await send(input, init);
   // A refused token is dropped and the request sent once more with a fresh
   // one; the body keeps its message_id, so this cannot start a second turn.
   if (response.status === 401) {
+    // Never post the message for an account that signed in after it was sent.
+    assertSameSession(mark);
     clearAccessToken();
     response = await send(
       input,
       withHeaders(init, await streamHeaders(sessionID)),
     );
-    if (response.status === 401) throw new SignedOutError();
+    if (response.status === 401) {
+      // Signs out only if the session that sent this is still the current one.
+      assertSameSession(mark);
+      throw new SignedOutError();
+    }
   }
   if (response.ok) return response;
   throw new Error(statusMessage(response.status));

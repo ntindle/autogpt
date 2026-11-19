@@ -43,7 +43,7 @@ export function ArtifactView({
       ) : (
         <>
           {failed ? (
-            <div role="status" className="space-y-2 text-sm">
+            <div role="status" className="text-sm space-y-2">
               <p>
                 This file could not load. The link may have expired or access
                 may have changed.
@@ -72,7 +72,7 @@ export function ArtifactView({
           )}
           {typeof download === "string" && (
             <a
-              className="inline-block min-h-11 py-3 text-sm text-primary underline"
+              className="text-sm inline-block min-h-11 py-3 text-primary underline"
               href={download}
               download={props.filename}
               target="_blank"

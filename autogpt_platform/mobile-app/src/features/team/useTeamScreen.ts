@@ -1,24 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { router } from "expo-router";
+import { router, useNavigation } from "expo-router";
 import { useRef, useState } from "react";
 
 import { PLAN_REQUIRED_MESSAGE } from "@/features/chat/chatErrors";
-import { chatKeys, createSession, listSessions } from "@/lib/api/chat";
+import { latestOrNewSession } from "@/features/marketplace/openExpertChat";
 import { ApiError } from "@/lib/api/client";
 import { type Expert, expertKeys, listExperts } from "@/lib/api/experts";
-import { isSessionGone, queryClient, signOut } from "@/lib/session";
-
-async function latestOrNewSession(expertID: string) {
-  const [latest] = await listSessions({
-    expertID,
-    limit: 1,
-    pinnedFirst: false,
-  });
-  if (latest) return latest.id;
-  const { id } = await createSession(expertID);
-  void queryClient.invalidateQueries({ queryKey: chatKeys.sessions });
-  return id;
-}
+import { isSessionGone, signOut } from "@/lib/session";
+import { openHome } from "@/features/home/openHome";
 
 export function useTeamScreen() {
   const experts = useQuery({ queryKey: expertKeys.list, queryFn: listExperts });
@@ -27,6 +16,7 @@ export function useTeamScreen() {
   const [openError, setOpenError] = useState<string | null>(null);
   // State lands a render late; the ref stops a second tap in the same frame.
   const isOpening = useRef(false);
+  const navigation = useNavigation();
 
   async function refresh() {
     setIsRefreshing(true);
@@ -44,7 +34,8 @@ export function useTeamScreen() {
     setOpenError(null);
     try {
       const sessionID = await latestOrNewSession(expert.id);
-      router.push(`/chat/${sessionID}`);
+      // Team stays mounted in the drawer: someone who left meanwhile stays where they went.
+      if (navigation.isFocused()) router.push(`/chat/${sessionID}`);
     } catch (caught) {
       if (isSessionGone(caught)) {
         void signOut();
@@ -62,11 +53,15 @@ export function useTeamScreen() {
   }
 
   function openOtto() {
-    router.navigate("/");
+    openHome(null);
   }
 
   function createExpert() {
     router.navigate("/create-expert");
+  }
+
+  function browseMarketplace() {
+    router.navigate("/marketplace");
   }
 
   return {
@@ -80,5 +75,6 @@ export function useTeamScreen() {
     openExpert,
     openOtto,
     createExpert,
+    browseMarketplace,
   };
 }

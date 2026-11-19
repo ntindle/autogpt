@@ -16,12 +16,12 @@ export function ChecklistView({
   return (
     <section>
       <div className="mb-4 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-zinc-800">{props.title}</h3>
+        <h3 className="text-sm text-zinc-800 font-semibold">{props.title}</h3>
         <span className="text-xs text-zinc-500" aria-live="polite">
           {completed.size} of {items.length} complete
         </span>
       </div>
-      <div className="divide-y divide-zinc-100">
+      <div className="divide-zinc-100 divide-y">
         {items.map((item, index) => (
           <label
             key={index}
@@ -32,18 +32,18 @@ export function ChecklistView({
               disabled={disabled}
               checked={completed.has(index)}
               onChange={() => toggle(index)}
-              className="mt-0.5 size-4 shrink-0 accent-purple-500"
+              className="accent-purple-500 mt-0.5 size-4 shrink-0"
             />
             <div>
               <span
                 className={cn(
-                  "text-sm font-medium text-zinc-800",
+                  "text-sm text-zinc-800 font-medium",
                   completed.has(index) && "text-zinc-400 line-through",
                 )}
               >
                 {item.title}
               </span>
-              <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+              <p className="text-xs text-zinc-500 mt-1 leading-relaxed">
                 {item.detail}
               </p>
             </div>

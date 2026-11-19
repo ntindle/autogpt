@@ -7,7 +7,9 @@ import { useFirstRunTourAutoStart } from "@/app/(platform)/components/FirstRunTo
 import { useAuth } from "@/lib/auth/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
-import type { ComponentProps, ReactNode } from "react";
+import { useEffect, type ComponentProps, type ReactNode } from "react";
+import { Flag, useGetFlag } from "@/services/feature-flags/use-get-flag";
+import { useCopilotUIStore } from "../../store";
 import type { WorkspaceAttachment } from "../../helpers/workspaceAttachments";
 import { ConnectionPicker } from "../ChatInput/components/ConnectionPicker/ConnectionPicker";
 import { RecipientChip } from "../ChatInput/components/RecipientChip";
@@ -18,6 +20,7 @@ import { SuggestedTasksBlock } from "../SuggestedTasks/SuggestedTasksBlock";
 import { useCollapsedSuggestions } from "../SuggestedTasks/useCollapsedSuggestions";
 import { useSuggestedTasks } from "../SuggestedTasks/useSuggestedTasks";
 import { EmptyHero } from "./components/EmptyHero";
+import { ExecutionTargetPicker } from "./components/ExecutionTargetPicker/ExecutionTargetPicker";
 import { ExpertKickoffLoader } from "./components/ExpertKickoffLoader/ExpertKickoffLoader";
 import { GreetingLoader } from "./components/GreetingLoader";
 import {
@@ -88,6 +91,13 @@ export function EmptySession({
 }: Props) {
   const { user } = useAuth();
   const greetingName = getGreetingName(user);
+  const isLocalPCEnabled = useGetFlag(Flag.LOCAL_PC_EXECUTOR);
+  const resetNewChatExecutionTarget = useCopilotUIStore(
+    (state) => state.resetNewChatExecutionTarget,
+  );
+  const newChatExecutionTarget = useCopilotUIStore(
+    (state) => state.newChatExecutionTarget,
+  );
   const intro = useOnboardingIntroCard();
   useFirstRunTourAutoStart({
     isPending: intro.isFirstRunPending,
@@ -138,6 +148,10 @@ export function EmptySession({
       !intro.isVisible && !intro.isAwaitingGreeting && !isKickoffStarting,
     greetingPath: intro.isVisible ? intro.path : null,
   });
+
+  useEffect(() => {
+    resetNewChatExecutionTarget();
+  }, [resetNewChatExecutionTarget]);
 
   if (isKickoffStarting) {
     return <ExpertKickoffLoader expertName={expertName} />;
@@ -197,6 +211,9 @@ export function EmptySession({
                   />
                 </div>
               )}
+              {isLocalPCEnabled || newChatExecutionTarget.kind === "local" ? (
+                <ExecutionTargetPicker />
+              ) : null}
               <div
                 {...tourTarget("composer")}
                 className={cn(

@@ -32,6 +32,7 @@ from backend.util.exceptions import (
     NotAuthorizedError,
     NotFoundError,
 )
+from backend.util.url_redaction import mask_credential
 
 from . import db
 from . import model as models
@@ -601,4 +602,6 @@ async def _prune_dangling_webhook(user_id: str, webhook_id: str) -> None:
         webhook = await get_webhook(webhook_id)
         await prune_webhook_with_credential_lease(user_id, webhook)
     except Exception as e:
-        logger.warning(f"Best-effort prune of webhook #{webhook_id} failed: {e}")
+        logger.warning(
+            f"Best-effort prune of webhook #{mask_credential(webhook_id)} failed: {e}"
+        )

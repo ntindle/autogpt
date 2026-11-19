@@ -1,4 +1,8 @@
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
+// CommonMark: a closing fence is only the marker, then whitespace.
+const CLOSING_FENCE_RE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+// `[label]: url`, which a link anywhere in the document may point to.
+const REFERENCE_RE = /^\s{0,3}\[[^\]]+\]:\s*\S/m;
 const LIST_ITEM_RE = /^\s*([-*+]|\d+[.)])\s/;
 
 /**
@@ -7,6 +11,8 @@ const LIST_ITEM_RE = /^\s*([-*+]|\d+[.)])\s/;
  * continuations stay whole, since splitting them would change how they render.
  */
 export function splitMarkdownBlocks(text: string): string[] {
+  // Each block is parsed on its own, so a link would lose its reference.
+  if (REFERENCE_RE.test(text)) return [text];
   const blocks: string[] = [];
   let current: string[] = [];
   let fence: string | null = null;
@@ -14,13 +20,20 @@ export function splitMarkdownBlocks(text: string): string[] {
 
   for (const line of text.split("\n")) {
     const opener = FENCE_RE.exec(line)?.[1];
-    if (fence === null && afterBlank && current.length > 0 && startsBlock(line)) {
+    if (
+      fence === null &&
+      afterBlank &&
+      current.length > 0 &&
+      startsBlock(line)
+    ) {
       blocks.push(current.join("\n"));
       current = [];
     }
     current.push(line);
     if (fence !== null) {
-      if (opener && opener[0] === fence[0] && opener.length >= fence.length) fence = null;
+      const closer = CLOSING_FENCE_RE.exec(line)?.[1];
+      if (closer && closer[0] === fence[0] && closer.length >= fence.length)
+        fence = null;
     } else if (opener) {
       fence = opener;
     }

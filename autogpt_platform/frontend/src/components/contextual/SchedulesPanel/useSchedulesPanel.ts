@@ -14,6 +14,9 @@ import {
   getTeamScopedQueryKey,
   getTenantRequestInit,
 } from "@/components/contextual/TeamPicker/helpers";
+import { isSchedulerUnavailableError } from "@/services/schedules/scheduler-availability";
+import { useSchedulerOutage } from "@/services/schedules/useSchedulerOutage";
+import { useSchedulerQueryOptions } from "@/services/schedules/useSchedulerQueryOptions";
 
 export type ScheduleItem =
   | { kind: "copilot_turn"; item: CopilotTurnJobInfo }
@@ -26,6 +29,7 @@ function nextRunMs(item: { next_run_time?: string | null }): number {
 }
 
 export function useSchedulesPanel() {
+  const schedulerQueryOptions = useSchedulerQueryOptions();
   const organizationId = useOrgTeamStore((state) => state.activeOrgID);
   const teamId = useOrgTeamStore((state) => state.activeTeamID);
   const isReady = useOrgTeamStore((state) => state.isLoaded);
@@ -33,6 +37,7 @@ export function useSchedulesPanel() {
   // feature.  Stored via ``schedule_followup`` MCP tool.
   const copilotQuery = useListCopilotFollowupSchedules({
     query: {
+      ...schedulerQueryOptions,
       select: (res) => okData(res) ?? [],
       enabled: isReady,
       queryKey: getTeamScopedQueryKey(
@@ -49,6 +54,7 @@ export function useSchedulesPanel() {
   // work in one place (briefing pill, this list, single Delete flow).
   const graphQuery = useGetV1ListExecutionSchedulesForAUser({
     query: {
+      ...schedulerQueryOptions,
       select: (res) => okData(res) ?? [],
       enabled: isReady,
       queryKey: getTeamScopedQueryKey(
@@ -91,11 +97,26 @@ export function useSchedulesPanel() {
   );
 
   const paused = pausedQuery.data ?? [];
+  // A list rechecking after an outage stays out, not loading, until the
+  // scheduler answers.
+  const copilotOut = useSchedulerOutage(copilotQuery);
+  const graphOut = useSchedulerOutage(graphQuery);
+  const outage = copilotOut || graphOut;
   const isLoading =
-    copilotQuery.isLoading || graphQuery.isLoading || pausedQuery.isLoading;
-  const fetchError =
-    copilotQuery.error ?? graphQuery.error ?? pausedQuery.error;
+    (copilotQuery.isLoading && !copilotOut) ||
+    (graphQuery.isLoading && !graphOut) ||
+    pausedQuery.isLoading;
   const hasContent = schedules.length > 0 || paused.length > 0;
+  const fetchError =
+    [copilotQuery.error, graphQuery.error].find(
+      (error) => error && !isSchedulerUnavailableError(error),
+    ) ?? pausedQuery.error;
+  const settled = !isLoading;
+
+  function retryUnavailable() {
+    copilotQuery.refetch();
+    graphQuery.refetch();
+  }
 
   return {
     // Backwards-compat alias — ``followups`` was the only-copilot
@@ -105,10 +126,15 @@ export function useSchedulesPanel() {
     schedules,
     paused,
     isLoading,
+    // The scheduler is out: a calm notice, never an error or an empty list,
+    // above whatever did load.
+    unavailable: settled && !fetchError && outage,
+    retryUnavailable,
+    retrying: copilotQuery.isFetching || graphQuery.isFetching,
     // The sources are independent — only hard-fail once all have settled
-    // and there is nothing to show; a partial failure keeps the loaded
-    // lists visible and surfaces a non-blocking warning instead.
-    error: !isLoading && !hasContent ? fetchError : null,
-    partialError: !isLoading && hasContent ? fetchError : null,
+    // and there is nothing to show; a partial failure keeps the loaded lists
+    // visible and surfaces a non-blocking warning.
+    error: settled && !hasContent ? fetchError : null,
+    partialError: settled && hasContent ? fetchError : null,
   };
 }

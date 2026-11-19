@@ -1,11 +1,9 @@
 // Creating this hook, because we are using same saving stuff at multiple places in our builder
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { parseAsInteger, parseAsString, useQueryStates } from "nuqs";
 import {
-  getGetV1GetSpecificGraphQueryKey,
-  useGetV1GetSpecificGraph,
   usePostV1CreateNewGraph,
   usePutV1UpdateGraphVersion,
 } from "@/app/api/__generated__/endpoints/graphs/graphs";
@@ -23,16 +21,17 @@ import {
   clearTempFlowId,
   getTempFlowId,
 } from "@/services/builder-draft/draft-service";
-import {
-  getTeamScopedQueryKey,
-  getTenantRequestInit,
-} from "@/components/contextual/TeamPicker/helpers";
+import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
 import { useBuilderTenantScope } from "./useBuilderTenantScope";
-import { retryUnlessClientError } from "../helpers/graphLoadError";
 import {
   describeSaveError,
   markInvalidFields,
 } from "../helpers/saveGraphError";
+import {
+  getLoadedGraph,
+  isSaveCancelled,
+  waitForLoadedGraph,
+} from "../helpers/waitForLoadedGraph";
 
 export type SaveGraphOptions = {
   showToast?: boolean;
@@ -43,6 +42,7 @@ export type SaveGraphOptions = {
   teamId?: string | null;
 };
 
+/** Needs useFlow mounted, which fills the loadedGraph that saves wait for. */
 export const useSaveGraph = ({
   showToast = true,
   onSuccess,
@@ -61,30 +61,8 @@ export const useSaveGraph = ({
     useShallow((state) => state.setGraphSchemas),
   );
 
-  const { data: graph } = useGetV1GetSpecificGraph(
-    flowID ?? "",
-    flowVersion !== null ? { version: flowVersion } : {},
-    {
-      query: {
-        select: (res) => res.data as GraphModel,
-        enabled: !!flowID && tenantScope.isReady,
-        queryKey: getTeamScopedQueryKey(
-          getGetV1GetSpecificGraphQueryKey(
-            flowID ?? "",
-            flowVersion !== null ? { version: flowVersion } : {},
-          ),
-          tenantScope.organizationId,
-          tenantScope.teamId,
-        ),
-        retry: retryUnlessClientError,
-      },
-      request: getTenantRequestInit(
-        tenantScope.organizationId,
-        tenantScope.teamId,
-        tenantScope.isReady,
-      ),
-    },
-  );
+  // Saves waiting while the canvas is still loading the workflow they'd save.
+  const [canvasWaits, setCanvasWaits] = useState(0);
 
   const { mutateAsync: createNewGraph, isPending: isCreating } =
     usePostV1CreateNewGraph({
@@ -148,6 +126,18 @@ export const useSaveGraph = ({
 
   const persistGraph = useCallback(
     async (values?: { name?: string; description?: string }) => {
+      // A saved workflow is saved as a new version of the graph the canvas
+      // shows, so while the canvas is still loading the one in the URL (just
+      // after a save, or as the page opens) the save waits for it.
+      let graph = flowID ? getLoadedGraph(flowID, flowVersion) : null;
+      if (flowID && !graph) {
+        setCanvasWaits((count) => count + 1);
+        try {
+          graph = await waitForLoadedGraph(flowID, flowVersion);
+        } finally {
+          setCanvasWaits((count) => count - 1);
+        }
+      }
       const graphNodes = useNodeStore.getState().getBackendNodes();
       const graphLinks = useEdgeStore.getState().getBackendLinks();
 
@@ -204,16 +194,26 @@ export const useSaveGraph = ({
         return graphData;
       }
     },
-    [graph, toast, createNewGraph, updateGraph],
+    [
+      flowID,
+      flowVersion,
+      showToast,
+      toast,
+      createNewGraph,
+      updateGraph,
+      setGraphSchemas,
+    ],
   );
 
-  // Resolves to null when the save fails; the user has been told why.
+  // Resolves to null when the save fails, and the user has been told why, or
+  // when the builder left the workflow before it loaded.
   const saveGraph = useCallback(
     async (values?: { name?: string; description?: string }) => {
       let saved: GraphModel;
       try {
         saved = await persistGraph(values);
       } catch (error) {
+        if (isSaveCancelled(error)) return null;
         onError?.(error);
         markInvalidFields(error);
         toast(describeSaveError(error));
@@ -227,6 +227,6 @@ export const useSaveGraph = ({
 
   return {
     saveGraph,
-    isSaving: isCreating || isUpdating,
+    isSaving: canvasWaits > 0 || isCreating || isUpdating,
   };
 };

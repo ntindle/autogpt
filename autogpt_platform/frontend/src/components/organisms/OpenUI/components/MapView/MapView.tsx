@@ -18,7 +18,7 @@ const MapCanvas = dynamic(
     ssr: false,
     loading: () => (
       <div
-        className="flex h-72 items-center justify-center bg-zinc-100 text-sm text-zinc-500"
+        className="bg-zinc-100 text-sm text-zinc-500 flex h-72 items-center justify-center"
         role="status"
       >
         Loading map…
@@ -36,7 +36,7 @@ export function MapView({
   return (
     <section
       aria-label={props.title}
-      className="min-w-0 overflow-hidden rounded-xl border border-zinc-200 bg-white"
+      className="border-zinc-200 bg-white min-w-0 overflow-hidden rounded-xl border"
     >
       <MapControls
         title={props.title}

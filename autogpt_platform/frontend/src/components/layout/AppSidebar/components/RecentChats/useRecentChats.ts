@@ -1,4 +1,9 @@
 import {
+  SESSION_GROUPS_QUERY_KEY,
+  SESSION_GROUP_PAGES_QUERY_KEY,
+} from "@/app/(platform)/copilot/sessionGroups";
+import type { SessionListInfiniteData } from "@/app/(platform)/copilot/useSessionList";
+import {
   getV2GetSession,
   patchV2UpdateSessionPinned,
   patchV2UpdateSessionTitle,
@@ -10,10 +15,7 @@ import {
   useExcludeSkillLearningSource,
 } from "@/app/api/__generated__/endpoints/skill-learning/skill-learning";
 import { fetchAndExportChat } from "@/app/(platform)/copilot/helpers/exportChatAsMarkdown";
-import {
-  getSessionListQueryKey,
-  useSessionList,
-} from "@/app/(platform)/copilot/useSessionList";
+import { SESSION_LIST_QUERY_KEY } from "@/app/(platform)/copilot/useSessionList";
 import { useSessionDeletion } from "@/app/(platform)/copilot/useSessionDeletion";
 import { toast } from "@/components/molecules/Toast/use-toast";
 import { useStableCallback } from "@/hooks/useStableCallback";
@@ -34,11 +36,17 @@ export interface RecentChatSession {
   organization_id?: string | null;
   team_id?: string | null;
 }
+import { useSessionGroups } from "./useSessionGroups";
 
-export function useRecentChats() {
+interface Args {
+  /** Pinned chats get their own section and leave their groups. */
+  pinnedSeparately?: boolean;
+}
+
+export function useRecentChats({ pinnedSeparately = false }: Args = {}) {
   const queryClient = useQueryClient();
-  const { sessions, isLoading, hasMore, isLoadingMore, loadMore } =
-    useSessionList();
+  const { groups, pinnedSessions, isLoading, loadError, retryLoad } =
+    useSessionGroups(pinnedSeparately);
 
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -52,19 +60,35 @@ export function useRecentChats() {
     useState<RecentChatSession | null>(null);
 
   function getSession(id: string) {
-    const session = sessions.find((candidate) => candidate.id === id);
+    const sessions = [
+      ...pinnedSessions,
+      ...groups.flatMap((group) => group.sessions),
+    ];
+    const cachedPages = queryClient.getQueriesData<SessionListInfiniteData>({
+      queryKey: SESSION_GROUP_PAGES_QUERY_KEY,
+    });
+    const session =
+      sessions.find((candidate) => candidate.id === id) ??
+      cachedPages
+        .flatMap(
+          ([, data]) =>
+            data?.pages.flatMap((page) =>
+              page.status === 200 ? page.data.sessions : [],
+            ) ?? [],
+        )
+        .find((candidate) => candidate.id === id);
     if (!session) throw new Error(`Chat session ${id} is no longer available`);
     return session;
   }
 
-  function invalidateSessionList(id: string) {
-    const session = getSession(id);
-    return queryClient.invalidateQueries({
-      queryKey: getSessionListQueryKey(
-        session.organization_id,
-        session.team_id,
-      ),
-    });
+  function invalidateSessionList() {
+    for (const queryKey of [
+      SESSION_LIST_QUERY_KEY,
+      SESSION_GROUPS_QUERY_KEY,
+      SESSION_GROUP_PAGES_QUERY_KEY,
+    ]) {
+      void queryClient.invalidateQueries({ queryKey });
+    }
   }
 
   const {
@@ -85,8 +109,8 @@ export function useRecentChats() {
           getTenantRequestInit(session.organization_id, session.team_id),
         );
       },
-      onSuccess: (_response, variables) => {
-        invalidateSessionList(variables.sessionId);
+      onSuccess: () => {
+        invalidateSessionList();
       },
       onError: (error) => {
         toast({
@@ -109,8 +133,8 @@ export function useRecentChats() {
           getTenantRequestInit(session.organization_id, session.team_id),
         );
       },
-      onSuccess: (_response, variables) => {
-        invalidateSessionList(variables.sessionId);
+      onSuccess: () => {
+        invalidateSessionList();
         setEditingSessionId(null);
       },
       onError: (error) => {
@@ -226,11 +250,11 @@ export function useRecentChats() {
   }
 
   return {
-    sessions,
+    groups,
+    pinnedSessions,
     isLoading,
-    hasMore,
-    isLoadingMore,
-    loadMore,
+    loadError,
+    retryLoad,
     activeSessionId,
     togglePin,
     editingSessionId,

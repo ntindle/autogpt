@@ -21,7 +21,7 @@ export function AvailabilityEditor({ draft, onChange }: Props) {
   }
   return (
     <details>
-      <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium">
+      <summary className="text-sm min-h-11 cursor-pointer py-3 font-medium">
         Edit dates and available times
       </summary>
       <div className="space-y-3">
@@ -48,7 +48,7 @@ export function AvailabilityEditor({ draft, onChange }: Props) {
             {day.windows.map((window, windowIndex) => (
               <div key={windowIndex} className="flex flex-wrap items-end gap-2">
                 <input
-                  className="min-h-11 rounded-md border bg-background p-2 text-sm"
+                  className="text-sm min-h-11 rounded-md border bg-background p-2"
                   id={`${id}-${index}-${windowIndex}-start`}
                   aria-label={`${day.label} window ${windowIndex + 1} start`}
                   type="time"
@@ -64,7 +64,7 @@ export function AvailabilityEditor({ draft, onChange }: Props) {
                   }
                 />
                 <input
-                  className="min-h-11 rounded-md border bg-background p-2 text-sm"
+                  className="text-sm min-h-11 rounded-md border bg-background p-2"
                   id={`${id}-${index}-${windowIndex}-end`}
                   aria-label={`${day.label} window ${windowIndex + 1} end`}
                   type="time"

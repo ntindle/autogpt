@@ -19,18 +19,25 @@ interface Props {
  * empty state stands in for both.
  */
 export function FileLibrary({ sessionID, expert, isOpen }: Props) {
-  const panel = useFilesPanel({ sessionID, expertID: expert?.id ?? null, isOpen });
+  const panel = useFilesPanel({
+    sessionID,
+    expertID: expert?.id ?? null,
+    isOpen,
+  });
   const styles = useStyles();
   const { session } = panel;
   // In an expert's chat only the documents section shows the wait.
   const showSession =
-    session.isError || session.files.length > 0 || (session.isLoading && !expert);
+    session.isError ||
+    session.files.length > 0 ||
+    (session.isLoading && !expert);
 
   const documents = panel.expert;
   const hasNothingFromExpert =
     !!expert &&
     !!documents &&
     !showSession &&
+    !session.isLoading &&
     !documents.isLoading &&
     !documents.isError &&
     documents.files.length === 0;
@@ -38,7 +45,9 @@ export function FileLibrary({ sessionID, expert, isOpen }: Props) {
   return (
     <View style={styles.library}>
       {!showSession && !expert ? <FilesEmptyState /> : null}
-      {hasNothingFromExpert ? <FilesEmptyState expertName={expert?.name} /> : null}
+      {hasNothingFromExpert ? (
+        <FilesEmptyState expertName={expert?.name} />
+      ) : null}
       {showSession ? (
         <FileSection
           title="Files in this chat"

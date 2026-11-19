@@ -73,6 +73,18 @@ export function useExpertActivity(expertID: string, isOpen: boolean) {
   const isPaused = !!detail.data?.schedules_paused_at;
   const computerWord = computer.data ? computerState(computer.data) : null;
   const recent = (runs.data ?? []).slice(0, RECENT_LIMIT);
+  // A request that failed with nothing saved: told apart from "nothing yet".
+  const failed = [
+    detail,
+    graphSchedules,
+    followupSchedules,
+    runs,
+    computer,
+  ].filter((query) => query.isError && query.data === undefined);
+
+  function retryFailed() {
+    failed.forEach((query) => void query.refetch());
+  }
 
   function resumeErrorText() {
     if (!resume.isError) return null;
@@ -91,11 +103,17 @@ export function useExpertActivity(expertID: string, isOpen: boolean) {
   }
 
   return {
+    hasFailed: failed.length > 0,
+    retryFailed,
     upcoming: {
       isLoading: isUpcomingLoading,
       isShown: !isUpcomingLoading && (schedules.length > 0 || isPaused),
-      schedules: showAllUpcoming ? schedules : schedules.slice(0, UPCOMING_LIMIT),
-      hiddenCount: showAllUpcoming ? 0 : Math.max(0, schedules.length - UPCOMING_LIMIT),
+      schedules: showAllUpcoming
+        ? schedules
+        : schedules.slice(0, UPCOMING_LIMIT),
+      hiddenCount: showAllUpcoming
+        ? 0
+        : Math.max(0, schedules.length - UPCOMING_LIMIT),
       showMore: showMoreUpcoming,
       isPaused,
       resume: resumeRoutines,

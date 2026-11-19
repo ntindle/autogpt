@@ -75,6 +75,8 @@ def setup_app_auth(mock_jwt_user, mock_shared_cache, test_user_id, monkeypatch):
     # Existing org/team action tests opt in; dedicated rollout tests cover off.
     monkeypatch.setenv("FORCE_FLAG_SHOW_ORG_SETTINGS", "true")
     monkeypatch.setattr(graphs_module, "clear_unowned_auto_credentials", AsyncMock())
+    monkeypatch.setattr(graphs_module, "require_role_where_resource_lives", AsyncMock())
+    monkeypatch.setattr(api_keys_module, "refuse_closed_account", AsyncMock())
     from autogpt_libs.auth.dependencies import get_request_context
     from autogpt_libs.auth.jwt_utils import get_jwt_payload
     from autogpt_libs.auth.models import RequestContext

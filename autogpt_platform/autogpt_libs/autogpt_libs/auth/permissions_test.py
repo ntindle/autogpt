@@ -293,3 +293,10 @@ class TestTeamPermissions:
         ctx = TEAM_BILLING_MGR
         assert check_team_permission(ctx, TeamAction.CREATE_AGENTS) is False
         assert check_team_permission(ctx, TeamAction.VIEW_SPEND) is True
+
+    def test_team_admin_who_is_also_billing_manager_keeps_member_actions(self):
+        ctx = _make_ctx(
+            team_id="ws-1", is_team_admin=True, is_team_billing_manager=True
+        )
+        assert check_team_permission(ctx, TeamAction.VIEW_EXECUTIONS) is True
+        assert check_team_permission(ctx, TeamAction.CREATE_AGENTS) is True

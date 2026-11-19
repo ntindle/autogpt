@@ -3,8 +3,11 @@ import { TaskConversationContext } from "./components/TaskConversationContext/Ta
 import { ChatContainer } from "./components/ChatContainer/ChatContainer";
 import { ChatSenderRegistration } from "./components/ChatSenderRegistration/ChatSenderRegistration";
 import type { FloatingControls } from "./components/ChatMessagesContainer/components/ThreadHeader";
+import { LocalPCBadge } from "./components/LocalPCBadge/LocalPCBadge";
+import { LocalPCComputerUseConsent } from "./components/LocalPCComputerUseConsent/LocalPCComputerUseConsent";
 import { ProviderLimitDialog } from "./components/ProviderLimitDialog/ProviderLimitDialog";
 import { RateLimitGate } from "./components/RateLimitResetDialog/RateLimitGate";
+import { RecordWorkflow } from "./components/RecordWorkflow/RecordWorkflow";
 import { useCopilotPage, useCopilotRuntimePage } from "./useCopilotPage";
 import { ConversationOrganization } from "./components/ConversationOrganization/ConversationOrganization";
 import { TaskScopeContext } from "@/services/tasks/TaskScopeContext";
@@ -81,6 +84,7 @@ function ChatHostView({
   usage: ReturnType<typeof useUsageExperience>;
   usageRefresh: ReturnType<typeof useRateLimitRefresh>;
 }) {
+  const isRecordingEnabled = useGetFlag(Flag.WORKFLOW_RECORDING);
   const {
     sessionId,
     sessionOrganizationId,
@@ -98,11 +102,13 @@ function ChatHostView({
     createSession,
     onSend,
     onStartTask,
+    onResendUnconfirmed,
     onEnqueue,
     queuedMessages,
     isLoadingSession,
     isSessionError,
     isSessionNotFound,
+    removedChat,
     isCreatingSession,
     isUploadingFiles,
     pendingSend,
@@ -117,6 +123,7 @@ function ChatHostView({
     dismissProviderLimit,
     sessionDryRun,
     sessionWorkspaceTaskId,
+    sessionExecutionTarget,
     sessionChatStatus,
     sessionSentFrom,
     sessionAutopilotMode,
@@ -131,6 +138,8 @@ function ChatHostView({
     canSelectCreateTeam,
     followBackendTurn,
   } = page;
+  const isLocalSession =
+    !!sessionId && sessionExecutionTarget?.kind === "local";
   function dismissAfterProviderChange() {
     usageRefresh.release();
     dismissRateLimit();
@@ -155,6 +164,25 @@ function ChatHostView({
           }}
         >
           <ConversationOrganization organizationId={sessionOrganizationId} />
+          {isLocalSession ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2 px-4 pt-1.5">
+                <LocalPCBadge
+                  sessionID={sessionId}
+                  machineID={sessionExecutionTarget.machine_id}
+                  allowedRoot={sessionExecutionTarget.allowed_root}
+                />
+                {isRecordingEnabled ? (
+                  <RecordWorkflow key={sessionId} sessionID={sessionId} />
+                ) : null}
+              </div>
+              <LocalPCComputerUseConsent
+                key={`local-pc-consent-${sessionId}`}
+                sessionID={sessionId}
+              />
+            </>
+          ) : null}
+
           {sessionId &&
             !isLoadingSession &&
             !isRestoringActiveSession &&
@@ -202,6 +230,7 @@ function ChatHostView({
               isLoadingSession={isLoadingSession}
               isSessionError={isSessionError}
               isSessionNotFound={isSessionNotFound}
+              removedChat={removedChat}
               isCreatingSession={isCreatingSession}
               isReconnecting={isReconnecting}
               isFinishProbing={isFinishProbing}
@@ -212,6 +241,7 @@ function ChatHostView({
               onCreateSession={createSession}
               onSend={onSend}
               onStartTask={onStartTask}
+              onResendUnconfirmed={onResendUnconfirmed}
               onStop={stop}
               onEnqueue={onEnqueue}
               queuedMessages={queuedMessages}
@@ -233,6 +263,7 @@ function ChatHostView({
               canSelectCreateTeam={canSelectCreateTeam}
               onBackendTurn={followBackendTurn}
               floatingControls={floatingControls}
+              isLocalSession={isLocalSession}
             />
           </div>
           <RateLimitGate

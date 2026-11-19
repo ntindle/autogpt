@@ -17,6 +17,7 @@ from backend.api.live_auth import (
 )
 from backend.api.live_auth import resolve_write_team_id
 from backend.api.org_rollout import require_personal_scope
+from backend.data.account_deletion import refuse_closed_account
 from backend.data.auth import api_key as api_key_db
 from backend.data.tenancy import get_user_team_ids, live_resource_permission_barrier
 
@@ -85,6 +86,7 @@ async def create_api_key(
             status_code=400,
             detail="The requested team must match the active workspace context.",
         )
+    await refuse_closed_account(user_id)
     requested_team_id = await resolve_write_team_id(
         user_id,
         ctx.org_id,

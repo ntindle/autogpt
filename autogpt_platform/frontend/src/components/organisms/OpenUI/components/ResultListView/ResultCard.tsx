@@ -16,9 +16,9 @@ export function ResultCard({ option, selected, disabled, onSelect }: Props) {
       className={`flex min-w-0 flex-col gap-3 rounded-xl border p-4 ${selected ? "border-primary bg-primary/5" : "border-border"}`}
     >
       {option.image && <ResultImage image={option.image} />}
-      <h4 className="break-words font-semibold">{option.title}</h4>
+      <h4 className="font-semibold break-words">{option.title}</h4>
       <p className="text-sm text-muted-foreground">{option.description}</p>
-      <dl className="space-y-2 text-sm">
+      <dl className="text-sm space-y-2">
         {option.facts.map((fact, index) => (
           <div key={index}>
             <dt className="text-xs text-muted-foreground">{fact.label}</dt>

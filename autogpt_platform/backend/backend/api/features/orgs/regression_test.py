@@ -1182,6 +1182,12 @@ class TestRegressionStore:
             "backend.api.features.store.db.prisma.models.StoreListing.prisma",
             return_value=self.mock_listing_actions,
         )
+        # A submission checks the role where the workflow lives, which reads
+        # membership rows.
+        mocker.patch(
+            "backend.api.features.store.db.require_role_where_resource_lives",
+            AsyncMock(),
+        )
 
     @pytest.mark.asyncio
     async def test_regression_my_unpublished_agents_returns_only_own(self):
@@ -1696,6 +1702,14 @@ class TestPR10WebhookTenancy:
             "backend.copilot.tools.run_agent._safe_link_to_chat_share",
             AsyncMock(),
         )
+        # execute_preset checks the caller's role where the run will land,
+        # which reads membership rows.
+        self.mock_role_check = AsyncMock()
+        mocker.patch(
+            "backend.api.features.library.routes.presets"
+            ".require_role_where_resource_lives",
+            self.mock_role_check,
+        )
 
     @pytest.mark.asyncio
     async def test_copilot_agent_run_uses_exact_session_scope(self, mocker):
@@ -1785,6 +1799,11 @@ class TestPR10WebhookTenancy:
         assert call_kwargs["organization_id"] == "org-preset"
         assert call_kwargs["team_id"] == "team-preset"
         assert call_kwargs["user_id"] == USER_ID
+        assert self.mock_role_check.await_args.args[:3] == (
+            USER_ID,
+            "org-preset",
+            "team-preset",
+        )
 
     @pytest.mark.asyncio
     async def test_preset_execution_rejects_untagged_row_in_org_context(self):
@@ -2158,6 +2177,12 @@ class TestPR15MarketplaceOrg:
         mocker.patch(
             "backend.api.features.store.db.live_agent_graph_access_barrier",
             side_effect=_allowed_graph_barrier,
+        ),
+        # A submission checks the role where the workflow lives, which reads
+        # membership rows.
+        mocker.patch(
+            "backend.api.features.store.db.require_role_where_resource_lives",
+            AsyncMock(),
         )
 
     @pytest.mark.asyncio
@@ -3916,3 +3941,29 @@ class TestReviewFindings:
             "approve_transfer should not set status to COMPLETED; "
             "only execute_transfer should do that"
         )
+
+
+@pytest.mark.parametrize("archived", [False, True])
+async def test_credential_membership_refuses_archived_teams(mocker, archived):
+    from backend.api.features.orgs import db as orgs_db
+
+    org_member = MagicMock(status="ACTIVE", Org=MagicMock(deletedAt=None))
+    team_member = MagicMock(
+        status="ACTIVE",
+        Team=MagicMock(
+            orgId="saved-org",
+            archivedAt=datetime.now(timezone.utc) if archived else None,
+        ),
+    )
+    mocker.patch.object(
+        orgs_db,
+        "prisma",
+        MagicMock(
+            orgmember=MagicMock(find_unique=AsyncMock(return_value=org_member)),
+            teammember=MagicMock(find_unique=AsyncMock(return_value=team_member)),
+        ),
+    )
+
+    assert await orgs_db.is_active_member(USER_ID, "saved-org", "saved-team") is (
+        not archived
+    )

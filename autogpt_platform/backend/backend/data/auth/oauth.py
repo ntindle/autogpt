@@ -10,13 +10,17 @@ Hashing strategy:
 """
 
 import asyncio
+import base64
 import hashlib
+import ipaddress
 import logging
+import re
 import secrets
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
+from urllib.parse import urlsplit
 
 from autogpt_libs.api_key.keysmith import APIKeySmith
 from prisma import Prisma
@@ -64,6 +68,7 @@ REFRESH_TOKEN_TTL = timedelta(days=30)
 
 ACCESS_TOKEN_PREFIX = "agpt_xt_"
 REFRESH_TOKEN_PREFIX = "agpt_rt_"
+_PKCE_VERIFIER_RE = re.compile(r"^[A-Za-z0-9\-._~]{43,128}$")
 
 
 def is_access_token(credential: str) -> bool:
@@ -101,6 +106,15 @@ class InvalidGrantError(OAuthError):
         super().__init__(f"Invalid grant: {reason}")
 
 
+class RefreshTokenFamilyRevokedError(InvalidGrantError):
+    """Refresh-token replay that requires live session revocation."""
+
+    def __init__(self, reason: str, user_id: str, application_id: str):
+        self.user_id = user_id
+        self.application_id = application_id
+        super().__init__(reason)
+
+
 class InvalidTokenError(OAuthError):
     """Invalid, expired, or revoked token"""
 
@@ -127,6 +141,11 @@ class OAuthApplicationInfo(BaseModel):
     scopes: list[APIPermission]
     owner_id: str
     is_active: bool
+    # Public clients (PKCE-only desktop / mobile / SPA apps) skip the
+    # client_secret check. See `validate_client_credentials` for the
+    # security-critical short-circuit and the OAuthApplication.isPublic
+    # comment in schema.prisma for context.
+    is_public: bool = False
     created_at: datetime
     updated_at: datetime
     organization_id: Optional[str] = None
@@ -145,6 +164,7 @@ class OAuthApplicationInfo(BaseModel):
             scopes=[APIPermission(s) for s in app.scopes],
             owner_id=app.ownerId,
             is_active=app.isActive,
+            is_public=app.isPublic,
             created_at=app.createdAt,
             updated_at=app.updatedAt,
             organization_id=app.organizationId,
@@ -212,6 +232,7 @@ class OAuthAccessTokenInfo(APIAuthorizationInfo):
     id: str
     expires_at: datetime  # type: ignore
     application_id: str
+    refresh_family_id: Optional[str] = None
 
     type: Literal["oauth"] = "oauth"  # type: ignore
 
@@ -226,6 +247,7 @@ class OAuthAccessTokenInfo(APIAuthorizationInfo):
             last_used_at=None,
             revoked_at=token.revokedAt,
             application_id=token.applicationId,
+            refresh_family_id=token.refreshFamilyId,
         )
 
 
@@ -252,6 +274,8 @@ class OAuthRefreshTokenInfo(BaseModel):
     expires_at: datetime
     application_id: str
     revoked_at: Optional[datetime] = None
+    family_id: str
+    family_revoked_at: Optional[datetime] = None
 
     @staticmethod
     def from_db(token: PrismaOAuthRefreshToken):
@@ -263,6 +287,8 @@ class OAuthRefreshTokenInfo(BaseModel):
             expires_at=token.expiresAt,
             application_id=token.applicationId,
             revoked_at=token.revokedAt,
+            family_id=token.familyId,
+            family_revoked_at=token.familyRevokedAt,
         )
 
 
@@ -318,13 +344,28 @@ async def get_oauth_application_with_secret(
 
 
 async def validate_client_credentials(
-    client_id: str, client_secret: str
+    client_id: str,
+    client_secret: str,
+    *,
+    code_verifier: str | None = None,
+    allow_public_without_secret: bool = False,
 ) -> OAuthApplicationInfo:
     """
     Validate client credentials and return application info.
 
+    Confidential clients (the default) require a valid `client_secret`.
+    Public clients (`isPublic=true` on the OAuthApplication row) skip the
+    secret check **iff** a PKCE `code_verifier` is supplied — PKCE is the
+    only legitimate credential for a public client per RFC 7636 / RFC 8252.
+    Public clients without a code verifier are rejected unless
+    ``allow_public_without_secret`` is set for a grant that carries its own
+    bearer credential, such as a refresh token. The caller must still bind
+    that credential to the returned application before minting tokens.
+
     Raises:
-        InvalidClientError: If client_id or client_secret is invalid, or app is inactive
+        InvalidClientError: If client_id is invalid, app is inactive, or
+            the appropriate credential check (secret for confidential,
+            code_verifier presence for public) fails.
     """
     app = await get_oauth_application_with_secret(client_id)
     if not app:
@@ -333,21 +374,75 @@ async def validate_client_credentials(
     if not app.is_active:
         raise InvalidClientError("Application is not active")
 
-    # On the event loop, a Scrypt check would stall every other request the
-    # worker is serving.
-    secret_matches = await asyncio.get_running_loop().run_in_executor(
-        _client_secret_checks, app.verify_secret, client_secret
-    )
-    if not secret_matches:
-        raise InvalidClientError("Invalid client_secret")
+    if app.is_public:
+        # Public client: PKCE is the credential. The actual PKCE
+        # challenge/verifier check happens later in
+        # `consume_authorization_code` (it has the stored code_challenge);
+        # here we just refuse to mint a token without ANY credential at
+        # all. Confidential clients still get the secret check below.
+        if not allow_public_without_secret and (
+            code_verifier is None or _PKCE_VERIFIER_RE.fullmatch(code_verifier) is None
+        ):
+            raise InvalidClientError(
+                "Public client requires a valid RFC 7636 PKCE code_verifier; "
+                "client_secret is not accepted for public clients"
+            )
+    else:
+        # Confidential client: verify the secret. On the event loop, a
+        # Scrypt check would stall every other request the worker is serving.
+        secret_matches = await asyncio.get_running_loop().run_in_executor(
+            _client_secret_checks, app.verify_secret, client_secret
+        )
+        if not secret_matches:
+            raise InvalidClientError("Invalid client_secret")
 
     # Return without secret hash
-    return OAuthApplicationInfo(**app.model_dump(exclude={"client_secret_hash"}))
+    return OAuthApplicationInfo(
+        **app.model_dump(exclude={"client_secret_hash", "client_secret_salt"})
+    )
+
+
+def is_safe_oauth_redirect_uri(redirect_uri: str) -> bool:
+    if not redirect_uri or len(redirect_uri) > 2048:
+        return False
+    if any(
+        char.isspace() or char == "\\" or ord(char) < 32 or ord(char) == 127
+        for char in redirect_uri
+    ):
+        return False
+
+    try:
+        parsed = urlsplit(redirect_uri)
+        host = parsed.hostname
+        parsed.port
+    except ValueError:
+        return False
+
+    if (
+        parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+        or not host
+    ):
+        return False
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http":
+        return False
+    if host == "localhost":
+        return True
+
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def validate_redirect_uri(app: OAuthApplicationInfo, redirect_uri: str) -> bool:
-    """Validate that redirect URI is registered for the application"""
-    return redirect_uri in app.redirect_uris
+    """Validate that a redirect URI is safe and exactly registered."""
+    return (
+        is_safe_oauth_redirect_uri(redirect_uri) and redirect_uri in app.redirect_uris
+    )
 
 
 def validate_scopes(
@@ -479,12 +574,6 @@ def _verify_pkce(
         # Hash the verifier with SHA256 and base64url encode
         hashed = hashlib.sha256(code_verifier.encode("ascii")).digest()
         computed_challenge = (
-            secrets.token_urlsafe(len(hashed)).encode("ascii").decode("ascii")
-        )
-        # For proper base64url encoding
-        import base64
-
-        computed_challenge = (
             base64.urlsafe_b64encode(hashed).decode("ascii").rstrip("=")
         )
         return secrets.compare_digest(computed_challenge, code_challenge)
@@ -507,6 +596,7 @@ async def create_access_token(
     scopes: list[APIPermission],
     *,
     tx: Prisma | None = None,
+    refresh_family_id: str | None = None,
 ) -> OAuthAccessToken:
     """
     Create a new access token.
@@ -530,6 +620,7 @@ async def create_access_token(
             "applicationId": application_id,
             "userId": user_id,
             "scopes": [s for s in scopes],
+            "refreshFamilyId": refresh_family_id,
         }
     )
 
@@ -570,6 +661,11 @@ async def validate_access_token(
     if access_token.revokedAt is not None:
         raise InvalidTokenError("access token has been revoked")
 
+    if access_token.refreshFamilyId and await _is_refresh_family_revoked(
+        access_token.refreshFamilyId
+    ):
+        raise InvalidTokenError("access token refresh family has been revoked")
+
     # Check expiration
     now = datetime.now(timezone.utc)
     if access_token.expiresAt < now:
@@ -593,7 +689,8 @@ async def revoke_access_token(
             Only tokens belonging to this application will be revoked.
 
     Returns:
-        OAuthAccessTokenInfo if token was found and revoked, None otherwise.
+        OAuthAccessTokenInfo if the token belongs to the application, including
+        when it had already been revoked, and None otherwise.
 
     Note:
         Always performs exactly 2 DB queries regardless of outcome to prevent
@@ -603,7 +700,7 @@ async def revoke_access_token(
         token_hash = _hash_token(token)
 
         # Use update_many to filter by both token and applicationId
-        updated_count = await PrismaOAuthAccessToken.prisma().update_many(
+        await PrismaOAuthAccessToken.prisma().update_many(
             where={
                 "token": token_hash,
                 "applicationId": application_id,
@@ -617,14 +714,13 @@ async def revoke_access_token(
             where={"token": token_hash}
         )
 
-        # Only return result if we actually revoked something
-        if updated_count == 0:
+        if not result or result.applicationId != application_id:
             return None
 
-        return OAuthAccessTokenInfo.from_db(result) if result else None
-    except Exception as e:
-        logger.exception(f"Error revoking access token: {e}")
-        return None
+        return OAuthAccessTokenInfo.from_db(result)
+    except Exception:
+        logger.exception("Error revoking access token")
+        raise
 
 
 # ============================================================================
@@ -638,6 +734,7 @@ async def create_refresh_token(
     scopes: list[APIPermission],
     *,
     tx: Prisma | None = None,
+    family_id: str | None = None,
 ) -> OAuthRefreshToken:
     """
     Create a new refresh token.
@@ -661,10 +758,32 @@ async def create_refresh_token(
             "applicationId": application_id,
             "userId": user_id,
             "scopes": [s for s in scopes],
+            "familyId": family_id or str(uuid.uuid4()),
         }
     )
 
     return OAuthRefreshToken.from_db(saved_token, plaintext_token=plaintext_token)
+
+
+async def _is_refresh_family_revoked(family_id: str) -> bool:
+    compromised_token = await PrismaOAuthRefreshToken.prisma().find_first(
+        where={
+            "familyId": family_id,
+            "familyRevokedAt": {"not": None},
+        }
+    )
+    return compromised_token is not None
+
+
+async def _revoke_refresh_family(family_id: str, now: datetime) -> None:
+    await PrismaOAuthRefreshToken.prisma().update_many(
+        where={"familyId": family_id},
+        data={"revokedAt": now, "familyRevokedAt": now},
+    )
+    await PrismaOAuthAccessToken.prisma().update_many(
+        where={"refreshFamilyId": family_id, "revokedAt": None},
+        data={"revokedAt": now},
+    )
 
 
 async def refresh_tokens(
@@ -683,16 +802,33 @@ async def refresh_tokens(
     if not rt:
         raise InvalidGrantError("refresh token not found")
 
-    if rt.revokedAt is not None:
-        raise InvalidGrantError("refresh token has been revoked")
+    # NOTE: no need to check Application.isActive, this is checked by the token endpoint
+
+    # Validate application
     if rt.applicationId != application_id:
         raise InvalidGrantError("refresh token does not belong to this application")
 
+    if rt.familyRevokedAt is not None or await _is_refresh_family_revoked(rt.familyId):
+        raise RefreshTokenFamilyRevokedError(
+            "refresh token family has been revoked",
+            rt.userId,
+            rt.applicationId,
+        )
+
+    if rt.revokedAt is not None:
+        await _revoke_refresh_family(rt.familyId, datetime.now(timezone.utc))
+        raise RefreshTokenFamilyRevokedError(
+            "refresh token reuse detected; family revoked",
+            rt.userId,
+            rt.applicationId,
+        )
+
+    # Check expiration
     now = datetime.now(timezone.utc)
     if rt.expiresAt < now:
         raise InvalidGrantError("refresh token expired")
 
-    # Before the revoke, so the app's grant still works once a ban is lifted.
+    # Before the claim, so the app's grant still works once a ban is lifted.
     if await is_user_banned(rt.userId):
         raise InvalidGrantError("the account this token belongs to is banned")
 
@@ -706,21 +842,38 @@ async def refresh_tokens(
                 "token": token_hash,
                 "applicationId": application_id,
                 "revokedAt": None,
+                "familyRevokedAt": None,
                 "expiresAt": {"gte": now},
             },
             data={"revokedAt": now},
         )
-        if consumed != 1:
-            raise InvalidGrantError("refresh token has been revoked")
+        if consumed == 1:
+            scopes = [APIPermission(s) for s in rt.scopes]
+            new_refresh_token = await create_refresh_token(
+                rt.applicationId, rt.userId, scopes, family_id=rt.familyId, tx=tx
+            )
+            new_access_token = await create_access_token(
+                rt.applicationId,
+                rt.userId,
+                scopes,
+                refresh_family_id=rt.familyId,
+                tx=tx,
+            )
+    if consumed != 1:
+        await _revoke_refresh_family(rt.familyId, now)
+        raise RefreshTokenFamilyRevokedError(
+            "refresh token reuse detected; family revoked", rt.userId, rt.applicationId
+        )
 
-        scopes = [APIPermission(s) for s in rt.scopes]
-        new_access_token = await create_access_token(
-            rt.applicationId, rt.userId, scopes, tx=tx
+    if await _is_refresh_family_revoked(rt.familyId):
+        await _revoke_refresh_family(rt.familyId, datetime.now(timezone.utc))
+        raise RefreshTokenFamilyRevokedError(
+            "refresh token family was revoked during rotation",
+            rt.userId,
+            rt.applicationId,
         )
-        new_refresh_token = await create_refresh_token(
-            rt.applicationId, rt.userId, scopes, tx=tx
-        )
-        return new_access_token, new_refresh_token
+
+    return new_access_token, new_refresh_token
 
 
 async def revoke_refresh_token(
@@ -735,17 +888,17 @@ async def revoke_refresh_token(
             Only tokens belonging to this application will be revoked.
 
     Returns:
-        OAuthRefreshTokenInfo if token was found and revoked, None otherwise.
+        OAuthRefreshTokenInfo if the token belongs to the application, including
+        when its family had already been revoked, and None otherwise.
 
-    Note:
-        Always performs exactly 2 DB queries regardless of outcome to prevent
-        timing side-channel attacks that could reveal token existence.
+    Revoking one refresh token revokes its full rotation family and every access
+    token issued from that family.
     """
     try:
         token_hash = _hash_token(token)
 
         # Use update_many to filter by both token and applicationId
-        updated_count = await PrismaOAuthRefreshToken.prisma().update_many(
+        await PrismaOAuthRefreshToken.prisma().update_many(
             where={
                 "token": token_hash,
                 "applicationId": application_id,
@@ -759,14 +912,14 @@ async def revoke_refresh_token(
             where={"token": token_hash}
         )
 
-        # Only return result if we actually revoked something
-        if updated_count == 0:
+        if not result or result.applicationId != application_id:
             return None
 
-        return OAuthRefreshTokenInfo.from_db(result) if result else None
-    except Exception as e:
-        logger.exception(f"Error revoking refresh token: {e}")
-        return None
+        await _revoke_refresh_family(result.familyId, datetime.now(timezone.utc))
+        return OAuthRefreshTokenInfo.from_db(result)
+    except Exception:
+        logger.exception("Error revoking refresh token")
+        raise
 
 
 # ============================================================================
@@ -835,7 +988,7 @@ async def introspect_token(
                 exp=int(token_info.expires_at.timestamp()),
                 token_type="access_token",
             )
-        except InvalidTokenError:
+        except (InvalidTokenError, InvalidClientError):
             pass  # Try as refresh token
 
     # Try as refresh token
@@ -844,21 +997,27 @@ async def introspect_token(
         where={"token": token_hash}
     )
 
-    if refresh_token and refresh_token.revokedAt is None:
+    if (
+        refresh_token
+        and refresh_token.revokedAt is None
+        and refresh_token.familyRevokedAt is None
+        and not await _is_refresh_family_revoked(refresh_token.familyId)
+    ):
         # Check if valid (not expired)
         now = datetime.now(timezone.utc)
         if refresh_token.expiresAt > now and not await is_user_banned(
             refresh_token.userId
         ):
             app = await get_oauth_application_by_id(refresh_token.applicationId)
-            return TokenIntrospectionResult(
-                active=True,
-                scopes=list(s for s in refresh_token.scopes),
-                client_id=app.client_id if app else None,
-                user_id=refresh_token.userId,
-                exp=int(refresh_token.expiresAt.timestamp()),
-                token_type="refresh_token",
-            )
+            if app and app.is_active:
+                return TokenIntrospectionResult(
+                    active=True,
+                    scopes=list(s for s in refresh_token.scopes),
+                    client_id=app.client_id,
+                    user_id=refresh_token.userId,
+                    exp=int(refresh_token.expiresAt.timestamp()),
+                    token_type="refresh_token",
+                )
 
     # Token not found or inactive
     return TokenIntrospectionResult(active=False)

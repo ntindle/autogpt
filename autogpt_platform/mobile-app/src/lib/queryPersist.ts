@@ -31,12 +31,18 @@ const storagePersister = createAsyncStoragePersister({
 
 let waiting: PersistedClient | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+// Saves run one after another, and a removal waits for the last, so a save
+// already handed to storage can't write the old account's copy after it.
+let saving: Promise<void> = Promise.resolve();
 
 function saveWaiting() {
   saveTimer = null;
   const client = waiting;
   waiting = null;
-  if (client) void storagePersister.persistClient(trimClient(client));
+  if (!client) return;
+  saving = saving
+    .then(() => storagePersister.persistClient(trimClient(client)))
+    .catch(() => undefined);
 }
 
 /**
@@ -53,6 +59,7 @@ export const queryPersister: Persister = {
     if (saveTimer !== null) clearTimeout(saveTimer);
     saveTimer = null;
     waiting = null;
+    await saving;
     await storagePersister.removeClient();
   },
 };
@@ -63,7 +70,10 @@ export const queryPersister: Persister = {
  * instead of shown. Returns the function that stops saving; a restore that
  * finishes after it is dropped, so a quick sign-out can't bring the data back.
  */
-export function startCachePersistence(queryClient: QueryClient, userID: string) {
+export function startCachePersistence(
+  queryClient: QueryClient,
+  userID: string,
+) {
   const buster = `${PERSIST_VERSION}:${userID}`;
   let isStopped = false;
   let unsubscribe: (() => void) | null = null;
@@ -76,7 +86,8 @@ export function startCachePersistence(queryClient: QueryClient, userID: string) 
       saved = undefined; // An unreadable copy is replaced by the next save.
     }
     if (isStopped) return;
-    if (saved && isUsable(saved, buster)) hydrate(queryClient, saved.clientState);
+    if (saved && isUsable(saved, buster))
+      hydrate(queryClient, saved.clientState);
     else if (saved) void queryPersister.removeClient();
     unsubscribe = persistQueryClientSubscribe({
       queryClient,
@@ -94,21 +105,29 @@ export function startCachePersistence(queryClient: QueryClient, userID: string) 
 }
 
 function isUsable(saved: PersistedClient, buster: string) {
-  return saved.buster === buster && Date.now() - saved.timestamp <= PERSIST_MAX_AGE_MS;
+  return (
+    saved.buster === buster &&
+    Date.now() - saved.timestamp <= PERSIST_MAX_AGE_MS
+  );
 }
 
 function shouldPersistQuery(query: Query) {
   if (query.state.status !== "success") return false;
   const [scope, kind] = query.queryKey;
   if (scope === expertKeys.list[0]) return query.queryKey.length === 1;
-  return scope === chatKeys.sessions[0] && (kind === "sessions" || kind === "session");
+  return (
+    scope === chatKeys.sessions[0] &&
+    (kind === "sessions" || kind === "session")
+  );
 }
 
 // Only the most recent chats, and none so large they would slow every save.
 function trimClient(client: PersistedClient): PersistedClient {
   const chats = client.clientState.queries
     .filter((query) => query.queryKey[1] === "session")
-    .filter((query) => JSON.stringify(query.state.data).length <= MAX_CHAT_CHARS)
+    .filter(
+      (query) => JSON.stringify(query.state.data).length <= MAX_CHAT_CHARS,
+    )
     .sort((a, b) => b.state.dataUpdatedAt - a.state.dataUpdatedAt)
     .slice(0, MAX_SAVED_CHATS);
   const kept = new Set(chats.map((query) => query.queryHash));

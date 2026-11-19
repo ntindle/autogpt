@@ -16,7 +16,7 @@ interface Props extends FileViewHeaderProps {
 
 export function FileViewHeader({ name, onOpen, status }: Props) {
   return (
-    <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+    <div className="text-xs flex min-w-0 items-center gap-2 text-muted-foreground">
       <Icon icon={DashboardSquare01Icon} size={14} className="shrink-0" />
       <span className="truncate font-medium text-foreground" title={name}>
         {name}

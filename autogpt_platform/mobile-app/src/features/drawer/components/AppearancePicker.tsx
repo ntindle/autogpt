@@ -1,4 +1,8 @@
-import { Moon02Icon, SmartPhone01Icon, Sun03Icon } from "@hugeicons/core-free-icons";
+import {
+  Moon02Icon,
+  SmartPhone01Icon,
+  Sun03Icon,
+} from "@hugeicons/core-free-icons";
 import type { IconSvgElement } from "@hugeicons/react-native";
 import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -11,7 +15,11 @@ import {
 } from "@/lib/appearance";
 import { createStyles, radius, spacing, type, useColors } from "@/lib/theme";
 
-const OPTIONS: { value: AppearanceChoice; label: string; icon: IconSvgElement }[] = [
+const OPTIONS: {
+  value: AppearanceChoice;
+  label: string;
+  icon: IconSvgElement;
+}[] = [
   { value: "system", label: "System", icon: SmartPhone01Icon },
   { value: "light", label: "Light", icon: Sun03Icon },
   { value: "dark", label: "Dark", icon: Moon02Icon },
@@ -39,7 +47,7 @@ export function AppearancePicker() {
               key={option.value}
               accessibilityRole="radio"
               accessibilityLabel={option.label}
-              accessibilityState={{ selected: isSelected }}
+              accessibilityState={{ checked: isSelected }}
               onPress={() => pick(option.value)}
               style={[styles.segment, isSelected && styles.selected]}
             >
@@ -60,7 +68,11 @@ export function AppearancePicker() {
 }
 
 const useStyles = createStyles((colors) => ({
-  section: { gap: spacing.xs, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  section: {
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
   heading: { ...type.small, color: colors.textTertiary },
   track: {
     flexDirection: "row",

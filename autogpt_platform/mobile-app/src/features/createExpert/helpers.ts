@@ -10,7 +10,10 @@ export type Family = (typeof managedAvatars)[number]["family"];
 
 // The web's raise flow (`raise/components/CategoryStep/helpers.ts`): picking
 // an area there sets the expert's `color` token and `role` together.
-const FAMILY_DETAILS: Record<Family, { label: string; color: string; role: string }> = {
+const FAMILY_DETAILS: Record<
+  Family,
+  { label: string; color: string; role: string }
+> = {
   marketing: { label: "Marketing", color: "orange-300", role: "Marketer" },
   sales: { label: "Sales", color: "amber-300", role: "Sales" },
   finance: { label: "Finance", color: "green-300", role: "Analyst" },
@@ -33,7 +36,9 @@ export const DEFAULT_FAMILY: Family = "general";
  * name, as on the web. An area with no avatar of its own (content) is left out.
  */
 export const areaOptions = (Object.keys(palette) as (keyof typeof palette)[])
-  .filter((key): key is Family => managedAvatars.some((avatar) => avatar.family === key))
+  .filter((key): key is Family =>
+    managedAvatars.some((avatar) => avatar.family === key),
+  )
   .sort((a, b) => Number(b === DEFAULT_FAMILY) - Number(a === DEFAULT_FAMILY))
   .map((family) => ({
     family,
@@ -43,7 +48,9 @@ export const areaOptions = (Object.keys(palette) as (keyof typeof palette)[])
 
 /** Port of the web's `defaultAvatarUrl`: the family's avatar the name hashes to. */
 export function defaultAvatarPath(family: Family, name: string) {
-  const candidates = managedAvatars.filter((avatar) => avatar.family === family);
+  const candidates = managedAvatars.filter(
+    (avatar) => avatar.family === family,
+  );
   let hash = 0;
   for (const character of name.trim().toLowerCase()) {
     hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
@@ -61,7 +68,11 @@ interface Draft {
   family: Family;
 }
 
-export function createExpertBody({ name, jobTitle, family }: Draft): CreateExpertBody {
+export function createExpertBody({
+  name,
+  jobTitle,
+  family,
+}: Draft): CreateExpertBody {
   const trimmedName = name.trim();
   return {
     name: trimmedName,
@@ -78,15 +89,19 @@ interface Refusal {
   limit?: unknown;
 }
 
+/** A create or hire refused because the team has no room left. */
+export function teamFullMessage(limit: unknown) {
+  const size = typeof limit === "number" ? ` (${limit} experts)` : "";
+  return `Your team is full${size}. Remove one on the web to add another.`;
+}
+
 /** The sentence for a create that failed for any reason but a dead session. */
 export function createErrorMessage(error: unknown) {
   const { status, code, limit } =
     typeof error === "object" && error !== null ? (error as Refusal) : {};
   if (status === 402) return PLAN_REQUIRED_MESSAGE;
-  if (status === 409 && code === "active_expert_limit") {
-    const size = typeof limit === "number" ? ` (${limit} experts)` : "";
-    return `Your team is full${size}. Remove one on the web to add another.`;
-  }
+  if (status === 409 && code === "active_expert_limit")
+    return teamFullMessage(limit);
   if (status === 409 && code === "raised_expert_lifetime_limit") {
     return "You've created the most experts your plan allows.";
   }

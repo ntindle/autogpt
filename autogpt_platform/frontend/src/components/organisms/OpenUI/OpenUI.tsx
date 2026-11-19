@@ -46,7 +46,7 @@ export function OpenUI({
               fallback ?? (
                 <p
                   role="alert"
-                  className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700"
+                  className="border-red-200 bg-red-50 text-sm text-red-700 rounded-xl border p-5"
                 >
                   This response could not be displayed. Try another request.
                 </p>

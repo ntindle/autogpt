@@ -26,22 +26,22 @@ export function TimelineView({
 }: ComponentRenderProps<z.infer<typeof Timeline.props>>) {
   return (
     <section aria-label={props.title}>
-      <h3 className="mb-5 text-sm font-semibold text-zinc-800">
+      <h3 className="text-sm text-zinc-800 mb-5 font-semibold">
         {props.title}
       </h3>
-      <ol className="ml-1 border-l border-zinc-200">
+      <ol className="border-zinc-200 ml-1 border-l">
         {(props.items ?? []).slice(0, 20).map((item, index) => {
           const status = statuses[item.status] ?? statuses.planned;
           return (
             <li key={index} className="relative space-y-2 pb-6 pl-5 last:pb-0">
               <span
                 className={cn(
-                  "absolute -left-1.5 top-1 size-3 rounded-full border-2 border-white",
+                  "border-white absolute top-1 -left-1.5 size-3 rounded-full border-2",
                   status.dot,
                 )}
               />
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium text-zinc-500">
+                <span className="text-xs text-zinc-500 font-medium">
                   {item.time}
                 </span>
                 <span
@@ -53,10 +53,10 @@ export function TimelineView({
                   {status.label}
                 </span>
               </div>
-              <h4 className="text-sm font-medium text-zinc-800">
+              <h4 className="text-sm text-zinc-800 font-medium">
                 {item.title}
               </h4>
-              <p className="text-xs leading-relaxed text-zinc-500">
+              <p className="text-xs text-zinc-500 leading-relaxed">
                 {item.detail}
               </p>
             </li>

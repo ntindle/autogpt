@@ -39,7 +39,7 @@ from backend.data.tenancy import (
 )
 from backend.data.user import get_user_by_id
 from backend.executor import scheduler
-from backend.util.clients import get_scheduler_client
+from backend.util.clients import get_scheduler_client, read_schedules
 from backend.util.exceptions import NotAuthorizedError, NotFoundError
 from backend.util.timezone_utils import (
     convert_utc_time_to_user_timezone,
@@ -91,7 +91,7 @@ async def create_graph_execution_schedule(
     ctx: Annotated[
         RequestContext,
         requires_resource_permission(
-            OrgAction.CREATE_RESOURCES, TeamAction.CREATE_AGENTS
+            OrgAction.EXECUTE_RESOURCES, TeamAction.EXECUTE_AGENTS
         ),
     ],
     graph_id: str = Path(..., description="ID of the graph to schedule"),
@@ -198,8 +198,8 @@ async def create_graph_execution_schedule(
         user_id,
         ctx.org_id,
         resolved_team_id,
-        OrgAction.CREATE_RESOURCES,
-        TeamAction.CREATE_AGENTS,
+        OrgAction.EXECUTE_RESOURCES,
+        TeamAction.EXECUTE_AGENTS,
     ) as allowed:
         if not allowed:
             raise HTTPException(status_code=403, detail="Resource scope is inactive")
@@ -215,6 +215,11 @@ async def create_graph_execution_schedule(
             organization_id=ctx.org_id,
             team_id=resolved_team_id,
             expert_id=expert_id,
+            schedule_id=(
+                str(schedule_params.schedule_id)
+                if schedule_params.schedule_id
+                else None
+            ),
         )
 
     # Convert the next_run_time back to user timezone for display
@@ -241,12 +246,14 @@ async def list_graph_execution_schedules(
     graph_id: str = Path(),
 ) -> list[scheduler.GraphExecutionJobInfo]:
     team_ids = await _schedule_team_ids(user_id, ctx)
-    schedules = await get_scheduler_client().get_graph_execution_schedules(
-        user_id=user_id,
-        graph_id=graph_id,
-        organization_id=ctx.org_id,
-        team_ids=team_ids,
-        include_paused=True,
+    schedules = await read_schedules(
+        get_scheduler_client().get_graph_execution_schedules(
+            user_id=user_id,
+            graph_id=graph_id,
+            organization_id=ctx.org_id,
+            team_ids=team_ids,
+            include_paused=True,
+        )
     )
     return await visible_graph_schedules(schedules, user_id)
 
@@ -263,11 +270,13 @@ async def list_all_graphs_execution_schedules(
     ],
 ) -> list[scheduler.GraphExecutionJobInfo]:
     team_ids = await _schedule_team_ids(user_id, ctx)
-    schedules = await get_scheduler_client().get_graph_execution_schedules(
-        user_id=user_id,
-        organization_id=ctx.org_id,
-        team_ids=team_ids,
-        include_paused=True,
+    schedules = await read_schedules(
+        get_scheduler_client().get_graph_execution_schedules(
+            user_id=user_id,
+            organization_id=ctx.org_id,
+            team_ids=team_ids,
+            include_paused=True,
+        )
     )
     return await visible_graph_schedules(schedules, user_id)
 
@@ -293,11 +302,13 @@ async def list_copilot_turn_schedules(
     instead of a discriminated union.
     """
     team_ids = await _schedule_team_ids(user_id, ctx)
-    schedules = await get_scheduler_client().get_execution_schedules(
-        user_id=user_id,
-        kind="copilot_turn",
-        organization_id=ctx.org_id,
-        team_ids=team_ids,
+    schedules = await read_schedules(
+        get_scheduler_client().get_execution_schedules(
+            user_id=user_id,
+            kind="copilot_turn",
+            organization_id=ctx.org_id,
+            team_ids=team_ids,
+        )
     )
     # Defensive isinstance filter mirrors ``get_graph_execution_schedules``
     # (executor.scheduler.Scheduler) — the scheduler is the source of truth

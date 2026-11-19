@@ -37,9 +37,7 @@ export default function SettingsScreen() {
   }
 
   function renderBody() {
-    if (isError) {
-      return renderNotice("Couldn't open Settings. Try again.");
-    }
+    if (isError) return renderNotice("Settings could not sign in. Try again.");
     if (isBlocked) {
       return renderNotice(
         "Settings didn't open here. Try again, or open Settings on the web.",
@@ -61,6 +59,18 @@ export default function SettingsScreen() {
         originWhitelist={["*"]}
         onShouldStartLoadWithRequest={handleNavigation}
         onNavigationStateChange={handleStateChange}
+        // A spinner until the page arrives, and our retry if it never does.
+        startInLoadingState
+        renderLoading={() => (
+          <View style={[styles.center, styles.overlay]}>
+            <ActivityIndicator color={colors.textTertiary} />
+          </View>
+        )}
+        renderError={() =>
+          renderNotice(
+            "Settings didn't load. Check your connection and try again.",
+          )
+        }
         style={styles.webview}
       />
     );
@@ -85,6 +95,14 @@ const useStyles = createStyles((colors) => ({
   screen: { flex: 1, backgroundColor: colors.background },
   body: { flex: 1 },
   webview: { flex: 1, backgroundColor: colors.background },
+  overlay: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: colors.background,
+  },
   center: {
     flex: 1,
     alignItems: "center",

@@ -92,8 +92,15 @@ export function LibraryAgentCard({
         }}
       >
         <NextLink href={agentHref} className="flex-shrink-0">
-          <div className="relative flex items-center gap-3 pt-3 pr-4 pl-2">
-            <StatusBadge status={statusInfo.status} />
+          <div
+            className={cn(
+              "relative flex items-center gap-3 pt-3 pr-4",
+              statusInfo.scheduleUnknown ? "pl-4" : "pl-2",
+            )}
+          >
+            {!statusInfo.scheduleUnknown && (
+              <StatusBadge status={statusInfo.status} />
+            )}
             <Text variant="small" tone="subtle">
               {statusInfo.totalRuns} tasks
             </Text>

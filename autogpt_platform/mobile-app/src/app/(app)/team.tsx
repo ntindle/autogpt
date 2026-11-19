@@ -1,9 +1,13 @@
-import { Add01Icon } from "@hugeicons/core-free-icons";
+import { Add01Icon, Store01Icon } from "@hugeicons/core-free-icons";
 import { FlatList, RefreshControl, Text, View } from "react-native";
 
+import { Button } from "@/components/Button";
 import { IconButton } from "@/components/IconButton";
 import { ScreenHeader } from "@/components/ScreenHeader";
-import { ExpertCard, PlaceholderCard } from "@/features/team/components/ExpertCard";
+import {
+  ExpertCard,
+  PlaceholderCard,
+} from "@/features/team/components/ExpertCard";
 import {
   avatarSource,
   avatarTint,
@@ -27,6 +31,7 @@ export default function TeamScreen() {
     openExpert,
     openOtto,
     createExpert,
+    browseMarketplace,
   } = useTeamScreen();
   const styles = useStyles();
   const colors = useColors();
@@ -64,12 +69,25 @@ export default function TeamScreen() {
         </View>
       );
     }
+    if (isError) {
+      return (
+        <Text style={styles.notice}>
+          Couldn&apos;t load your team. Pull down to try again.
+        </Text>
+      );
+    }
     return (
-      <Text style={styles.notice}>
-        {isError
-          ? "Couldn't load your team. Pull down to try again."
-          : "No experts on your team yet. Hire one on the web and they'll show up here."}
-      </Text>
+      <View style={styles.empty}>
+        <Text style={styles.notice}>
+          No experts on your team yet. Find one in the marketplace.
+        </Text>
+        <Button
+          label="Browse experts"
+          size="small"
+          leadingIcon={Store01Icon}
+          onPress={browseMarketplace}
+        />
+      </View>
     );
   }
 
@@ -95,7 +113,11 @@ export default function TeamScreen() {
       <ScreenHeader
         title="Your team"
         right={
-          <IconButton icon={Add01Icon} label="Create an expert" onPress={createExpert} />
+          <IconButton
+            icon={Add01Icon}
+            label="Create an expert"
+            onPress={createExpert}
+          />
         }
       />
       <FlatList
@@ -134,6 +156,7 @@ const useStyles = createStyles((colors) => ({
     color: colors.error,
     paddingHorizontal: spacing.lg,
   },
+  empty: { alignItems: "center", gap: spacing.lg },
   notice: {
     ...type.body,
     color: colors.textSecondary,

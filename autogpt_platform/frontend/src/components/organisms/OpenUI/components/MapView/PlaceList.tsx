@@ -17,17 +17,17 @@ export function PlaceList({ places, selectedIndex, onSelect }: Props) {
           aria-pressed={selectedIndex === index}
           onClick={() => onSelect(index)}
           className={cn(
-            "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-purple-500",
+            "text-sm focus-visible:ring-purple-500 flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left outline-none focus-visible:ring-2",
             selectedIndex === index
               ? "bg-purple-50 text-purple-800"
               : "text-zinc-700 hover:bg-zinc-50",
           )}
         >
-          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-purple-100 text-xs font-semibold text-purple-700">
+          <span className="bg-purple-100 text-xs text-purple-700 flex size-6 shrink-0 items-center justify-center rounded-full font-semibold">
             {index + 1}
           </span>
           <span className="min-w-0 flex-1 break-words">{place.name}</span>
-          <span className="max-w-[40%] break-words text-xs text-zinc-500">
+          <span className="text-xs text-zinc-500 max-w-[40%] break-words">
             {place.category}
           </span>
         </button>

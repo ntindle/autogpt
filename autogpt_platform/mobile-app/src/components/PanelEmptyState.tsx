@@ -13,7 +13,12 @@ interface Props {
 
 /** The side panel's empty state, as on the web: three tiles, the outer two
  *  tilted out, over a title and a line of copy. */
-export function PanelEmptyState({ tiles, title, description, children }: Props) {
+export function PanelEmptyState({
+  tiles,
+  title,
+  description,
+  children,
+}: Props) {
   const styles = useStyles();
   const ring = useScheme() === "dark" ? styles.darkRing : styles.lightRing;
   const positions = [styles.left, styles.right, styles.centre];
@@ -55,7 +60,7 @@ const useStyles = createStyles((colors) => ({
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.background,
+    backgroundColor: colors.panelCard,
   },
   // The web's smooth-shadow-ring-sm: a faint ring plus a soft shadow.
   lightRing: {
@@ -67,7 +72,10 @@ const useStyles = createStyles((colors) => ({
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   },
-  darkRing: { borderWidth: StyleSheet.hairlineWidth, borderColor: colors.border },
+  darkRing: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
+  },
   left: { left: 8, top: 12, transform: [{ rotate: "-12deg" }] },
   right: { right: 8, top: 12, transform: [{ rotate: "12deg" }] },
   centre: { left: (144 - TILE_WIDTH) / 2, top: 0, zIndex: 10 },

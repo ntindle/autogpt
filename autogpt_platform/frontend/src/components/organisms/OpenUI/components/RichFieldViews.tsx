@@ -49,7 +49,7 @@ export function ToggleFieldView({
   const disabled = useOpenUIDisabled();
   const field = useFieldView(props.name, props.value ?? false);
   return (
-    <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm text-foreground">
+    <label className="text-sm flex min-h-11 cursor-pointer items-center gap-3 text-foreground">
       <input
         type="checkbox"
         className="h-5 w-5 accent-primary"
@@ -89,7 +89,7 @@ export function MultiSelectFieldView({
         {props.options?.map((option, index) => (
           <label
             key={option.value}
-            className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-border px-3 text-sm has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+            className="text-sm flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-border px-3 has-[:checked]:border-primary has-[:checked]:bg-primary/5"
           >
             <input
               {...(index === 0 ? handlers : {})}

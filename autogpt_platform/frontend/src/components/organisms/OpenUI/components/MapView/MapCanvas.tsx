@@ -26,14 +26,14 @@ export function MapCanvas({
     <div className="relative isolate">
       <div
         ref={containerRef}
-        className="h-72 w-full bg-zinc-100 sm:h-80"
+        className="bg-zinc-100 h-72 w-full sm:h-80"
         aria-label={`${title} map`}
         tabIndex={0}
       />
       {error && (
         <p
           role="status"
-          className="border-y border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+          className="border-amber-200 bg-amber-50 text-xs text-amber-800 border-y p-3"
         >
           Map tiles could not load. You can still select and discuss places from
           the list below.
