@@ -33,7 +33,7 @@ function signup(headers: Record<string, string> = {}) {
 }
 
 describe("native session credentials", () => {
-  it.each([
+  it.each<Record<string, string>>([
     {},
     { ...nativeHeaders, Origin: origin },
     { ...nativeHeaders, "Sec-Fetch-Mode": "cors" },
@@ -124,7 +124,7 @@ describe("private workspace native credentials", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("set-auth-token")).toContain(".");
   });
-  it.each([
+  it.each<Record<string, string>>([
     { Cookie: "CF_Authorization=fixture; better-auth.session_token=browser" },
     { Cookie: "CF_Authorization=fixture", Origin: origin },
     { Cookie: "CF_Authorization=fixture", "Sec-Fetch-Site": "same-origin" },
