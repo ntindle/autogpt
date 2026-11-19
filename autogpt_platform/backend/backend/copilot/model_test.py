@@ -121,7 +121,9 @@ def test_public_local_session_metadata_redacts_restore_credentials() -> None:
         ),
     )
 
+    metadata.workspace_task_id = "task-saved"
     public = PublicChatSessionMetadata.from_internal(metadata).model_dump()
+    assert public["workspace_task_id"] == "task-saved"
 
     assert public["execution_target"] == {
         "kind": "local",
