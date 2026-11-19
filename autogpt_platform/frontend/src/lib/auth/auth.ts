@@ -44,6 +44,7 @@ import {
   platformUserExists,
   provisionPlatformUser,
 } from "./provision-platform-user";
+import { assertProviderVerifiedEmail } from "./provider-verified-email";
 import {
   recordResetLinkAddress,
   type ResetLinkContext,
@@ -51,6 +52,13 @@ import {
 } from "./reset-link-address";
 import { revokeResetLinksMailedElsewhere } from "./reset-links";
 import { RESET_LINK_EXPIRES_IN_SECONDS } from "./set-password-link";
+import { requireSignInCode } from "./require-sign-in-code";
+import {
+  alertNewSignInMethod,
+  joinsAnAccount,
+  noteSignUp,
+} from "./sign-in-code-emails";
+import { signInCode } from "./sign-in-code-plugin";
 import { JWKS_ALG } from "./service-token";
 import {
   isSignupAllowed,
@@ -236,7 +244,10 @@ export const auth = betterAuth({
           user: { email: string; emailVerified?: boolean | null },
           ctx: HookContext,
         ) => {
-          // Microsoft's first: its refusals carry codes /login explains.
+          // First, so an unverified address is answered the same whether or
+          // not an account uses it, before any later check tells them apart.
+          assertProviderVerifiedEmail(user, ctx);
+          // Microsoft's next: its refusals carry codes /login explains.
           assertMicrosoftSignUpAllowed(user, ctx);
           assertSignUpPolicy(user.email, ctx);
           // An email sign-up was already checked in hooks.before.
@@ -260,6 +271,8 @@ export const auth = betterAuth({
           },
           ctx: HookContext,
         ) => {
+          // So the provider row a sign-up writes next sends no notice.
+          noteSignUp(ctx, user.id);
           if (ctx?.path !== ADMIN_CREATE_USER_PATH) {
             await recordAuthIP(authDbPool, {
               userId: user.id,
@@ -292,6 +305,23 @@ export const auth = betterAuth({
               });
             });
           await mirrorVerifiedEmailToPlatformUser(authDbPool, user);
+        },
+      },
+    },
+    // A sign-in provider that joins an account it didn't create emails the
+    // account's owner (sign-in-code-emails.ts), alongside the response.
+    account: {
+      create: {
+        after: async (
+          account: { userId: string; providerId: string },
+          ctx: HookContext,
+        ) => {
+          if (!joinsAnAccount(account, ctx)) return;
+          runAfterResponse(
+            getAuthContext().then((context) =>
+              alertNewSignInMethod(context, account),
+            ),
+          );
         },
       },
     },
@@ -355,7 +385,7 @@ export const auth = betterAuth({
   },
   // Table names are overridden away from Better Auth's defaults (user,
   // session, ...) so the auth tables read unambiguously next to the platform
-  // tables — most importantly no `user` table case-colliding with `User`.
+  // tables â€” most importantly no `user` table case-colliding with `User`.
   account: {
     modelName: "UserAuthAccount",
   },
@@ -365,14 +395,14 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     // The 12-char policy has to hold on the raw Better Auth endpoints too
-    // (/sign-up/email, /reset-password, /change-password) — the signup server
+    // (/sign-up/email, /reset-password, /change-password) â€” the signup server
     // action's zod schema only guards the form path, so a direct POST would
     // otherwise slip a 6-char password through. minPasswordLength is checked
     // when a password is *set* (sign-up / reset / change), never on sign-in,
     // so this does NOT lock out migrated users whose old password is shorter.
     minPasswordLength: AUTH_PASSWORD_MIN_LENGTH,
     // A password reset kicks every active session, matching the previous
-    // flow's signOut({ scope: "global" }) — the standard defense when a
+    // flow's signOut({ scope: "global" }) â€” the standard defense when a
     // user resets their password to evict a stolen session.
     revokeSessionsOnPasswordReset: true,
     requireEmailVerification,
@@ -441,6 +471,9 @@ export const auth = betterAuth({
   },
   user: {
     modelName: "UserAuthIdentity",
+    // Before a provider sign-in joins an account or creates one: one that
+    // can't vouch for its address waits on a code emailed there.
+    validateUserInfo: requireSignInCode,
     additionalFields: {
       // Onboarding's "What should I call you?" answer; surfaced to
       // consumers as user_metadata.preferred_name (see mapSessionUser).
@@ -485,19 +518,19 @@ export const auth = betterAuth({
   plugins: [
     admin(),
     ...appleOAuth(),
-    nativeSessionBearer(),
+    nativeSessionBearer(mobileAppConfig !== null),
     jwt({
       schema: {
         jwks: { modelName: "UserAuthJwks" },
       },
       jwks: {
-        // Shared with mintServiceToken — whichever signs first creates the
+        // Shared with mintServiceToken â€” whichever signs first creates the
         // JWKS keypair, so the two must never disagree.
         keyPairConfig: { alg: JWKS_ALG },
       },
       jwt: {
         issuer: baseURL,
-        // The Python backend validates `aud == "authenticated"` — the same
+        // The Python backend validates `aud == "authenticated"` â€” the same
         // audience Supabase GoTrue used, so old and new tokens are
         // interchangeable during the migration window.
         audience: "authenticated",
@@ -512,6 +545,7 @@ export const auth = betterAuth({
     }),
     supabaseBridge(),
     ...(mobileAppConfig ? [mobileAppOrigin(mobileAppConfig, baseURL)] : []),
+    signInCode(),
     // Must be last so cookies set inside server actions stick.
     nextCookies(),
   ],

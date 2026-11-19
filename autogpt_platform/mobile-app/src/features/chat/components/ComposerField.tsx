@@ -1,14 +1,9 @@
 import { Add01Icon, ArrowUp02Icon, StopIcon } from "@hugeicons/core-free-icons";
-import { GlassView, isLiquidGlassAvailable } from "expo-glass-effect";
 import type { ReactNode } from "react";
-import { StyleSheet, TextInput, View } from "react-native";
-import Animated, { LinearTransition } from "react-native-reanimated";
+import { TextInput, View } from "react-native";
 
 import { IconButton } from "@/components/IconButton";
-import { createStyles, radius, spacing, type, useColors, useScheme } from "@/lib/theme";
-
-// A field that grows a line eases into its new height.
-const grow = LinearTransition.duration(140);
+import { createStyles, spacing, type, useColors } from "@/lib/theme";
 
 interface Props {
   text: string;
@@ -22,10 +17,20 @@ interface Props {
   isDisabled?: boolean;
   /** Buttons between the field and the send button. */
   trailing?: ReactNode;
-  /** `card` puts the text above a row of buttons, with no outline of its own. */
-  layout?: "bar" | "card";
+  /** Stands in for the send button, e.g. dictation while the field is empty. */
+  action?: ReactNode;
 }
 
+// One line tall, growing to about six. DictationField stands in at this size.
+export const inputBox = {
+  minHeight: 52,
+  maxHeight: 156,
+  paddingTop: 16,
+  paddingBottom: spacing.xs,
+  paddingHorizontal: spacing.lg,
+} as const;
+
+/** The text above a row of buttons; the card around it is the composer's. */
 export function ComposerField({
   text,
   onChangeText,
@@ -37,12 +42,10 @@ export function ComposerField({
   isBusy,
   isDisabled,
   trailing,
-  layout = "bar",
+  action,
 }: Props) {
   const styles = useStyles();
   const colors = useColors();
-  const scheme = useScheme();
-  const isCard = layout === "card";
 
   const attach = onAttach ? (
     <IconButton
@@ -50,7 +53,7 @@ export function ComposerField({
       label="Attach"
       onPress={onAttach}
       disabled={isDisabled}
-      variant="icon"
+      variant="tray"
     />
   ) : null;
   const input = (
@@ -63,11 +66,12 @@ export function ComposerField({
       placeholder={placeholder}
       placeholderTextColor={colors.textTertiary}
       selectionColor={colors.brand}
-      style={[styles.input, isCard && styles.cardInput]}
+      style={styles.input}
     />
   );
   const send =
-    isBusy && onStop ? (
+    action ??
+    (isBusy && onStop ? (
       <IconButton icon={StopIcon} label="Stop" onPress={onStop} variant="primary" />
     ) : (
       <IconButton
@@ -77,89 +81,32 @@ export function ComposerField({
         disabled={!canSend}
         variant="primary"
       />
-    );
+    ));
 
-  if (isCard) {
-    return (
-      <View>
-        {input}
-        <View style={styles.cardRow}>
-          {attach}
-          <View style={styles.spacer} />
-          {trailing}
-          {send}
-        </View>
-      </View>
-    );
-  }
-
-  const row = (
-    <>
-      {attach}
-      {input}
-      {trailing}
-      {send}
-    </>
-  );
-  // On iOS 26 the bar is Liquid Glass, so the thread shows through as it scrolls under.
-  if (isLiquidGlassAvailable()) {
-    return (
-      <Animated.View layout={grow}>
-        <GlassView
-          glassEffectStyle="regular"
-          colorScheme={scheme}
-          isInteractive
-          style={[styles.field, styles.glass, onAttach && styles.withAttach]}
-        >
-          {row}
-        </GlassView>
-      </Animated.View>
-    );
-  }
   return (
-    <Animated.View layout={grow} style={[styles.field, onAttach && styles.withAttach]}>
-      {row}
-    </Animated.View>
+    <View>
+      {input}
+      <View style={styles.row}>
+        {attach}
+        <View style={styles.spacer} />
+        {trailing}
+        {send}
+      </View>
+    </View>
   );
 }
 
 const useStyles = createStyles((colors) => ({
-  field: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: spacing.sm,
-    paddingLeft: spacing.lg,
-    paddingRight: spacing.xs,
-    paddingVertical: spacing.xs,
-    borderRadius: radius.lg + 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  glass: { backgroundColor: "transparent", borderWidth: 0 },
-  withAttach: { paddingLeft: spacing.xs },
   input: {
     ...type.body,
-    flex: 1,
-    maxHeight: 140,
-    paddingTop: 9,
-    paddingBottom: 9,
+    ...inputBox,
     color: colors.text,
-  },
-  // About three lines tall, growing to about six.
-  cardInput: {
-    flex: 0,
-    minHeight: 84,
-    maxHeight: 156,
-    paddingTop: 14,
-    paddingBottom: spacing.xs,
-    paddingHorizontal: spacing.lg,
     textAlignVertical: "top",
   },
-  cardRow: {
+  row: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.sm,
+    gap: spacing.xs,
     paddingHorizontal: spacing.sm,
     paddingBottom: spacing.sm,
   },

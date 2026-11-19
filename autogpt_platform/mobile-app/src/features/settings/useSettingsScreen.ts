@@ -8,7 +8,8 @@ import type {
   WebViewNavigation,
 } from "react-native-webview/lib/WebViewTypes";
 
-import { authClient } from "@/lib/auth/client";
+import { useSession } from "@/lib/auth/nativeSession";
+import { sessionCookieHeader } from "@/lib/auth/sessionHelpers";
 import { FRONTEND_URL } from "@/lib/env";
 
 import {
@@ -19,11 +20,12 @@ import {
 } from "./helpers";
 
 export function useSettingsScreen() {
+  const session = useSession();
   const cookie = useQuery({
-    queryKey: ["auth", "cookie"],
+    queryKey: ["auth", "cookie", session?.user.id],
     queryFn: async () => {
       const cookies = settingsCookies(
-        await authClient.getCookie(),
+        session ? sessionCookieHeader(session.token, FRONTEND_URL) : "",
         FRONTEND_URL,
       );
       await Promise.all(
@@ -85,10 +87,10 @@ export function useSettingsScreen() {
   }
 
   function retry() {
+    void cookie.refetch();
     setIsBlocked(false);
     hasShownSettings.current = false;
     setWebViewKey((key) => key + 1);
-    void cookie.refetch();
   }
 
   return {

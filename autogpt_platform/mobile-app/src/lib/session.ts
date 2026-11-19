@@ -3,8 +3,8 @@ import { QueryCache, QueryClient } from "@tanstack/react-query";
 import { chatKeys } from "@/lib/api/chat";
 import { ApiError } from "@/lib/api/client";
 import { expertKeys } from "@/lib/api/experts";
-import { authClient } from "@/lib/auth/client";
 import { SignedOutError } from "@/lib/auth/errors";
+import { confirmSession, endSession } from "@/lib/auth/nativeSession";
 import { clearAccessToken } from "@/lib/auth/token";
 import { PERSIST_MAX_AGE_MS, queryPersister } from "@/lib/queryPersist";
 import CookieManager from "@preeternal/react-native-cookie-manager";
@@ -42,6 +42,11 @@ export function signOut() {
   return pendingSignOut;
 }
 
+/** At launch: a session ended elsewhere (a password reset, say) ends here too. */
+export async function signOutIfSessionEnded() {
+  if (!(await confirmSession())) await signOut();
+}
+
 /**
  * Changes on every sign-out. A request started before one must not write its
  * answer into the cache after it, or the old account's data comes back.
@@ -73,7 +78,7 @@ async function clearSession() {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SIGN_OUT_TIMEOUT_MS);
   try {
-    await authClient.signOut({ fetchOptions: { signal: controller.signal } });
+    await endSession(controller.signal);
   } catch {
     // Offline, timed out or refused: the local session is already gone.
   } finally {

@@ -1,4 +1,4 @@
-import { authClient } from "@/lib/auth/client";
+import { getSessionCookie } from "@/lib/auth/nativeSession";
 import { FRONTEND_URL } from "@/lib/env";
 import { workspaceFetch } from "@/lib/workspaceAccess";
 
@@ -19,7 +19,7 @@ export class TranscribeError extends Error {
  * `credentials: "omit"` so the native cookie store adds nothing of its own.
  */
 export async function transcribe(uri: string, context?: string) {
-  const cookie = await authClient.getCookie();
+  const cookie = getSessionCookie();
   const body = new FormData();
   // The route names the upstream file by the subtype: `recording.m4a`.
   body.append("audio", {
