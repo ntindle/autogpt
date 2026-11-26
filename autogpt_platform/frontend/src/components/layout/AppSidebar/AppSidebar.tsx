@@ -36,7 +36,6 @@ import { ChatsNavSection } from "./components/ChatsNavSection/ChatsNavSection";
 import { CollapsibleNavGroup } from "./components/CollapsibleNavGroup/CollapsibleNavGroup";
 import { ShortcutHint } from "./components/ShortcutHint/ShortcutHint";
 import { SidebarUserActions } from "./components/SidebarUserActions/SidebarUserActions";
-import { useNavItemClassName } from "./useNavItemClassName";
 
 type NavLink = {
   name: string;
@@ -77,7 +76,8 @@ function NavLinkLoader() {
   return (
     <LoadingSpinner
       size="small"
-      className="ml-auto !size-4 shrink-0 text-foreground-emphasis/90 group-data-[collapsible=icon]:!size-4.5"
+      tone="emphasis-soft"
+      className="ml-auto !size-4 shrink-0 group-data-[collapsible=icon]:!size-4.5"
     />
   );
 }
@@ -89,7 +89,8 @@ function HomeIcon() {
     return (
       <LoadingSpinner
         size="small"
-        className="!size-4 shrink-0 text-foreground-emphasis/90 group-data-[collapsible=icon]:!size-4.5"
+        tone="emphasis-soft"
+        className="!size-4 shrink-0 group-data-[collapsible=icon]:!size-4.5"
       />
     );
   }
@@ -105,7 +106,6 @@ function HomeIcon() {
 
 function HomeItem() {
   const pathname = usePathname();
-  const navItemClassName = useNavItemClassName();
 
   return (
     <SidebarMenuItem>
@@ -113,7 +113,7 @@ function HomeItem() {
         asChild
         tooltip="Home"
         isActive={isLinkActive(pathname, "/home")}
-        className={navItemClassName}
+        variant="nav"
       >
         <Link href="/home">
           <HomeIcon />
@@ -131,7 +131,6 @@ interface NavItemProps {
 
 function NavItem({ link }: NavItemProps) {
   const pathname = usePathname();
-  const navItemClassName = useNavItemClassName();
 
   return (
     <SidebarMenuItem {...(link.tourTarget && tourTarget(link.tourTarget))}>
@@ -139,7 +138,7 @@ function NavItem({ link }: NavItemProps) {
         asChild
         tooltip={link.name}
         isActive={isLinkActive(pathname, link.href)}
-        className={navItemClassName}
+        variant="nav"
       >
         <Link href={link.href}>
           <Icon
@@ -163,7 +162,7 @@ function NavMenu({
   leading?: ReactNode;
 }) {
   return (
-    <SidebarMenu className="group-data-[collapsible=icon]:gap-1">
+    <SidebarMenu>
       {leading}
       {links.map((link) => (
         <NavItem key={link.href} link={link} />
@@ -222,7 +221,7 @@ export function AppSidebar(props: Props) {
           className="flex shrink-0 flex-col gap-2"
         >
           <motion.div variants={itemVariants}>
-            <SidebarGroup className="mt-0 py-1">
+            <SidebarGroup spacing="tight" className="mt-0">
               <SidebarGroupContent>
                 <NavMenu links={mainLinks} leading={<HomeItem />} />
               </SidebarGroupContent>

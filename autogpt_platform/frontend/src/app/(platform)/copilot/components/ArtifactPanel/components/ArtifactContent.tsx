@@ -44,10 +44,10 @@ function ArtifactContentLoader({
         role="alert"
         className="flex flex-col items-center justify-center gap-3 p-8 text-center"
       >
-        <Text variant="body-tight" as="p" tone="muted">
+        <Text variant="body" leading="5" as="p" tone="muted">
           Failed to load content
         </Text>
-        <Text variant="small-tight" as="p" tone="subtle">
+        <Text variant="small" leading="4" as="p" tone="subtle">
           {error}
         </Text>
         <button
@@ -57,7 +57,9 @@ function ArtifactContentLoader({
         >
           <Text
             as="span"
-            variant="small-medium-tight"
+            variant="small"
+            weight="medium"
+            leading="4"
             tone="body"
             className="block"
           >
@@ -107,7 +109,7 @@ function ArtifactImage({ src, alt }: { src: string; alt: string }) {
         role="alert"
         className="flex flex-col items-center justify-center gap-3 p-8 text-center"
       >
-        <Text variant="body-tight" as="p" tone="muted">
+        <Text variant="body" leading="5" as="p" tone="muted">
           Failed to load image
         </Text>
         <button
@@ -121,7 +123,9 @@ function ArtifactImage({ src, alt }: { src: string; alt: string }) {
         >
           <Text
             as="span"
-            variant="small-medium-tight"
+            variant="small"
+            weight="medium"
+            leading="4"
             tone="body"
             className="block"
           >
@@ -163,7 +167,7 @@ function ArtifactVideo({ src }: { src: string }) {
         role="alert"
         className="flex flex-col items-center justify-center gap-3 p-8 text-center"
       >
-        <Text variant="body-tight" as="p" tone="muted">
+        <Text variant="body" leading="5" as="p" tone="muted">
           Failed to load video
         </Text>
         <button
@@ -177,7 +181,9 @@ function ArtifactVideo({ src }: { src: string }) {
         >
           <Text
             as="span"
-            variant="small-medium-tight"
+            variant="small"
+            weight="medium"
+            leading="4"
             tone="body"
             className="block"
           >
@@ -252,7 +258,9 @@ function ArtifactRenderer({
     return (
       <div className="p-4">
         <Text
-          variant="body-mono-tight"
+          variant="body"
+          mono
+          leading="5"
           as="pre"
           tone="emphasis"
           className="break-words whitespace-pre-wrap"
@@ -360,7 +368,9 @@ function ArtifactRenderer({
   return (
     <div className="p-4">
       <Text
-        variant="body-mono-tight"
+        variant="body"
+        mono
+        leading="5"
         as="pre"
         tone="emphasis"
         className="break-words whitespace-pre-wrap"

@@ -10,6 +10,7 @@ import { CheckYourInbox } from "@/components/auth/CheckYourInbox/CheckYourInbox"
 import { EmailNotAllowedModal } from "@/components/auth/EmailNotAllowedModal";
 import { GoogleOAuthButton } from "@/components/auth/GoogleOAuthButton";
 import { MicrosoftOAuthButton } from "@/components/auth/MicrosoftOAuthButton";
+import { SignInWithoutConnecting } from "@/components/auth/SignInWithoutConnecting";
 import { AuthDivider } from "@/components/auth/AuthSplitLayout/AuthDivider";
 import { AuthSplitLayout } from "@/components/auth/AuthSplitLayout/AuthSplitLayout";
 import { MobileWarningBanner } from "@/components/auth/MobileWarningBanner";
@@ -54,6 +55,7 @@ export default function LoginPage() {
     showNotAllowedModal,
     handleSubmit,
     handleProviderLogin,
+    connectFallback,
     handleCloseNotAllowedModal,
     handleBackToLogin,
     handleLeaveSignInCode,
@@ -179,6 +181,20 @@ export default function LoginPage() {
                 />
               ) : null}
             </div>
+            {connectFallback ? (
+              <SignInWithoutConnecting
+                provider={connectFallback}
+                disabled={
+                  !isHydrated ||
+                  isLoading ||
+                  isGoogleLoading ||
+                  isMicrosoftLoading
+                }
+                onSignIn={() =>
+                  handleProviderLogin(connectFallback, { connect: false })
+                }
+              />
+            ) : null}
           </>
         ) : null}
 
@@ -191,7 +207,7 @@ export default function LoginPage() {
       </FormProvider>
 
       <div className="mt-6 inline-flex w-full items-center justify-center gap-1">
-        <Text variant="body-medium" tone="muted">
+        <Text variant="body" weight="medium" tone="muted">
           Don&apos;t have an account?
         </Text>
         <Link href={signupHref} variant="secondary">
