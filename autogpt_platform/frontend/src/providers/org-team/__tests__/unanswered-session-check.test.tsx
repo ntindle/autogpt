@@ -1,3 +1,5 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { http, HttpResponse } from "msw";
 import {
   getGetV2ListUserOrganizationsMockHandler,
   getGetV2ListUserOrganizationsMockHandler401,
@@ -86,11 +88,17 @@ function AnotherPage() {
 }
 
 function renderApp() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  onTestFinished(() => queryClient.clear());
   function app(page: ReactNode) {
     return (
-      <BackendAPIProvider>
-        <OrgTeamProvider>{page}</OrgTeamProvider>
-      </BackendAPIProvider>
+      <QueryClientProvider client={queryClient}>
+        <BackendAPIProvider>
+          <OrgTeamProvider>{page}</OrgTeamProvider>
+        </BackendAPIProvider>
+      </QueryClientProvider>
     );
   }
   const { rerender } = render(app(null));
@@ -169,6 +177,7 @@ function recordOrgSwitches() {
 }
 
 beforeEach(() => {
+  vi.stubEnv("NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS", "true");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   vi.spyOn(console, "warn").mockImplementation(() => undefined);
   Object.values(actions).forEach((action) => action.mockReset());
@@ -185,6 +194,24 @@ beforeEach(() => {
   });
   server.use(
     getGetV2ListUserOrganizationsMockHandler([PERSONAL_ORG, TEAM_ORG]),
+    http.get("*/api/orgs/:orgId/workspaces", ({ params }) =>
+      HttpResponse.json({
+        data:
+          params.orgId === TEAM_ORG.id
+            ? [
+                {
+                  id: TEAM_ID,
+                  name: "Design",
+                  slug: "design",
+                  is_default: false,
+                  join_policy: "OPEN",
+                  org_id: TEAM_ORG.id,
+                  is_member: true,
+                },
+              ]
+            : [],
+      }),
+    ),
   );
 });
 
@@ -206,6 +233,7 @@ afterEach(() => {
     initializationPromise: null,
     sessionEpoch: useAuthStore.getState().sessionEpoch + 1,
   });
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -508,4 +536,39 @@ describe("start-up when the session changes while it waits", () => {
     });
     expectNoContext();
   });
+});
+
+describe("stored team membership", () => {
+  it.each(["missing", "revoked"])(
+    "clears a saved team whose membership is %s",
+    async (state) => {
+      server.use(
+        http.get("*/api/orgs/:orgId/workspaces", () =>
+          HttpResponse.json({
+            data:
+              state === "missing"
+                ? []
+                : [
+                    {
+                      id: TEAM_ID,
+                      name: "Design",
+                      slug: "design",
+                      is_default: false,
+                      join_policy: "PRIVATE",
+                      org_id: TEAM_ORG.id,
+                      is_member: false,
+                    },
+                  ],
+          }),
+        ),
+      );
+      await signIn(member);
+      await act(() =>
+        vi.waitFor(() => {
+          expect(useOrgTeamStore.getState().activeOrgID).toBe(TEAM_ORG.id);
+          expect(useOrgTeamStore.getState().activeTeamID).toBeNull();
+        }),
+      );
+    },
+  );
 });

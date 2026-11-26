@@ -237,7 +237,13 @@ export default function OrgTeamProvider({ children }: Props) {
           const memberTeams = teams.filter((team) => team.is_member);
           if (collaborationEnabled) {
             setTeams(memberTeams.map(mapTeam));
-            setActiveTeam(null);
+            const currentTeamID = useOrgTeamStore.getState().activeTeamID;
+            if (
+              currentTeamID &&
+              !memberTeams.some((team) => team.id === currentTeamID)
+            ) {
+              setActiveTeam(null);
+            }
           } else {
             const defaultTeam = memberTeams.find((team) => team.is_default);
             if (!defaultTeam) {
