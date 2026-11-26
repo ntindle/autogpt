@@ -33,7 +33,7 @@ export function SelectFieldView({
     <Select
       id={id}
       label={props.label}
-      labelVariant="body-medium"
+      labelVariant="body"
       options={options}
       value={field.value}
       onValueChange={selectValue}
@@ -57,14 +57,14 @@ export function DateFieldView({
         {...handlers}
         id={id}
         label={props.label}
-        labelVariant="body-medium"
+        labelVariant="body"
         type="date"
         value={field.value}
         onChange={(event) => field.setValue(event.target.value)}
         aria-invalid={!!error}
         aria-describedby={`${id}-error`}
         className={cn(
-          error && "border-red-500 focus:border-red-500 focus:ring-red-500",
+          error && "border-error focus:border-error focus:ring-error",
         )}
         disabled={disabled}
         required

@@ -19,6 +19,7 @@ import {
   isHeldRead,
   toApprovalItem,
 } from "./helpers";
+import { duration } from "@/components/styles/motion";
 
 export interface Receipt extends HeldReceipt {
   item: ApprovalItem;
@@ -34,7 +35,7 @@ interface Args {
 
 // How long the box lingers once nothing waits, then how long it fades.
 const LINGER_MS = 1000;
-const FADE_MS = 200;
+const FADE_MS = duration.base * 1000;
 
 export function useApprovalQueue({
   items,

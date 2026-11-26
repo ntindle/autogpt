@@ -26,7 +26,7 @@ export function ConvertOrgSection({ org }: Props) {
       data-testid="org-convert-section"
     >
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <Text variant="body-medium" as="h2">
+        <Text variant="body" weight="medium" as="h2">
           Turn this into a team organization
         </Text>
         <Text variant="small" tone="muted">

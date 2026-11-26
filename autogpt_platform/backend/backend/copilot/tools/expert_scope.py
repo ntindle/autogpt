@@ -19,12 +19,11 @@ from backend.copilot.model import ChatSession
 from backend.data.db_accessors import experts_db
 from backend.data.model import Credentials, CredentialsFieldInfo, CredentialsType
 from backend.integrations.credentials_store import is_system_credential
-from backend.integrations.creds_manager import IntegrationCredentialsManager
 from backend.integrations.providers import ProviderName
 from backend.integrations.service_identity import credential_display_name
 
 from .models import AgentSavedResponse, ErrorResponse, ToolResponseBase
-from .utils import find_matching_credential
+from .utils import credentials_with_grants, find_matching_credential
 
 logger = logging.getLogger(__name__)
 
@@ -82,23 +81,8 @@ class CredentialScopeSnapshot:
 async def resolve_credential_scope(
     user_id: str, expert_id: str | None
 ) -> CredentialScopeSnapshot:
-    """Load credentials and grants once for one card-building operation.
-
-    An expert's credentials are the ones in its own organization; without an
-    expert, the ones in the trusted scope the work runs in.
-    """
-    store = IntegrationCredentialsManager().store
-    if expert_id is None:
-        return CredentialScopeSnapshot(
-            owned=await store.get_all_creds(user_id), allowed_ids=None
-        )
-    organization_id, _ = await experts_db().resolve_private_expert_tenancy(
-        user_id, expert_id
-    )
-    owned = await store.scoped(organization_id).get_all_creds(user_id)
-    allowed_ids = set(
-        await experts_db().expert_allowed_credential_ids(user_id, expert_id)
-    )
+    """Load credentials and grants once for one card-building operation."""
+    owned, allowed_ids = await credentials_with_grants(user_id, expert_id)
     return CredentialScopeSnapshot(owned=owned, allowed_ids=allowed_ids)
 
 

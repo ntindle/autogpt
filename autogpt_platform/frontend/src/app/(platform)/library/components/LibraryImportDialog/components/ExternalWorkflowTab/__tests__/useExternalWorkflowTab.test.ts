@@ -65,8 +65,9 @@ describe("useExternalWorkflowTab", () => {
       /^workflow-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.json$/i,
     );
     expect(push).toHaveBeenCalledWith(
-      "/copilot?organizationId=__personal__&teamId=__org_home__&source=import&autosubmit=true",
+      "/copilot?organizationId=__personal__&teamId=__org_home__&source=import",
     );
     expect(toast).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("importWorkflowAutosubmit")).toBe("true");
   });
 });

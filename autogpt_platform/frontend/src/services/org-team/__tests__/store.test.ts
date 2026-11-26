@@ -1,3 +1,4 @@
+import type { Org } from "@/services/org-team/store";
 import { Key, storage } from "@/services/storage/local-storage";
 import { beforeEach, describe, expect, it } from "vitest";
 
@@ -13,7 +14,7 @@ function seedStore() {
   });
 }
 
-const ORG = {
+const ORG: Org = {
   id: "org-1",
   name: "Acme",
   slug: "acme",

@@ -1,5 +1,6 @@
 import {
   BubbleChatIcon,
+  Folder01Icon,
   Store01Icon,
   UserGroupIcon,
 } from "@hugeicons/core-free-icons";
@@ -54,6 +55,7 @@ export function AppDrawerContent({ navigation }: Props) {
     newChat,
     openTeam,
     openMarketplace,
+    openFiles,
     openAllChats,
     openSettings,
     handleSignOut,
@@ -98,6 +100,7 @@ export function AppDrawerContent({ navigation }: Props) {
             label="All chats"
             onPress={openAllChats}
           />
+          <DrawerRow icon={Folder01Icon} label="Files" onPress={openFiles} />
         </View>
         <RecentHeading />
       </>

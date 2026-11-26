@@ -28,7 +28,7 @@ export function NumberFieldView({
         id={id}
         name={props.name}
         label={props.label}
-        labelVariant="body-medium"
+        labelVariant="body"
         type="text"
         inputMode="decimal"
         data-openui-number
@@ -39,7 +39,7 @@ export function NumberFieldView({
         aria-invalid={!!error}
         aria-describedby={`${id}-error`}
         className={cn(
-          error && "border-red-500 focus:border-red-500 focus:ring-red-500",
+          error && "border-error focus:border-error focus:ring-error",
         )}
         disabled={disabled}
         required

@@ -21,7 +21,6 @@ import {
 } from "@/lib/theme";
 
 import { DrawerRow } from "../DrawerRow";
-import { AppearancePicker } from "./AppearancePicker";
 
 const BUTTON_SIZE = 48;
 const AVATAR_SIZE = 38;
@@ -129,7 +128,6 @@ export function UserMenu({
                 </Text>
               ) : null}
             </View>
-            <AppearancePicker />
             <View style={styles.divider} />
             <DrawerRow
               icon={Settings01Icon}

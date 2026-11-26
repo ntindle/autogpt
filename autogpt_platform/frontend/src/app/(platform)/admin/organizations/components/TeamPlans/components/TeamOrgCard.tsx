@@ -32,10 +32,10 @@ export function TeamOrgCard({ org }: Props) {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex min-w-0 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <Text variant="body-medium" as="h3" className="truncate">
+            <Text variant="body" weight="medium" as="h3" className="truncate">
               {org.name}
             </Text>
-            <Text variant="small-mono" as="span" tone="muted" translate="no">
+            <Text variant="small" mono as="span" tone="muted" translate="no">
               {org.slug}
             </Text>
           </div>

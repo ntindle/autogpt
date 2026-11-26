@@ -38,6 +38,7 @@ export function QuestionAnswerField({
   // Focus follows an explicit toggle. A pre-filled custom answer opens the
   // textarea too, but must not steal focus when the card first renders —
   // that is what the pager's autoFocus is for.
+  const showTextInput = typing || isCustom;
   const [toggled, setToggled] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -80,7 +81,7 @@ export function QuestionAnswerField({
   // can build one answer out of several options.
   function handleOptionEdit(option: string) {
     const draft =
-      typing && value.trim() ? `${value.trimEnd()}\n${option}` : option;
+      showTextInput && value.trim() ? `${value.trimEnd()}\n${option}` : option;
     onChange(draft);
     setToggled(true);
     setTyping(true);
@@ -93,12 +94,12 @@ export function QuestionAnswerField({
         options={options}
         value={value}
         labelId={labelId}
-        focusActiveOption={!typing && (autoFocus || toggled)}
+        focusActiveOption={!showTextInput && (autoFocus || toggled)}
         onChange={handleOptionChange}
         onEdit={handleOptionEdit}
         onSubmit={onSubmit}
       />
-      {typing ? (
+      {showTextInput ? (
         textarea
       ) : (
         <button

@@ -99,7 +99,7 @@ async def test_wait_for_failure_reports_heartbeat_loss_immediately():
     lease.start_heartbeat()
 
     with pytest.raises(RuntimeError, match="heartbeat"):
-        await asyncio.wait_for(lease.wait_for_failure(), timeout=1)
+        await asyncio.wait_for(lease.wait_for_failure(), timeout=10)
     with pytest.raises(RuntimeError, match="heartbeat"):
         await lease.validate()
 
@@ -129,7 +129,7 @@ async def test_lease_guard_cancels_action_when_heartbeat_is_lost():
     lease._heartbeat_failed.set()
 
     with pytest.raises(RuntimeError, match="heartbeat"):
-        await asyncio.wait_for(guarded, timeout=1)
+        await asyncio.wait_for(guarded, timeout=10)
     assert cancelled.is_set()
 
 

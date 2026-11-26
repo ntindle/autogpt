@@ -12,7 +12,7 @@ export function OrgCreditsManagedNotice() {
       data-testid="org-credits-managed-notice"
     >
       <div className="px-4">
-        <Text variant="body-medium" as="h2">
+        <Text variant="body" weight="medium" as="h2">
           Automation credits
         </Text>
       </div>

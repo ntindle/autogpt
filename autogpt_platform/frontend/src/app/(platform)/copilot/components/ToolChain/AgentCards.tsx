@@ -51,7 +51,7 @@ function CardLink({ href, label }: CardLinkProps) {
     <Link
       href={href}
       aria-label={label}
-      className="shrink-0 rounded-full p-1 text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground-body"
+      className="shrink-0 rounded-pill p-1 text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground-body"
     >
       <Icon icon={LinkSquare01Icon} size={14} />
     </Link>
@@ -78,7 +78,9 @@ export function AgentListCard({ agents }: AgentListCardProps) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1.5">
                 <Text
-                  variant="body-sm-medium-inherit"
+                  variant="body-sm"
+                  weight="medium"
+                  leading="inherit"
                   tone="emphasis"
                   className="min-w-0 truncate"
                 >
@@ -91,7 +93,12 @@ export function AgentListCard({ agents }: AgentListCardProps) {
                 )}
               </div>
               {subtitle && (
-                <Text variant="small-tight" tone="muted" className="truncate">
+                <Text
+                  variant="small"
+                  leading="4"
+                  tone="muted"
+                  className="truncate"
+                >
                   {subtitle}
                 </Text>
               )}
@@ -140,14 +147,16 @@ export function AgentSavedCard({ output }: OutputCardProps) {
         <Icon icon={Robot01Icon} size={15} tone="secondary" />
       </div>
       <Text
-        variant="body-sm-medium-inherit"
+        variant="body-sm"
+        weight="medium"
+        leading="inherit"
         tone="emphasis"
         className="min-w-0 flex-1 truncate"
       >
         {name}
       </Text>
       {typeof version === "number" && (
-        <span className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-caption-sm leading-inherit text-foreground-tertiary">
+        <span className="shrink-0 rounded-pill bg-surface-hover px-2 py-0.5 text-caption-sm leading-inherit text-foreground-tertiary">
           v{version}
         </span>
       )}
@@ -155,7 +164,7 @@ export function AgentSavedCard({ output }: OutputCardProps) {
         <Link
           href={builderLink}
           aria-label="Open in builder"
-          className="shrink-0 rounded-full p-1 text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground-body"
+          className="shrink-0 rounded-pill p-1 text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground-body"
         >
           <Icon icon={WrenchIcon} size={14} />
         </Link>
@@ -176,20 +185,22 @@ export function AgentPreviewCard({ output }: OutputCardProps) {
       </div>
       <div className="min-w-0 flex-1">
         <Text
-          variant="body-sm-medium-inherit"
+          variant="body-sm"
+          weight="medium"
+          leading="inherit"
           tone="emphasis"
           className="truncate"
         >
           {name}
         </Text>
         {str(output, "description", "message") && (
-          <Text variant="small-tight" tone="muted" className="truncate">
+          <Text variant="small" leading="4" tone="muted" className="truncate">
             {str(output, "description", "message")}
           </Text>
         )}
       </div>
       {count !== null && (
-        <span className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-caption-sm leading-inherit text-foreground-tertiary">
+        <span className="shrink-0 rounded-pill bg-surface-hover px-2 py-0.5 text-caption-sm leading-inherit text-foreground-tertiary">
           {count} block{count === 1 ? "" : "s"}
         </span>
       )}
@@ -228,7 +239,9 @@ export function SubSessionCard({
       <div className="flex items-center gap-2.5">
         <ExpertAvatar name={name} avatarUrl={avatarUrl ?? null} size={28} />
         <Text
-          variant="body-sm-medium-inherit"
+          variant="body-sm"
+          weight="medium"
+          leading="inherit"
           tone="emphasis"
           className="min-w-0 flex-1 truncate"
         >

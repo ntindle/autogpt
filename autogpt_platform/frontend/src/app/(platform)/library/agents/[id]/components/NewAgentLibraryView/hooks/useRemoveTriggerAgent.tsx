@@ -51,7 +51,7 @@ export function useRemoveTriggerAgent({
       mutation: {
         onSuccess: async () => {
           toast({ title: "Trigger removed" });
-          queryClient.invalidateQueries({
+          await queryClient.refetchQueries({
             queryKey: getTeamScopedQueryKey(
               getGetV2ListTriggerAgentsQueryKey(parentAgent.id),
               organizationId,

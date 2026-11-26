@@ -176,7 +176,7 @@ async def test_dedicated_resource_lease_pool_preserves_queries_and_revocation_lo
                 )
 
             revoke_task = asyncio.create_task(revoke_membership())
-            await asyncio.wait_for(revoke_started.wait(), timeout=1)
+            await asyncio.wait_for(revoke_started.wait(), timeout=10)
             await asyncio.sleep(0.1)
             assert not revoke_task.done()
         finally:

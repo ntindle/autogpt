@@ -18,7 +18,11 @@ import { Text } from "@/components/atoms/Text/Text";
 import { ErrorCard } from "@/components/molecules/ErrorCard/ErrorCard";
 import { humanizeCronExpression } from "@/lib/cron-expression-utils";
 import { useUserTimezone } from "@/lib/hooks/useUserTimezone";
-import { formatInTimezone, getTimezoneDisplayName } from "@/lib/timezone-utils";
+import {
+  formatInTimezone,
+  getTimezoneDisplayName,
+  getViewerTimezone,
+} from "@/lib/timezone-utils";
 import { LoadingSelectedContent } from "../LoadingSelectedContent";
 import { RunDetailCard } from "../RunDetailCard/RunDetailCard";
 import { SelectedViewLayout } from "../SelectedViewLayout";
@@ -72,11 +76,7 @@ export function SelectedTriggerAgentView({
     },
   });
 
-  const rawUserTimezone = useUserTimezone();
-  const displayTimezone =
-    rawUserTimezone && rawUserTimezone !== "not-set"
-      ? rawUserTimezone
-      : Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const viewerTimezone = getViewerTimezone(useUserTimezone());
   const schedule = schedules?.[0];
 
   if (error || schedulesError) {
@@ -143,7 +143,9 @@ export function SelectedTriggerAgentView({
                     </div>
                   )}
                   <div className="flex flex-col gap-1.5">
-                    <Text variant="large-medium">Recurrence</Text>
+                    <Text variant="large" weight="medium">
+                      Recurrence
+                    </Text>
                     <div className="flex items-center gap-3">
                       <Text variant="body" as="span">
                         {humanizeCronExpression(schedule.cron)}
@@ -152,19 +154,19 @@ export function SelectedTriggerAgentView({
                         &middot;
                       </Text>{" "}
                       <Text variant="body" as="span" tone="muted">
-                        {getTimezoneDisplayName(
-                          displayTimezone || schedule.timezone || "UTC",
-                        )}
+                        {getTimezoneDisplayName(schedule.timezone || "UTC")}
                       </Text>
                     </div>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <Text variant="large-medium">Next run</Text>
+                    <Text variant="large" weight="medium">
+                      Next run
+                    </Text>
                     <div className="flex items-center gap-3">
                       <Text variant="body" as="span">
                         {formatInTimezone(
                           schedule.next_run_time,
-                          displayTimezone || "UTC",
+                          viewerTimezone,
                           {
                             year: "numeric",
                             month: "long",
@@ -179,9 +181,7 @@ export function SelectedTriggerAgentView({
                         &middot;
                       </Text>{" "}
                       <Text variant="body" as="span" tone="muted">
-                        {getTimezoneDisplayName(
-                          displayTimezone || schedule.timezone || "UTC",
-                        )}
+                        {getTimezoneDisplayName(viewerTimezone)}
                       </Text>
                     </div>
                   </div>

@@ -230,7 +230,7 @@ export function AgentActionsDropdown({
             <Link
               href={getBuilderHref({
                 graphId: agent.graph_id,
-                graphVersion: agent.graph_version,
+
                 organizationId: agent.organization_id ?? null,
                 teamId: agent.team_id ?? null,
               })}

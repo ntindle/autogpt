@@ -22,6 +22,9 @@ interface Props {
   /** A card opted out of auto-sending, so the stack needs a Proceed even with
    *  no inputs of its own. */
   manualProceed: boolean;
+  /** False in an earlier answer, whose step has already run or been passed
+   *  over: the card keeps its rows and inputs but offers no Proceed. */
+  canProceed?: boolean;
   isReady: boolean;
   onProceed: () => void;
   submitLabel?: string;
@@ -40,6 +43,7 @@ export function ChainActionCard({
   inputs,
   questions,
   manualProceed,
+  canProceed = true,
   isReady,
   onProceed,
   submitLabel,
@@ -90,12 +94,12 @@ export function ChainActionCard({
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="text-body text-error">
           {error}
         </p>
       )}
 
-      {(hasInputs || manualProceed) && !hasQuestions && (
+      {canProceed && (hasInputs || manualProceed) && !hasQuestions && (
         <Button
           variant="primary"
           size="small"

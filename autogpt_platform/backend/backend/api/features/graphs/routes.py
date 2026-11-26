@@ -30,6 +30,7 @@ from backend.data.grants import resolve_graph_grant
 from backend.data.graph import GraphSettings
 from backend.data.model import CredentialsMetaInput
 from backend.data.onboarding import OnboardingStep, complete_onboarding_step
+from backend.data.personal_scope import canonical_personal_scope
 from backend.data.tenancy import (
     agent_graph_attachment_barrier,
     agent_graph_attachment_barriers,
@@ -726,9 +727,14 @@ async def execute_graph(
     dry_run: Annotated[bool, Body(embed=True)] = False,
 ) -> execution_db.GraphExecutionMeta:
     # The run is billed to the request's org, so the workflow must be one it can see.
-    if not await graph_db.get_graph(
-        graph_id, graph_version, user_id=user_id, organization_id=ctx.org_id
-    ):
+    graph = await graph_db.get_graph(
+        graph_id,
+        graph_version,
+        user_id=user_id,
+        organization_id=ctx.org_id,
+        team_id=ctx.team_id,
+    )
+    if not graph:
         raise HTTPException(status_code=404, detail=f"Workflow #{graph_id} not found.")
 
     if not dry_run:
@@ -771,7 +777,16 @@ async def execute_graph(
         )
         execution_team_id = library_agent.team_id if library_agent else None
         authorized_scope = library_agent is not None
-        if library_agent is None and ctx.team_id is not None:
+        if (
+            not authorized_scope
+            and graph.user_id == user_id
+            and graph.organization_id == ctx.org_id
+        ):
+            _, request_team = await canonical_personal_scope(ctx.org_id, ctx.team_id)
+            if graph.team_id == request_team:
+                execution_team_id = graph.team_id
+                authorized_scope = True
+        if not authorized_scope and ctx.team_id is not None:
             grant = await resolve_graph_grant(
                 user_id,
                 graph_id,

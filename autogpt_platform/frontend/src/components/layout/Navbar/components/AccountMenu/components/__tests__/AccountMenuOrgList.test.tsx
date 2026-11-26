@@ -1,3 +1,4 @@
+import type { Org } from "@/services/org-team/store";
 import {
   getGetV2GetPersonalOrganizationContextMockHandler,
   getGetV2GetPersonalOrganizationContextResponseMock,
@@ -11,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AccountMenuOrgList } from "../AccountMenuOrgList";
 
-const PERSONAL_ORG = {
+const PERSONAL_ORG: Org = {
   id: "org-personal",
   name: "Jane's Org",
   slug: "jane",
@@ -20,11 +21,12 @@ const PERSONAL_ORG = {
   memberCount: 1,
 };
 
-const COMPANY_ORG = {
+const COMPANY_ORG: Org = {
+  ...PERSONAL_ORG,
   id: "org-company",
   name: "Acme Inc",
   slug: "acme",
-  avatarUrl: null,
+  avatarUrl: "https://example.com/acme.png",
   isPersonal: false,
   memberCount: 12,
 };
@@ -140,6 +142,19 @@ describe("AccountMenuOrgList", () => {
         .getByRole("button", { name: new RegExp(PERSONAL_ORG.name) })
         .getAttribute("aria-pressed"),
     ).toBe("false");
+  });
+
+  it("shows each org's avatar", async () => {
+    seedStore();
+
+    render(<AccountMenuOrgList />);
+
+    const companyRow = screen.getByText(COMPANY_ORG.name).closest("button");
+    await waitFor(() => {
+      expect(companyRow?.querySelector("img")?.getAttribute("src")).toBe(
+        COMPANY_ORG.avatarUrl,
+      );
+    });
   });
 
   it("never renders a teams section — teams are managed in org settings, not context switches", () => {

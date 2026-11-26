@@ -42,7 +42,7 @@ export function OrgAccessControl({ userId }: Props) {
     >
       <div className="flex min-w-0 flex-col gap-0.5">
         <div className="flex items-center gap-2">
-          <Text variant="body-medium" as="span">
+          <Text variant="body" weight="medium" as="span">
             Organization features
           </Text>
           <Badge variant={status.has_access ? "success" : "info"} size="small">

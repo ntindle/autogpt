@@ -49,7 +49,8 @@ function PreviewButton({
           size="icon-xs"
           shape="pill"
           withTooltip={false}
-          className="flex-shrink-0 text-foreground-tertiary hover:text-info-foreground"
+          tone="quiet-info"
+          className="flex-shrink-0"
           type="button"
           aria-label="Preview file"
         >
@@ -390,7 +391,8 @@ export function FileInput(props: Props) {
 
                 <Text
                   data-slot="file-input-file-name"
-                  variant="small-medium"
+                  variant="small"
+                  weight="medium"
                   className="truncate"
                 >
                   {fileInfo
@@ -426,7 +428,8 @@ export function FileInput(props: Props) {
                 size="icon-xs"
                 shape="pill"
                 withTooltip={false}
-                className="flex-shrink-0 text-foreground-tertiary hover:text-error-hover"
+                tone="quiet-remove"
+                className="flex-shrink-0"
                 onClick={handleClear}
                 type="button"
                 aria-label="Clear file"
@@ -573,7 +576,8 @@ export function FileInput(props: Props) {
                   type="button"
                   onClick={handleClear}
                   aria-label="Clear file"
-                  className="flex-shrink-0 text-foreground-tertiary hover:text-error-hover"
+                  tone="quiet-remove"
+                  className="flex-shrink-0"
                 >
                   <Icon
                     data-slot="file-input-clear-icon"

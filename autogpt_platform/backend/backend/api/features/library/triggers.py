@@ -19,6 +19,7 @@ from backend.data.tenancy import (
     live_resource_access_barrier,
 )
 from backend.executor.utils import (
+    _enforce_expert_credential_scope,
     make_node_credentials_input_map,
     validate_and_construct_node_execution_input,
 )
@@ -245,6 +246,9 @@ async def _setup_triggered_preset_locked(
     except ValueError as e:
         raise InvalidInputError(f"Invalid preset inputs: {e}")
 
+    if expert_id:
+        await _enforce_expert_credential_scope(user_id, expert_id, agent_credentials)
+
     new_webhook, feedback = await setup_webhook_for_block(
         user_id=user_id,
         trigger_block=trigger_node.block,
@@ -356,6 +360,9 @@ async def _update_triggered_preset_locked(
     )
     if not current:
         raise NotFoundError(f"Preset #{preset_id} not found")
+    if current.expert_id:
+        # As at setup, and before anything is registered with the provider.
+        await _enforce_expert_credential_scope(user_id, current.expert_id, credentials)
 
     new_webhook = None
     if inputs is not None and credentials is not None:

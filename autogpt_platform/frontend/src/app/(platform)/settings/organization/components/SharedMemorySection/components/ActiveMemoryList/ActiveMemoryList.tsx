@@ -32,7 +32,9 @@ export function ActiveMemoryList({ orgId }: Props) {
         className="rounded-large border border-border-base p-4"
         data-testid="org-active-memory-list"
       >
-        <Text variant="body-medium">Active shared memory</Text>
+        <Text variant="body" weight="medium">
+          Active shared memory
+        </Text>
         <Text variant="small" className="mt-1 block text-foreground-tertiary">
           Facts currently available to Otto, the organization’s experts and its
           teams.

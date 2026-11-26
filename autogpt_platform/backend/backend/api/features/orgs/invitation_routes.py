@@ -38,6 +38,17 @@ router = APIRouter()
 
 INVITATION_TTL_DAYS = 7
 
+# A personal organization bills only its owner, so a member could join one but
+# never run anything there.
+PERSONAL_ORG_INVITE_REFUSED = (
+    "A personal organization has a single member. Create a team "
+    "organization, or convert this one, to invite people."
+)
+PERSONAL_ORG_JOIN_REFUSED = (
+    "This invitation is to a personal organization, which has a single "
+    "member. Ask the sender to invite you to a team organization."
+)
+
 
 def _verify_org_path(ctx: RequestContext, org_id: str) -> None:
     """Ensure the authenticated user's active org matches the path parameter."""
@@ -424,6 +435,8 @@ async def accept_invitation(
         )
         if org is None:
             raise NotFoundError("Invitation not found")
+        if org.isPersonal:
+            raise HTTPException(409, detail=PERSONAL_ORG_JOIN_REFUSED)
 
         active_member = await tx.orgmember.find_unique(
             where={

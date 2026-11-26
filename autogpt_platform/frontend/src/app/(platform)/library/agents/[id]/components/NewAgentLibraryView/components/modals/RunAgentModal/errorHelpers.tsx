@@ -52,7 +52,7 @@ export function formatValidationError(
     if (errorItems.length > 0) {
       return (
         <div className="space-y-1">
-          <div className="font-medium text-action-foreground">
+          <div className="font-medium text-foreground-inverse">
             {detail.message || "Validation failed"}
           </div>
           <div className="mt-2 space-y-1 text-caption">{errorItems}</div>
@@ -63,7 +63,7 @@ export function formatValidationError(
               <Link
                 href={getBuilderHref({
                   graphId: agentInfo.graph_id,
-                  graphVersion: agentInfo.graph_version,
+
                   organizationId: agentInfo.organization_id,
                   teamId: agentInfo.team_id,
                 })}

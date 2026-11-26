@@ -32,6 +32,7 @@ from backend.data import graph as graph_db
 from backend.data.entitlement import enforce_payment_paywall
 from backend.data.grants import resolve_graph_grant
 from backend.data.onboarding import OnboardingStep, complete_onboarding_step
+from backend.data.personal_scope import canonical_personal_scope
 from backend.data.tenancy import (
     get_user_team_ids,
     live_resource_access_barrier,
@@ -178,7 +179,15 @@ async def create_graph_execution_schedule(
         exact_scope=True,
     )
     authorized_scope = library_agent is not None
-    if library_agent is None and resolved_team_id is not None:
+    if (
+        not authorized_scope
+        and graph.user_id == user_id
+        and graph.organization_id == ctx.org_id
+    ):
+        _, request_team = await canonical_personal_scope(ctx.org_id, resolved_team_id)
+        if graph.team_id == request_team:
+            authorized_scope = True
+    if not authorized_scope and resolved_team_id is not None:
         grant = await resolve_graph_grant(
             user_id,
             graph_id,

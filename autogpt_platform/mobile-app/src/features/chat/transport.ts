@@ -2,7 +2,12 @@ import { DefaultChatTransport, type ChatTransport, type UIMessage } from "ai";
 import * as Crypto from "expo-crypto";
 import { fetch as expoFetch } from "expo/fetch";
 
-import { apiUrl, authHeaders, sessionScopeHeaders } from "@/lib/api/client";
+import {
+  apiUrl,
+  authHeaders,
+  sessionScopeHeaders,
+  reportPlanRequired,
+} from "@/lib/api/client";
 import { SessionChangedError, SignedOutError } from "@/lib/auth/errors";
 import {
   assertSameSession,
@@ -114,6 +119,7 @@ async function fetchStream(
     }
   }
   if (response.ok) return response;
+  if (response.status === 402) reportPlanRequired();
   throw new Error(statusMessage(response.status));
 }
 

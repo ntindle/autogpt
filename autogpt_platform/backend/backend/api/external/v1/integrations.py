@@ -42,6 +42,10 @@ from backend.data.tenancy import (
     live_resource_permission_barrier,
 )
 from backend.integrations.codex.access import has_codex_access_for_discovery
+from backend.integrations.credential_input import (
+    InvalidCredentialInputError,
+    normalize_user_supplied_credentials,
+)
 from backend.integrations.credential_scope import credential_scope
 from backend.integrations.credentials_store import (
     is_system_credential,
@@ -664,6 +668,11 @@ async def create_credential(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unsupported credential type: {request.type}",
         )
+
+    try:
+        normalize_user_supplied_credentials(credentials)
+    except InvalidCredentialInputError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
     # Store credentials
     async with _live_credential_action(auth):

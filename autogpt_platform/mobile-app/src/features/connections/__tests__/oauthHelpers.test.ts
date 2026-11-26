@@ -5,12 +5,13 @@ import {
   providerErrorMessage,
   type PendingFlow,
 } from "../oauthHelpers";
+import { OAUTH_RETURN_URL } from "@/lib/api/integrations";
 
 describe("parseOAuthReturn", () => {
   it("reads the code, state and issuer", () => {
     expect(
       parseOAuthReturn(
-        "ntindle-autogpt://integrations/oauth?code=a%2Fb&state=native.xyz&iss=https%3A%2F%2Fauth.example.com",
+        `${OAUTH_RETURN_URL}?code=a%2Fb&state=native.xyz&iss=https%3A%2F%2Fauth.example.com`,
       ),
     ).toEqual({
       code: "a/b",
@@ -24,7 +25,7 @@ describe("parseOAuthReturn", () => {
   it("reads a provider's refusal", () => {
     expect(
       parseOAuthReturn(
-        "ntindle-autogpt://integrations/oauth?state=native.xyz&error=access_denied&error_description=User+said+no",
+        `${OAUTH_RETURN_URL}?state=native.xyz&error=access_denied&error_description=User+said+no`,
       ),
     ).toMatchObject({
       code: null,
@@ -37,19 +38,15 @@ describe("parseOAuthReturn", () => {
     expect(
       parseOAuthReturn("autogpt-app://integrations/oauth?code=a&state=b"),
     ).toBeNull();
+    const elsewhere = OAUTH_RETURN_URL.replace(
+      "integrations/oauth",
+      "somewhere",
+    );
+    expect(parseOAuthReturn(`${elsewhere}?code=a&state=b`)).toBeNull();
+    expect(parseOAuthReturn(`${OAUTH_RETURN_URL}x?code=a&state=b`)).toBeNull();
+    expect(parseOAuthReturn(`${OAUTH_RETURN_URL}?code=a`)).toBeNull();
     expect(
-      parseOAuthReturn("ntindle-autogpt://somewhere?code=a&state=b"),
-    ).toBeNull();
-    expect(
-      parseOAuthReturn("ntindle-autogpt://integrations/oauthx?code=a&state=b"),
-    ).toBeNull();
-    expect(
-      parseOAuthReturn("ntindle-autogpt://integrations/oauth?code=a"),
-    ).toBeNull();
-    expect(
-      parseOAuthReturn(
-        "ntindle-autogpt://integrations/oauth?code=%E0%A4%A&state=b",
-      ),
+      parseOAuthReturn(`${OAUTH_RETURN_URL}?code=%E0%A4%A&state=b`),
     ).toBeNull();
   });
 });

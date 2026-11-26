@@ -49,6 +49,7 @@ function showResult(source: string, send = vi.fn(), readOnly = false) {
           parts={[part]}
           messageID="expanded-message"
           isCurrentlyStreaming={false}
+          isLatestAnswer={true}
           readOnly={readOnly}
         />
       </CopilotChatActionsProvider>

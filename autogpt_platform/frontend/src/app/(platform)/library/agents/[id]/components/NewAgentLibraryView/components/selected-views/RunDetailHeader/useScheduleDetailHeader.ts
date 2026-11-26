@@ -10,7 +10,7 @@ import { getBuilderHref } from "@/services/org-team/builder";
 export function useScheduleDetailHeader(
   agentGraphId: string,
   scheduleId?: string,
-  agentGraphVersion?: number | string,
+  _agentGraphVersion?: number | string,
   organizationId?: string | null,
   teamId?: string | null,
 ) {
@@ -40,14 +40,13 @@ export function useScheduleDetailHeader(
 
   const openInBuilderHref = getBuilderHref({
     graphId: agentGraphId,
-    graphVersion: agentGraphVersion,
     organizationId: organizationId ?? null,
     teamId: teamId ?? null,
   });
 
   return {
+    openInBuilderHref,
     deleteSchedule,
     isDeleting: deleteMutation.isPending,
-    openInBuilderHref,
   } as const;
 }

@@ -431,7 +431,7 @@ async def unlink_webhook_from_graph(
         webhook_where["organizationId"] = organization_id
         webhook_where["teamId"] = team_id
     if not await IntegrationWebhook.prisma().find_first(where=webhook_where):
-        raise NotFoundError(f"Webhook #{webhook_id} not found")
+        raise NotFoundError(f"Webhook #{mask_credential(webhook_id)} not found")
 
     node_where: AgentNodeWhereInput = {
         "agentGraphId": graph_id,

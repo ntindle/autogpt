@@ -99,7 +99,7 @@ export function TeamManagePanel({
       ) : null}
 
       <div className="flex flex-col gap-2">
-        <Text variant="large-medium" as="h4">
+        <Text variant="large" weight="medium" as="h4">
           Team members ({members.length})
         </Text>
         {isLoading ? (

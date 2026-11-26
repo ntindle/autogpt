@@ -61,7 +61,7 @@ function UndoActions({
         variant="ghost"
         size="small"
         loading={isUndoing}
-        // oxlint-disable-next-line design-system/no-restyle -- a quiet text button on the dark toast; no Button variant is light-on-dark
+        // oxlint-disable-next-line design-system/no-restyle, design-system/no-misused-role -- a quiet text button on the dark toast; no Button variant is light-on-dark, and no text role has surface-active's #DADADC
         className="border-none text-surface-active hover:bg-transparent hover:text-foreground-subtle"
         onClick={async () => {
           setIsUndoing(true);
@@ -240,7 +240,7 @@ export function AddToLibraryButton({
   const buttonClassName =
     variant === "ghost"
       ? // oxlint-disable-next-line design-system/no-restyle -- the quiet Add on a card keeps no hover fill; no Button variant is a bare text button
-        `z-10 text-foreground-tertiary hover:border-transparent hover:bg-transparent hover:text-foreground-emphasis ${className ?? ""}`
+        `z-raised text-foreground-tertiary hover:border-transparent hover:bg-transparent hover:text-foreground-emphasis ${className ?? ""}`
       : className;
 
   // Solo users (no teams): original plain button, adds to their org context.
@@ -283,7 +283,7 @@ export function AddToLibraryButton({
     }));
 
   return (
-    <span onClick={(e) => e.stopPropagation()} className="z-10 inline-flex">
+    <span onClick={(e) => e.stopPropagation()} className="z-raised inline-flex">
       <SplitButton
         variant={variant}
         size={size}

@@ -38,6 +38,7 @@ function showPlan(source = updatedPlan, readOnly = false) {
           parts={[part]}
           messageID="moving-message"
           isCurrentlyStreaming={false}
+          isLatestAnswer={true}
           readOnly={readOnly}
         />
       </CopilotChatActionsProvider>

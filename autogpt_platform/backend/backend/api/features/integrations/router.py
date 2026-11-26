@@ -40,6 +40,7 @@ from backend.api.credential_scope import credential_user_id, oauth_credential_sc
 from backend.api.features.library.db import set_preset_webhook, update_preset
 from backend.api.features.library.model import LibraryAgentPreset, split_trigger_inputs
 from backend.api.middleware.body_limit import MiB, request_body_limit
+from backend.blocks.mcp.helpers import is_manual_mcp_credential
 from backend.copilot.scheduled_chats.reconnect import (
     resume_after_reconnect_in_background,
 )
@@ -85,6 +86,7 @@ from backend.integrations.codex.login import (
     CodexLoginFailedError,
     CodexLoginPendingError,
 )
+from backend.integrations.credential_input import normalize_user_supplied_credentials
 from backend.integrations.credential_lease import run_with_credential_lease_guard
 from backend.integrations.credentials_store import (
     is_system_credential,
@@ -428,6 +430,11 @@ class CredentialsMetaResponse(BaseModel):
     service: str = ""
     service_name: str | None = None
     service_icon: str | None = None
+    mcp_catalog_entry: str | None = Field(
+        default=None,
+        description="The MCP catalog entry (e.g. mcp_linear) whose server this "
+        "sign-in connects; null for other credentials and uncatalogued servers",
+    )
     microsoft_identity: MicrosoftIdentity | None = None
 
     @model_validator(mode="before")
@@ -486,6 +493,7 @@ def to_meta_response(cred: Credentials) -> CredentialsMetaResponse:
         service=identity.service,
         service_name=identity.name,
         service_icon=identity.icon,
+        mcp_catalog_entry=identity.catalog_entry,
         microsoft_identity=(
             microsoft_identity(cred)
             if isinstance(cred, OAuth2Credentials)
@@ -1315,6 +1323,7 @@ async def create_credentials(
         error := scope_error(provider.value, credentials.scope)
     ):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error)
+    normalize_user_supplied_credentials(credentials)
     credentials.provider = provider
     try:
         await creds_manager.create(user_id, credentials)
@@ -1429,6 +1438,8 @@ async def delete_credentials(
     except NeedConfirmation as e:
         return CredentialsDeletionNeedsConfirmationResponse(message=str(e))
 
+    # CredentialsDeletionResponse always reports deleted=true, so only return it
+    # once the stored row is actually gone.
     return CredentialsDeletionResponse(revoked=tokens_revoked)
 
 
@@ -1496,7 +1507,7 @@ async def delete_and_revoke_credentials(
             )
 
         try:
-            lease = await creds_manager.acquire_lease(user_id, cred_id)
+            lease = await creds_manager.acquire_lease(user_id, cred_id, refresh=False)
         except ValueError:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -1536,15 +1547,31 @@ async def delete_and_revoke_credentials(
                     user_id, current, force, skip_failed_prunes=skip_failed_prunes
                 )
                 if provider == ProviderName.CODEX:
-                    return await revoke_codex_credentials(
-                        creds_manager,
-                        user_id,
-                        cred_id,
-                        lease=lease,
-                    )
+                    try:
+                        return await revoke_codex_credentials(
+                            creds_manager,
+                            user_id,
+                            cred_id,
+                            lease=lease,
+                        )
+                    except ValueError:
+                        raise HTTPException(
+                            404, detail="Credentials not found"
+                        ) from None
+                    except Exception as error:
+                        logger.warning(
+                            "Codex credential deletion failed with %s",
+                            type(error).__name__,
+                        )
+                        raise HTTPException(
+                            500, detail="Failed to delete credentials"
+                        ) from None
 
                 tokens_revoked = None
-                if isinstance(current, OAuth2Credentials):
+                if isinstance(current, OAuth2Credentials) and not (
+                    provider_matches(provider.value, ProviderName.MCP.value)
+                    and is_manual_mcp_credential(current)
+                ):
                     if provider_matches(provider.value, ProviderName.MCP.value):
                         # MCP uses dynamic per-server OAuth: build the handler
                         # from the credentials' metadata.
@@ -1835,7 +1862,7 @@ async def _execute_webhook_node_trigger(
             logger.warning(
                 "Skipping legacy webhook %s because its node tenant is not "
                 "uniquely attributable",
-                webhook_id,
+                mask_credential(webhook_id),
             )
             return
         org_id, ws_id = graph_row.organizationId, graph_row.teamId
@@ -1846,7 +1873,7 @@ async def _execute_webhook_node_trigger(
             logger.warning(
                 "Skipping webhook %s because its tenant no longer matches "
                 "the attached graph",
-                webhook_id,
+                mask_credential(webhook_id),
             )
             return
         if not await has_live_resource_access(
@@ -1857,7 +1884,7 @@ async def _execute_webhook_node_trigger(
         ):
             logger.warning(
                 "Skipping webhook %s because its org/team access is inactive",
-                webhook_id,
+                mask_credential(webhook_id),
             )
             return
         async with _live_node_webhook_trigger(node, webhook) as active:
@@ -1865,7 +1892,7 @@ async def _execute_webhook_node_trigger(
                 logger.info(
                     "Skipping detached webhook node %s for webhook %s",
                     node.id,
-                    webhook_id,
+                    mask_credential(webhook_id),
                 )
                 return
             graph_exec = await add_graph_execution(
@@ -2017,7 +2044,7 @@ async def _execute_webhook_preset_trigger(
         ):
             logger.warning(
                 "Skipping webhook %s because its org/team access is inactive",
-                webhook_id,
+                mask_credential(webhook_id),
             )
             return
         async with _live_preset_webhook_trigger(preset, webhook) as live_preset:
@@ -2025,7 +2052,7 @@ async def _execute_webhook_preset_trigger(
                 logger.info(
                     "Skipping inactive or detached preset %s for webhook %s",
                     preset.id,
-                    webhook_id,
+                    mask_credential(webhook_id),
                 )
                 return
             # The preset as it is now: its event filter and trigger config, with

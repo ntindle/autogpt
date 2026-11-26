@@ -1,7 +1,11 @@
 import type { CredentialsMetaResponse } from "@/app/api/__generated__/models/credentialsMetaResponse";
 import { Button } from "@/components/atoms/Button/Button";
 import { Text } from "@/components/atoms/Text/Text";
-import { GOOGLE_SERVICES, type GoogleService, isAllowed } from "../helpers";
+import {
+  GOOGLE_SERVICES,
+  type GoogleService,
+  isAllowed,
+} from "@/lib/google-access";
 
 interface Props {
   /** The connected account; before one, the list only says what each is for. */
@@ -24,7 +28,9 @@ export function GoogleServiceList({ credential, pending, onAllow }: Props) {
             className="flex items-center justify-between gap-3 px-3 py-2"
           >
             <div className="flex min-w-0 flex-col">
-              <Text variant="body-medium">{service.name}</Text>
+              <Text variant="body" weight="medium">
+                {service.name}
+              </Text>
               <Text variant="small" tone="muted">
                 {service.purpose}
               </Text>

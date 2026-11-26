@@ -5,6 +5,10 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { AgentSelectStep } from "./components/AgentSelectStep/AgentSelectStep";
 import { AgentInfoStep } from "./components/AgentInfoStep/AgentInfoStep";
 import { AgentReviewStep } from "./components/AgentReviewStep";
+import {
+  ListingCheckFailed,
+  ListingCheckPending,
+} from "./components/ListingCheckState";
 import { StepStrip } from "./components/StepStrip";
 import { Dialog } from "@/components/molecules/Dialog/Dialog";
 import { Skeleton } from "@/components/atoms/Skeleton/Skeleton";
@@ -17,6 +21,7 @@ import {
   PublishAuthPrompt,
   PublishAuthPromptSkeleton,
 } from "./components/PublishAuthPrompt";
+import { duration, ease } from "@/components/styles/motion";
 
 export function PublishAgentModal({
   trigger,
@@ -39,6 +44,10 @@ export function PublishAgentModal({
     selectedAgentOrganizationId,
     selectedAgentTeamId,
     creatorUsername,
+    isMarketplaceUpdate,
+    isInfoFormReady,
+    isCheckingListing,
+    listingCheckFailed,
     // Handlers
     handleClose,
     handleAgentSelect,
@@ -47,6 +56,7 @@ export function PublishAgentModal({
     handleGoToBuilder,
     handleSuccessFromInfo,
     handleBack,
+    handleRetryListingCheck,
   } = usePublishAgentModal({
     targetState,
     onStateChange,
@@ -87,9 +97,21 @@ export function PublishAgentModal({
             onCancel={handleClose}
             onNext={handleNextFromSelect}
             onOpenBuilder={handleGoToBuilder}
+            isCheckingListing={isCheckingListing}
+            listingCheckFailed={listingCheckFailed}
           />
         );
       case "info":
+        if (!isInfoFormReady) {
+          return listingCheckFailed ? (
+            <ListingCheckFailed
+              onRetry={handleRetryListingCheck}
+              onCancel={handleClose}
+            />
+          ) : (
+            <ListingCheckPending />
+          );
+        }
         return (
           <AgentInfoStep
             onBack={handleBack}
@@ -99,7 +121,7 @@ export function PublishAgentModal({
             selectedAgentOrganizationId={selectedAgentOrganizationId}
             selectedAgentTeamId={selectedAgentTeamId}
             initialData={initialData}
-            isMarketplaceUpdate={!!currentState.submissionData}
+            isMarketplaceUpdate={isMarketplaceUpdate}
           />
         );
       case "review": {
@@ -186,7 +208,7 @@ export function PublishAgentModal({
               transition={{
                 layout: shouldReduceMotion
                   ? { duration: 0 }
-                  : { duration: 0.32, ease: [0.16, 1, 0.3, 1] },
+                  : { duration: duration.slow, ease: ease.emphasized },
               }}
               className="overflow-hidden"
             >
@@ -203,16 +225,16 @@ export function PublishAgentModal({
                       opacity: 1,
                       x: 0,
                       transition: {
-                        duration: shouldReduceMotion ? 0 : 0.24,
-                        ease: [0.16, 1, 0.3, 1],
+                        duration: shouldReduceMotion ? 0 : duration.base,
+                        ease: ease.emphasized,
                       },
                     },
                     exit: (dir: number) => ({
                       opacity: 0,
                       x: shouldReduceMotion ? 0 : dir * -40,
                       transition: {
-                        duration: shouldReduceMotion ? 0 : 0.16,
-                        ease: [0.4, 0, 1, 1],
+                        duration: shouldReduceMotion ? 0 : duration.fast,
+                        ease: ease.in,
                       },
                     }),
                   }}

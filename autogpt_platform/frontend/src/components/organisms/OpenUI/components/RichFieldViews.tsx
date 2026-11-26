@@ -29,7 +29,7 @@ export function TextAreaFieldView({
         type="textarea"
         rows={3}
         label={props.label}
-        labelVariant="body-medium"
+        labelVariant="body"
         value={field.value}
         placeholder={props.placeholder}
         maxLength={2000}
@@ -49,7 +49,7 @@ export function ToggleFieldView({
   const disabled = useOpenUIDisabled();
   const field = useFieldView(props.name, props.value ?? false);
   return (
-    <label className="text-sm flex min-h-11 cursor-pointer items-center gap-3 text-foreground">
+    <label className="flex min-h-11 cursor-pointer items-center gap-3 text-body text-foreground-base">
       <input
         type="checkbox"
         className="h-5 w-5 accent-primary"
@@ -82,14 +82,14 @@ export function MultiSelectFieldView({
       className="space-y-2"
       aria-describedby={`${id}-error`}
     >
-      <legend className="text-sm font-medium text-foreground">
+      <legend className="text-body font-medium text-foreground-base">
         {props.label}
       </legend>
       <div className="flex flex-wrap gap-2">
         {props.options?.map((option, index) => (
           <label
             key={option.value}
-            className="text-sm flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-border px-3 has-[:checked]:border-primary has-[:checked]:bg-primary/5"
+            className="flex min-h-11 cursor-pointer items-center gap-2 rounded-lg border border-border-base px-3 text-body has-[:checked]:border-action has-[:checked]:bg-action/5"
           >
             <input
               {...(index === 0 ? handlers : {})}
@@ -112,7 +112,7 @@ export function MultiSelectFieldView({
       <p
         id={`${id}-error`}
         aria-live="polite"
-        className="text-xs text-destructive"
+        className="text-caption text-error"
       >
         {error}
       </p>
