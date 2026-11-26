@@ -8,6 +8,11 @@ import {
 } from "./toolCatalog.shared";
 
 export const PLATFORM_TOOL_CATALOG: Record<string, ToolMeta> = {
+  manage_tasks: {
+    category: "todo",
+    running: "Managing tasks",
+    done: "Managed tasks",
+  },
   TodoWrite: {
     category: "todo",
     running: "Updating tasks",
