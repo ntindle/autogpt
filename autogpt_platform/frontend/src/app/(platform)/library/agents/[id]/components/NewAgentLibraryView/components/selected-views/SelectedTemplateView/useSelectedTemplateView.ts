@@ -20,6 +20,7 @@ import { useToast } from "@/components/molecules/Toast/use-toast";
 import type { CredentialsMetaInput } from "@/lib/autogpt-server-api/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { withCalendarDates } from "../../modals/RunAgentInputs/helpers";
 import {
   mergePresetInputs,
   splitPresetInputs,
@@ -41,6 +42,8 @@ export function useSelectedTemplateView({
   const organizationId = agent.organization_id ?? null;
   const teamId = agent.team_id ?? null;
   const graphId = agent.graph_id;
+  const inputSchema = agent.input_schema;
+  const triggerConfigSchema = agent.trigger_setup_info?.config_schema;
 
   const query = useGetV2GetASpecificPreset(templateId, {
     request: getTenantRequestInit(organizationId, teamId),
@@ -57,10 +60,12 @@ export function useSelectedTemplateView({
 
   const [name, setName] = useState<string>("");
   const [description, setDescription] = useState<string>("");
-  const [inputs, setInputs] = useState<Record<string, any>>({});
+  const [inputs, setInputs] = useState<Record<string, unknown>>({});
   // A detached triggered preset is filed here, so its inputs can carry the
   // trigger node's mask; keep the key so saving re-nests under the same one.
-  const [triggerConfig, setTriggerConfig] = useState<Record<string, any>>({});
+  const [triggerConfig, setTriggerConfig] = useState<Record<string, unknown>>(
+    {},
+  );
   const [maskKey, setMaskKey] = useState<string | null>(null);
   const [credentials, setCredentials] = useState<
     Record<string, CredentialsMetaInput>
@@ -70,10 +75,14 @@ export function useSelectedTemplateView({
     if (query.data) {
       setName(query.data.name || "");
       setDescription(query.data.description || "");
-      applyPresetInputs(query.data.inputs);
+      applyPresetInputs({
+        presetInputs: query.data.inputs,
+        inputSchema,
+        triggerConfigSchema,
+      });
       setCredentials(query.data.credentials || {});
     }
-  }, [query.data]);
+  }, [query.data, inputSchema, triggerConfigSchema]);
 
   const updateMutation = usePatchV2UpdateAnExistingPreset({
     request: getTenantRequestInit(organizationId, teamId),
@@ -202,10 +211,18 @@ export function useSelectedTemplateView({
     setTriggerConfig((prev) => ({ ...prev, [key]: value }));
   }
 
-  function applyPresetInputs(presetInputs: Record<string, any> | undefined) {
-    const split = splitPresetInputs(presetInputs);
-    setInputs(split.inputs);
-    setTriggerConfig(split.triggerConfig);
+  function applyPresetInputs(args: {
+    presetInputs: Record<string, unknown> | undefined;
+    inputSchema: LibraryAgent["input_schema"];
+    triggerConfigSchema:
+      | NonNullable<LibraryAgent["trigger_setup_info"]>["config_schema"]
+      | undefined;
+  }) {
+    const split = splitPresetInputs(args.presetInputs);
+    setInputs(withCalendarDates(args.inputSchema, split.inputs));
+    setTriggerConfig(
+      withCalendarDates(args.triggerConfigSchema, split.triggerConfig),
+    );
     setMaskKey(split.maskKey);
   }
 
@@ -222,10 +239,14 @@ export function useSelectedTemplateView({
     if (updateMutation.isSuccess && query.data) {
       setName(query.data.name || "");
       setDescription(query.data.description || "");
-      applyPresetInputs(query.data.inputs);
+      applyPresetInputs({
+        presetInputs: query.data.inputs,
+        inputSchema,
+        triggerConfigSchema,
+      });
       setCredentials(query.data.credentials || {});
     }
-  }, [updateMutation.isSuccess, query.data]);
+  }, [updateMutation.isSuccess, query.data, inputSchema, triggerConfigSchema]);
 
   return {
     template: query.data,

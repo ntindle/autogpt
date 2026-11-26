@@ -39,12 +39,13 @@ export function SidebarItemCard({
       <div className="flex min-w-0 items-center justify-start gap-3">
         {icon}
         <div className="flex min-w-0 flex-1 flex-col items-start justify-between gap-0">
-          <Text variant="body-medium" className="block w-full">
+          <Text variant="body" weight="medium" className="block w-full">
             {title}
           </Text>
           <div className="flex w-full min-w-0 items-center gap-2">
             <Text
-              variant="body-tight"
+              variant="body"
+              leading="5"
               tone="muted"
               className="min-w-0 flex-1 truncate"
               title={descriptionTitle}

@@ -273,7 +273,13 @@ function OutputTablePreview({ rows, columns }: OutputTablePreviewProps) {
                 data-slot="work-output-sheet-table-header-cell"
                 className="px-3 py-2 text-foreground-secondary"
               >
-                <Text as="div" variant="body-medium-tight" tone="secondary">
+                <Text
+                  as="div"
+                  variant="body"
+                  weight="medium"
+                  leading="5"
+                  tone="secondary"
+                >
                   {column}
                 </Text>
               </th>
@@ -293,7 +299,7 @@ function OutputTablePreview({ rows, columns }: OutputTablePreviewProps) {
                   data-slot="work-output-sheet-table-cell"
                   className="px-3 py-2"
                 >
-                  <Text as="div" variant="body-tight" tone="body">
+                  <Text as="div" variant="body" leading="5" tone="body">
                     {cellText(row[column])}
                   </Text>
                 </td>

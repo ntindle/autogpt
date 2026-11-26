@@ -205,7 +205,12 @@ class IntegrationCredentialsManager:
         return credentials
 
     async def acquire(
-        self, user_id: str, credentials_id: str, allow_sdk_default: bool = False
+        self,
+        user_id: str,
+        credentials_id: str,
+        allow_sdk_default: bool = False,
+        *,
+        refresh: bool = True,
     ) -> tuple[Credentials, AsyncRedisLock]:
         """
         ⚠️ WARNING: this locks credentials system-wide and blocks both acquiring
@@ -214,14 +219,22 @@ class IntegrationCredentialsManager:
 
         ``allow_sdk_default`` as in :meth:`get`: only webhook housekeeping
         passes it.
+        `refresh=False` only checks that the credential exists and leases the
+        stored row as-is, e.g. to delete a credential whose token can no longer
+        be refreshed. Locking, reloading and lease semantics are unchanged.
         """
         # Refresh before taking the long-lived lease lock. A rotating OAuth
         # provider refreshes under that same credential lock; calling get()
         # after acquiring it would make acquire() wait on its own lock.
-        refreshed = await self.get(
-            user_id, credentials_id, allow_sdk_default=allow_sdk_default
-        )
-        if not refreshed:
+        if refresh:
+            found = await self.get(
+                user_id, credentials_id, allow_sdk_default=allow_sdk_default
+            )
+        else:
+            if not allow_sdk_default:
+                _refuse_sdk_default(credentials_id)
+            found = await self.store.get_creds_by_id(user_id, credentials_id)
+        if not found:
             raise ValueError(
                 f"Credentials #{credentials_id} for user #{user_id} not found"
             )
@@ -246,10 +259,18 @@ class IntegrationCredentialsManager:
         return credentials, lock
 
     async def acquire_lease(
-        self, user_id: str, credentials_id: str, allow_sdk_default: bool = False
+        self,
+        user_id: str,
+        credentials_id: str,
+        allow_sdk_default: bool = False,
+        *,
+        refresh: bool = True,
     ) -> CredentialLease:
         credentials, lock = await self.acquire(
-            user_id, credentials_id, allow_sdk_default=allow_sdk_default
+            user_id,
+            credentials_id,
+            allow_sdk_default=allow_sdk_default,
+            refresh=refresh,
         )
         manager = self.scoped(self.store.organization_id)
         checkpoint = partial(manager.update_acquired, user_id)

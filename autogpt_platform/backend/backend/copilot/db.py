@@ -30,6 +30,7 @@ from backend.util.exceptions import (
     NotFoundError,
 )
 from backend.util.json import SafeJson, dumps, sanitize_string
+from backend.util.sql import escape_like
 
 from .duplicate_message_id import is_duplicate_chat_message_id_error
 from .model import (
@@ -1066,7 +1067,7 @@ def _visible_sessions_where(
             params.append(team_id)
             conditions.append(f'"teamId" = ${len(params)}')
     if title_contains:
-        params.append(f"%{_escape_like(title_contains)}%")
+        params.append(f"%{escape_like(title_contains)}%")
         conditions.append(f'"title" ILIKE ${len(params)}')
     if expert_id is not None:
         params.append(expert_id)
@@ -1301,15 +1302,6 @@ async def get_session_titles(
         where={"id": {"in": session_ids}, "userId": user_id}
     )
     return {row.id: row.title for row in rows}
-
-
-def _escape_like(value: str) -> str:
-    """Escape LIKE wildcards so ``title_contains`` matches literally.
-
-    Parity with Prisma's ``contains`` filter, which escapes them too;
-    Postgres' default LIKE escape character is the backslash.
-    """
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def delete_chat_session(

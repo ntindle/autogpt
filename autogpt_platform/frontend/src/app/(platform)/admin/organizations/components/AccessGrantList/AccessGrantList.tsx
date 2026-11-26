@@ -111,7 +111,7 @@ function GrantRows({
           className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"
         >
           <div className="flex min-w-0 flex-col">
-            <Text variant="body-medium" as="span" className="truncate">
+            <Text variant="body" weight="medium" as="span" className="truncate">
               {grant.email}
             </Text>
             <Text variant="small" as="span" tone="muted">

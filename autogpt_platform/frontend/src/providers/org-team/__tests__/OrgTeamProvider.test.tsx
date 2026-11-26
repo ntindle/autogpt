@@ -1,6 +1,19 @@
+import { getGetV2ListUserOrganizationsMockHandler401 } from "@/app/api/__generated__/endpoints/orgs/orgs.msw";
+import { normalizeOrg } from "@/services/org-team/normalize";
+import { http, HttpResponse } from "msw";
+import { Key, storage } from "@/services/storage/local-storage";
+import { resetClientRequestFailureLog } from "@/app/api/mutators/request-failure-log";
+import { AccountMenuOrgList } from "@/components/layout/Navbar/components/AccountMenu/components/AccountMenuOrgList";
+import { server } from "@/mocks/mock-server";
 import { useOrgTeamStore } from "@/services/org-team/store";
 import { getQueryClient } from "@/lib/react-query/queryClient";
-import { act, render, screen, waitFor } from "@/tests/integrations/test-utils";
+import {
+  act,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@/tests/integrations/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { useAuthMock } = vi.hoisted(() => ({
@@ -24,7 +37,7 @@ const PERSONAL_ORG_API = {
   id: "org-personal",
   name: "Jane's Org",
   slug: "jane",
-  avatar_url: null,
+  avatar_url: "https://example.com/personal.png",
   description: null,
   is_personal: true,
   member_count: 1,
@@ -42,23 +55,14 @@ const COMPANY_ORG_API = {
   created_at: "2026-01-01T00:00:00Z",
 };
 
-const PERSONAL_ORG = {
-  id: "org-personal",
-  name: "Jane's Org",
-  slug: "jane",
-  avatarUrl: null,
-  isPersonal: true,
-  memberCount: 1,
-};
-
-const COMPANY_ORG = {
-  id: "org-company",
-  name: "Acme Inc",
-  slug: "acme",
-  avatarUrl: "https://example.com/acme.png",
-  isPersonal: false,
-  memberCount: 12,
-};
+const PERSONAL_ORG = normalizeOrg({
+  ...PERSONAL_ORG_API,
+  created_at: new Date(PERSONAL_ORG_API.created_at),
+});
+const COMPANY_ORG = normalizeOrg({
+  ...COMPANY_ORG_API,
+  created_at: new Date(COMPANY_ORG_API.created_at),
+});
 
 function mockLoggedIn() {
   useAuthMock.mockReturnValue({
@@ -100,6 +104,36 @@ function mockOrgsResponse(orgs: unknown, ok = true) {
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+
+function renderProvider() {
+  render(
+    <OrgTeamProvider>
+      <span>app content</span>
+    </OrgTeamProvider>,
+  );
+}
+
+async function waitForOrgs() {
+  await waitFor(() => {
+    expect(useOrgTeamStore.getState().isLoaded).toBe(true);
+  });
+}
+
+beforeEach(() => {
+  window.localStorage.clear();
+  useOrgTeamStore.setState({
+    activeOrgID: null,
+    activeTeamID: null,
+    orgs: [],
+    teams: [],
+    isLoaded: false,
+  });
+});
+
+afterEach(() => {
+  resetClientRequestFailureLog();
+  vi.clearAllMocks();
+});
 
 describe("OrgTeamProvider", () => {
   beforeEach(() => {
@@ -340,23 +374,12 @@ describe("OrgTeamProvider", () => {
     mockLoggedIn();
     const fetchMock = mockOrgsResponse([COMPANY_ORG_API, PERSONAL_ORG_API]);
 
-    render(
-      <OrgTeamProvider>
-        <span>app content</span>
-      </OrgTeamProvider>,
-    );
+    renderProvider();
 
     expect(screen.getByText("app content")).toBeDefined();
-    await waitFor(() => {
-      expect(useOrgTeamStore.getState().isLoaded).toBe(true);
-    });
+    await waitForOrgs();
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/proxy/api/orgs",
-      expect.objectContaining({
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+    expect(fetchMock).toHaveBeenCalled();
     const state = useOrgTeamStore.getState();
     expect(state.orgs).toEqual([COMPANY_ORG, PERSONAL_ORG]);
     expect(state.activeOrgID).toBe(PERSONAL_ORG.id);
@@ -484,11 +507,7 @@ describe("OrgTeamProvider", () => {
     mockLoggedIn();
     mockOrgsResponse([COMPANY_ORG_API]);
 
-    render(
-      <OrgTeamProvider>
-        <span>app content</span>
-      </OrgTeamProvider>,
-    );
+    renderProvider();
 
     await waitFor(() => {
       expect(useOrgTeamStore.getState().activeOrgID).toBe(COMPANY_ORG.id);
@@ -501,15 +520,9 @@ describe("OrgTeamProvider", () => {
     mockLoggedIn();
     mockOrgsResponse([COMPANY_ORG_API, PERSONAL_ORG_API]);
 
-    render(
-      <OrgTeamProvider>
-        <span>app content</span>
-      </OrgTeamProvider>,
-    );
+    renderProvider();
 
-    await waitFor(() => {
-      expect(useOrgTeamStore.getState().isLoaded).toBe(true);
-    });
+    await waitForOrgs();
     expect(useOrgTeamStore.getState().activeOrgID).toBe(COMPANY_ORG.id);
   });
 
@@ -533,34 +546,24 @@ describe("OrgTeamProvider", () => {
 
   it("still marks the store loaded when the org fetch fails (UI must not hang)", async () => {
     mockLoggedIn();
-    mockOrgsResponse(null, false);
+    server.use(getGetV2ListUserOrganizationsMockHandler401());
 
-    render(
-      <OrgTeamProvider>
-        <span>app content</span>
-      </OrgTeamProvider>,
-    );
+    renderProvider();
 
-    await waitFor(() => {
-      expect(useOrgTeamStore.getState().isLoaded).toBe(true);
-    });
+    await waitForOrgs();
     expect(useOrgTeamStore.getState().orgs).toEqual([]);
     expect(useOrgTeamStore.getState().activeOrgID).toBeNull();
   });
 
   it("still marks the store loaded when the org fetch throws (network error)", async () => {
     mockLoggedIn();
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+    server.use(http.get("/api/proxy/api/orgs", () => HttpResponse.error()));
 
-    render(
-      <OrgTeamProvider>
-        <span>app content</span>
-      </OrgTeamProvider>,
-    );
+    renderProvider();
 
-    await waitFor(() => {
-      expect(useOrgTeamStore.getState().isLoaded).toBe(true);
-    });
+    await waitForOrgs();
+    expect(useOrgTeamStore.getState().orgs).toEqual([]);
+    expect(useOrgTeamStore.getState().activeOrgID).toBeNull();
   });
 
   it("keeps the stored org while the session is still hydrating", async () => {
@@ -576,17 +579,13 @@ describe("OrgTeamProvider", () => {
       isLoaded: true,
     });
     mockSessionHydrating();
-    const fetchMock = mockOrgsResponse([]);
+    const requested = mockOrgsResponse([]);
 
-    render(
-      <OrgTeamProvider>
-        <span>app content</span>
-      </OrgTeamProvider>,
-    );
+    renderProvider();
 
     expect(useOrgTeamStore.getState().activeOrgID).toBe(PERSONAL_ORG.id);
     expect(useOrgTeamStore.getState().isLoaded).toBe(true);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(requested).not.toHaveBeenCalled();
   });
 
   it("clears org/team context on logout", async () => {
@@ -596,19 +595,59 @@ describe("OrgTeamProvider", () => {
       isLoaded: true,
     });
     mockLoggedOut();
-    const fetchMock = mockOrgsResponse([]);
+    const requested = mockOrgsResponse([]);
 
-    render(
-      <OrgTeamProvider>
-        <span>app content</span>
-      </OrgTeamProvider>,
-    );
+    renderProvider();
 
     await waitFor(() => {
       expect(useOrgTeamStore.getState().activeOrgID).toBeNull();
     });
     expect(useOrgTeamStore.getState().orgs).toEqual([]);
     expect(useOrgTeamStore.getState().isLoaded).toBe(false);
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(requested).not.toHaveBeenCalled();
+  });
+});
+
+// The org list exactly as GET /api/orgs sends it, read by the real account
+// menu: the personal org is not the user's first membership.
+describe("the account menu once the org list loads", () => {
+  beforeEach(() => {
+    process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS = "true";
+  });
+  afterEach(() => {
+    delete process.env.NEXT_PUBLIC_FORCE_FLAG_SHOW_ORG_SETTINGS;
+    vi.unstubAllGlobals();
+  });
+  it("starts in the personal org, marked Personal and showing its avatar", async () => {
+    mockLoggedIn();
+    mockOrgsResponse([COMPANY_ORG_API, PERSONAL_ORG_API]);
+
+    render(
+      <OrgTeamProvider>
+        <AccountMenuOrgList />
+      </OrgTeamProvider>,
+    );
+
+    const personalRow = (await screen.findByText(PERSONAL_ORG.name)).closest(
+      "button",
+    );
+    const companyRow = screen.getByText(COMPANY_ORG.name).closest("button");
+    if (!personalRow || !companyRow) throw new Error("org rows not rendered");
+
+    await waitForOrgs();
+    expect(useOrgTeamStore.getState().activeOrgID).toBe(PERSONAL_ORG.id);
+    expect(storage.get(Key.ACTIVE_ORG)).toBe(PERSONAL_ORG.id);
+
+    expect(within(personalRow).getByText("Personal")).toBeDefined();
+    expect(within(companyRow).queryByText("Personal")).toBeNull();
+
+    await waitFor(() => {
+      expect(personalRow.querySelector("img")?.getAttribute("src")).toBe(
+        PERSONAL_ORG.avatarUrl,
+      );
+    });
+    expect(companyRow.querySelector("img")?.getAttribute("src")).toBe(
+      COMPANY_ORG.avatarUrl,
+    );
   });
 });

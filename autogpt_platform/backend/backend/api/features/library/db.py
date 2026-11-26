@@ -68,6 +68,7 @@ from backend.util.json import dumps as json_dumps
 from backend.util.models import Pagination
 from backend.util.product_analytics import track_listing_added_to_library
 from backend.util.settings import Config
+from backend.util.sql import escape_like
 from backend.util.text_limits import MAX_INSTRUCTIONS_LENGTH, MAX_LONG_NAME_LENGTH
 from backend.util.url_redaction import mask_credential
 
@@ -304,22 +305,21 @@ async def list_library_agents(
 
     # Build search filter if applicable
     if search_term:
+        pattern = escape_like(search_term)
         # Match both the snapshotted marketplace name/description (shown on the
         # card for downloaded agents) and the underlying graph's own values, so
         # searching the displayed title always finds the agent.
         where_clause["OR"] = [
-            {"name": {"contains": search_term, "mode": "insensitive"}},
-            {"description": {"contains": search_term, "mode": "insensitive"}},
+            {"name": {"contains": pattern, "mode": "insensitive"}},
+            {"description": {"contains": pattern, "mode": "insensitive"}},
             {
                 "AgentGraph": {
-                    "is": {"name": {"contains": search_term, "mode": "insensitive"}}
+                    "is": {"name": {"contains": pattern, "mode": "insensitive"}}
                 }
             },
             {
                 "AgentGraph": {
-                    "is": {
-                        "description": {"contains": search_term, "mode": "insensitive"}
-                    }
+                    "is": {"description": {"contains": pattern, "mode": "insensitive"}}
                 }
             },
         ]
@@ -2074,7 +2074,7 @@ async def _trigger_targets_other_graph(
             },
         },
     )
-    targets = {dict(node.constantInput).get("graph_id") for node in executor_nodes}
+    targets = (dict(node.constantInput).get("graph_id") for node in executor_nodes)
     return any(target and target != action_graph_id for target in targets)
 
 
@@ -3054,15 +3054,19 @@ async def bulk_move_agents_to_folder(
     Moves multiple library agents to a folder.
 
     Args:
-        agent_ids: The IDs of the library agents.
+        agent_ids: The IDs of the library agents. Graph IDs are also accepted
+            and move every library entry of that graph.
         folder_id: The target folder ID (None for root).
         user_id: The ID of the user.
+        organization_id: If set, only entries of this organization, or
+            untagged ones, are found.
 
     Returns:
-        The updated LibraryAgents.
+        The moved LibraryAgents.
 
     Raises:
-        NotFoundError: If any agent or the folder doesn't exist.
+        NotFoundError: If any agent or the folder doesn't exist. Nothing is
+            moved in that case.
         DatabaseError: If there's a database error.
     """
     logger.debug(f"Bulk moving {len(agent_ids)} agents to folder #{folder_id}")
@@ -3075,41 +3079,62 @@ async def bulk_move_agents_to_folder(
         else None
     )
 
-    unique_ids = set(agent_ids)
-    agent_where: prisma.types.LibraryAgentWhereInput = {
-        "id": {"in": list(unique_ids)},
+    if not agent_ids:
+        return []
+
+    # Resolve every ID before writing, so an unknown one moves nothing.
+    # Archived agents can be moved; deleted ones can't.
+    where: prisma.types.LibraryAgentWhereInput = {
         "userId": user_id,
         "isDeleted": False,
+        "OR": [
+            {"id": {"in": agent_ids}},
+            {"agentGraphId": {"in": agent_ids}},
+        ],
     }
-    agent_where["organizationId"] = organization_id
-    agent_where["teamId"] = team_id_restriction
-    current_agents = await prisma.models.LibraryAgent.prisma().find_many(
-        where=agent_where
-    )
-    if len(current_agents) != len(unique_ids):
-        raise NotFoundError("One or more library agents were not found")
+    where["organizationId"] = organization_id
+    where["teamId"] = team_id_restriction
+    matches = await prisma.models.LibraryAgent.prisma().find_many(where=where)
+    found = {a.id for a in matches} | {a.agentGraphId for a in matches}
+    missing = [i for i in dict.fromkeys(agent_ids) if i not in found]
+    if missing:
+        raise NotFoundError(
+            f"Workflows not found in your library: {', '.join(missing)}"
+        )
+
     if target_folder and any(
         (agent.organizationId, agent.teamId)
         != (target_folder.organization_id, target_folder.team_id)
-        for agent in current_agents
+        for agent in matches
     ):
         raise FolderValidationError(
-            "Agents and folder must have the same organization and team"
+            "Workflows and folder must have the same organization and team"
         )
+    to_move = [a for a in matches if a.folderId != folder_id]
+    if not to_move:
+        return []
 
-    # Update all agents
-    await prisma.models.LibraryAgent.prisma().update_many(
-        where=agent_where,
-        data={"folderId": folder_id},
-    )
-
-    # Fetch and return updated agents
-    agents = await prisma.models.LibraryAgent.prisma().find_many(
-        where=agent_where,
-        include=library_agent_include(
-            user_id, include_nodes=False, include_executions=False
-        ),
-    )
+    # Move and read back in one transaction with the same filter, so the
+    # returned list is exactly what this call moved. The organization is
+    # checked again because an entry can be re-tagged after the lookup.
+    scope: prisma.types.LibraryAgentWhereInput = {
+        "id": {"in": [a.id for a in to_move]},
+        "userId": user_id,
+        "isDeleted": False,
+    }
+    scope["organizationId"] = organization_id
+    scope["teamId"] = team_id_restriction
+    async with transaction() as tx:
+        await prisma.models.LibraryAgent.prisma(tx).update_many(
+            where=scope,
+            data={"folderId": folder_id},
+        )
+        agents = await prisma.models.LibraryAgent.prisma(tx).find_many(
+            where=scope,
+            include=library_agent_include(
+                user_id, include_nodes=False, include_executions=False
+            ),
+        )
 
     schedule_info = await _fetch_schedule_info(user_id, exact_scope=True)
     return [
@@ -3485,7 +3510,7 @@ async def _create_preset_locked(
     if webhook_id:
         webhook = await integrations_db.get_webhook(webhook_id)
         if webhook.user_id != user_id:
-            raise NotFoundError(f"Webhook #{mask_credential(webhook_id)} not found")
+            raise NotFoundError(f"Webhook #{mask_credential(webhook.id)} not found")
 
     if not expert_id and not enforce_scope and organization_id is None:
         organization_id, team_id = await resolve_member_tenancy(
@@ -3496,7 +3521,7 @@ async def _create_preset_locked(
         webhook.organization_id,
         webhook.team_id,
     ) != (organization_id, team_id):
-        raise NotFoundError(f"Webhook #{webhook_id} not found")
+        raise NotFoundError(f"Webhook #{mask_credential(webhook.id)} not found")
 
     create_input = prisma.types.AgentPresetCreateInput(
         userId=user_id,
@@ -3680,7 +3705,8 @@ async def update_preset(
             update_data["teamId"] = team_id
         if name:
             update_data["name"] = name
-        if description:
+        # "" empties the description; only None leaves it as it was.
+        if description is not None:
             update_data["description"] = description
         if is_active is not None:
             update_data["isActive"] = is_active
@@ -3861,7 +3887,7 @@ async def set_preset_webhook(
     if webhook_id:
         webhook = await integrations_db.get_webhook(webhook_id)
         if webhook.user_id != user_id:
-            raise NotFoundError(f"Webhook #{mask_credential(webhook_id)} not found")
+            raise NotFoundError(f"Webhook #{mask_credential(webhook.id)} not found")
         if current.expertId:
             (
                 organization_id,
@@ -3872,14 +3898,16 @@ async def set_preset_webhook(
                 f"Preset #{preset_id} not found",
             )
             update_data["organizationId"] = organization_id
-            update_data["teamId"] = team_id
+            update_data["Team"] = (
+                {"connect": {"id": team_id}} if team_id else {"disconnect": True}
+            )
         else:
             organization_id, team_id = scoped.organization_id, scoped.team_id
         if (webhook.organization_id, webhook.team_id) != (
             organization_id,
             team_id,
         ):
-            raise NotFoundError(f"Webhook #{webhook_id} not found")
+            raise NotFoundError(f"Webhook #{mask_credential(webhook.id)} not found")
 
     updated = await prisma.models.AgentPreset.prisma().update(
         where={

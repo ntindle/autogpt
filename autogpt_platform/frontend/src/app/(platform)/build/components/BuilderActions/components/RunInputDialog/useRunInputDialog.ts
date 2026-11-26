@@ -7,34 +7,46 @@ import {
   GraphExecutionMeta,
 } from "@/lib/autogpt-server-api";
 import { parseAsInteger, parseAsString, useQueryStates } from "nuqs";
-import { useCallback, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useNodeStore } from "@/app/(platform)/build/stores/nodeStore";
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import { useReactFlow } from "@xyflow/react";
 import type { CredentialField } from "@/components/contextual/CredentialsInput/components/CredentialsGroupedView/helpers";
 import { useBuilderTenantScope } from "@/app/(platform)/build/hooks/useBuilderTenantScope";
 import { getTenantRequestInit } from "@/components/contextual/TeamPicker/helpers";
+import { useRunCredentials } from "./useRunCredentials";
 
 export const useRunInputDialog = ({
   setIsOpen,
   graphID,
   graphVersion,
+  purpose = "run",
 }: {
   setIsOpen: (isOpen: boolean) => void;
   graphID?: string;
   graphVersion?: number | null;
+  purpose?: "run" | "schedule";
 }) => {
   const tenantScope = useBuilderTenantScope();
   const credentialsSchema = useGraphStore(
     (state) => state.credentialsInputSchema,
   );
   const setIsGraphRunning = useGraphStore((state) => state.setIsGraphRunning);
+  // A run starts on the keys picked on the steps, not the platform's. A
+  // schedule runs while no one watches, and one for an expert's workflow can
+  // only use the keys the expert was granted, so it starts on the platform's
+  // key, which needs none.
+  const {
+    nodeCredentials,
+    credentialValues,
+    clearedFields,
+    handleCredentialFieldChange,
+    handleAutoSelectCredential,
+    replaceCredentialValues,
+  } = useRunCredentials({ startsOnStepKeys: purpose === "run" });
 
   const [openCronSchedulerDialog, setOpenCronSchedulerDialog] = useState(false);
   const [inputValues, setInputValues] = useState<Record<string, any>>({});
-  const [credentialValues, setCredentialValues] = useState<
-    Record<string, CredentialsMetaInput>
-  >({});
   const [{ flowID, flowVersion }, setQueryStates] = useQueryStates({
     flowExecutionID: parseAsString,
     flowID: parseAsString,
@@ -142,22 +154,6 @@ export const useRunInputDialog = ({
     return new Set<string>(credentialsSchema?.required || []);
   }, [credentialsSchema]);
 
-  // Handler for individual credential changes
-  const handleCredentialFieldChange = useCallback(
-    (key: string, value?: CredentialsMetaInput) => {
-      setCredentialValues((prev) => {
-        if (value) {
-          return { ...prev, [key]: value };
-        } else {
-          const next = { ...prev };
-          delete next[key];
-          return next;
-        }
-      });
-    },
-    [],
-  );
-
   const handleManualRun = async () => {
     // Filter out incomplete credentials (those without a valid id)
     // RJSF auto-populates const values (provider, type) but not id field
@@ -190,18 +186,21 @@ export const useRunInputDialog = ({
   const handleCredentialChange = (
     credentialValues: Record<string, CredentialsMetaInput>,
   ) => {
-    setCredentialValues(credentialValues);
+    replaceCredentialValues(credentialValues);
   };
 
   return {
     credentialFields,
     requiredCredentials,
+    nodeCredentials,
+    clearedFields,
     inputValues,
     credentialValues,
     isExecutingGraph,
     handleInputChange,
     handleCredentialChange,
     handleCredentialFieldChange,
+    handleAutoSelectCredential,
     handleManualRun,
     openCronSchedulerDialog,
     setOpenCronSchedulerDialog,

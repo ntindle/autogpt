@@ -81,7 +81,7 @@ describe("useSelectedScheduleActions", () => {
     invalidateSpy.mockRestore();
   });
 
-  test("openInBuilderHref points to /build with graph id + version", () => {
+  test("openInBuilderHref opens the workflow's active version in the builder", () => {
     const { result } = renderHook(
       () =>
         useSelectedScheduleActions({
@@ -91,7 +91,7 @@ describe("useSelectedScheduleActions", () => {
       { wrapper },
     );
     expect(result.current.openInBuilderHref).toBe(
-      "/build?flowID=graph-xyz&flowVersion=1&organizationId=__personal__&teamId=__org_home__",
+      "/build?flowID=graph-xyz&organizationId=__personal__&teamId=__org_home__",
     );
   });
 

@@ -90,7 +90,9 @@ export function ShareAgentDialog({ agent, isOpen, setIsOpen }: Props) {
 
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-col">
-              <Text variant="body-medium">Always share latest version</Text>
+              <Text variant="body" weight="medium">
+                Always share latest version
+              </Text>
               <Text variant="small" className="text-foreground-tertiary">
                 {followLatest
                   ? "The team always runs your newest version."
@@ -133,7 +135,9 @@ export function ShareAgentDialog({ agent, isOpen, setIsOpen }: Props) {
           </div>
 
           <div className="flex flex-col gap-2 border-t border-separator pt-4">
-            <Text variant="body-medium">Shared with</Text>
+            <Text variant="body" weight="medium">
+              Shared with
+            </Text>
             {isLoadingGrants ? (
               <Skeleton className="h-8 w-full" />
             ) : isGrantsError ? (

@@ -96,7 +96,7 @@ export function AccountMenuOrgList({ onSelect }: Props) {
               </Avatar>
               <span className="flex-1 truncate text-left">{org.name}</span>
               {org.isPersonal && (
-                <Text variant="small-tight" as="span" tone="subtle">
+                <Text variant="small" leading="tight" as="span" tone="subtle">
                   Personal
                 </Text>
               )}

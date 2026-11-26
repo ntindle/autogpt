@@ -141,8 +141,24 @@ def v1_personal_scope(mocker):
     mocker.patch.object(routes, "live_resource_access_barrier", allow)
 
 
+def v1_admission(mocker) -> AsyncMock:
+    """The API-key auth admission limiter, patched at the names middleware.py
+    calls: it reserves nothing and never throttles, so a request carrying a
+    key doesn't reach Redis. A test that wants a throttle sets the returned
+    mock's side_effect."""
+    mocker.patch.object(
+        middleware, "refund_api_key_validate_rate_limit", new_callable=AsyncMock
+    )
+    return mocker.patch.object(
+        middleware,
+        "enforce_api_key_validate_rate_limit",
+        new_callable=AsyncMock,
+        return_value=None,
+    )
+
+
 @pytest.fixture
-async def v1_client(mocker, v1_auth_storage, v1_clock, v1_personal_scope):
+async def v1_client(mocker, v1_auth_storage, v1_clock, v1_admission, v1_personal_scope):
     async def user_by_id(user_id):
         return UserInfoResponse(
             id=user_id, name="Test user", email="test@example.com", timezone="UTC"

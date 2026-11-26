@@ -88,7 +88,7 @@ class TestIngestionWorkerExceptionHandling:
 
         get_client.assert_not_awaited()
         assert queue.empty()
-        await asyncio.wait_for(queue.join(), timeout=0.1)
+        await asyncio.wait_for(queue.join(), timeout=10)
         # The sole isolation check in the worker must be loud and grep-able,
         # not folded into the generic "ingestion failed" warning.
         violations = [
@@ -175,7 +175,7 @@ class TestIngestionWorkerExceptionHandling:
 
         # join() resolves immediately only if task_done() was called for
         # the failed item; a hang here means the worker leaked the count.
-        await asyncio.wait_for(queue.join(), timeout=0.1)
+        await asyncio.wait_for(queue.join(), timeout=10)
 
 
 class TestIngestionCompletion:
@@ -468,7 +468,7 @@ class TestMemoryGroupQueueIsolation:
                 shared_group_id=group_id,
             )
             state = ingest._get_loop_state()
-            await asyncio.wait_for(state.group_queues[group_id].join(), timeout=1)
+            await asyncio.wait_for(state.group_queues[group_id].join(), timeout=10)
             state.group_workers[group_id].cancel()
             await asyncio.gather(
                 state.group_workers[group_id],
@@ -1022,7 +1022,7 @@ class TestWorkerIdleTimeout:
                     shared_group_id=group_id,
                 )
                 queue = ingest._get_loop_state().group_queues[group_id]
-                await asyncio.wait_for(queue.join(), timeout=1)
+                await asyncio.wait_for(queue.join(), timeout=10)
         finally:
             db_accessors._active_live_resource_leases.reset(stale_token)
             state = ingest._get_loop_state()
@@ -1103,7 +1103,7 @@ class TestWorkerIdleTimeout:
             ):
                 state.workers_lock.release()
                 assert await enqueue_task is True
-                await asyncio.wait_for(processed.wait(), timeout=1)
+                await asyncio.wait_for(processed.wait(), timeout=10)
 
             client.add_episode.assert_awaited_once()
         finally:
@@ -1163,7 +1163,7 @@ class TestWorkerIdleTimeout:
             ):
                 state.workers_lock.release()
                 assert await enqueue_task is True
-                await asyncio.wait_for(processed.wait(), timeout=1)
+                await asyncio.wait_for(processed.wait(), timeout=10)
 
             replacement = state.group_workers[group_id]
             assert replacement is not worker

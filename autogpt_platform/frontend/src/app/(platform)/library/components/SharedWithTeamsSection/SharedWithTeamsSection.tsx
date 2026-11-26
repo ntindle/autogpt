@@ -31,7 +31,7 @@ export function SharedWithTeamsSection() {
             data-testid="shared-with-teams-card"
           >
             <div className="flex items-center justify-between gap-2">
-              <Text variant="body-medium" className="min-w-0 truncate">
+              <Text variant="body" weight="medium" className="min-w-0 truncate">
                 {grant.graph_name ?? "Shared agent"}
               </Text>
               <TeamBadge teamId={grant.principal_id} />

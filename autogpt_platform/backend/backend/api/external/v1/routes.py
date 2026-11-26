@@ -385,7 +385,7 @@ class GraphExecutionResult(TypedDict):
     execution_id: str
     status: str
     nodes: list[ExecutionNode]
-    output: Optional[list[dict[str, str]]]
+    output: Optional[list[dict[str, Any]]]
 
 
 @v1_router.get(
@@ -420,7 +420,11 @@ async def get_graph_execution_results(
             organization_id=auth.organization_id,
             team_id_restriction=auth.team_id_restriction,
         )
-        if not graph_exec or graph_exec.graph_id != graph_id:
+        if (
+            not graph_exec
+            or graph_exec.user_id != auth.user_id
+            or graph_exec.graph_id != graph_id
+        ):
             raise HTTPException(
                 status_code=404,
                 detail=f"Graph execution #{graph_exec_id} not found.",

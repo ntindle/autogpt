@@ -16,6 +16,15 @@ from backend.copilot.tools.models import AgentSavedResponse, ErrorResponse
 from backend.data.model import OAuth2Credentials
 
 _PATH = "backend.copilot.tools.expert_scope"
+# The credentials and the grants are read in utils, beside each other.
+_CREDENTIALS_MANAGER = "backend.copilot.tools.utils.IntegrationCredentialsManager"
+
+
+def _manager(store):
+    store.scoped.return_value = store
+    manager = MagicMock(store=store)
+    manager.scoped.return_value = manager
+    return manager
 
 
 def _expert(expert_id: str, graph_ids: list[str] = ()):
@@ -37,9 +46,13 @@ def experts():
     )
     db.install_workflow = AsyncMock()
     db.expert_allowed_credential_ids = AsyncMock(return_value=["granted-cred"])
+    db.seeded_expert_credential_ids = AsyncMock(return_value=["granted-cred"])
     db.settle_credential_seed = AsyncMock()
     db.resolve_private_expert_tenancy = AsyncMock(return_value=("saved-org", "home"))
-    with patch(f"{_PATH}.experts_db", return_value=db):
+    with (
+        patch(f"{_PATH}.experts_db", return_value=db),
+        patch("backend.data.db_accessors.experts_db", return_value=db),
+    ):
         yield db
 
 
@@ -175,8 +188,8 @@ async def test_hint_lists_owned_but_ungranted_credentials(experts):
         ]
     )
     with patch(
-        f"{_PATH}.IntegrationCredentialsManager",
-        return_value=MagicMock(store=store),
+        _CREDENTIALS_MANAGER,
+        return_value=_manager(store),
     ):
         hint = await ungranted_credential_hint("user-1", "expert-a", {"github"})
         none = await ungranted_credential_hint("user-1", "expert-a", {"notion"})
@@ -212,8 +225,8 @@ async def test_missing_credentials_are_annotated_with_expert_grants(experts):
         }
     }
     with patch(
-        f"{_PATH}.IntegrationCredentialsManager",
-        return_value=MagicMock(store=store),
+        _CREDENTIALS_MANAGER,
+        return_value=_manager(store),
     ):
         annotated = await annotate_expert_grants("user-1", "expert-a", missing)
         untouched = await annotate_expert_grants("user-1", None, missing)
@@ -244,8 +257,8 @@ async def test_platform_key_is_usable_and_never_offered_as_a_grant(experts):
         ]
     )
     with patch(
-        f"{_PATH}.IntegrationCredentialsManager",
-        return_value=MagicMock(store=store),
+        _CREDENTIALS_MANAGER,
+        return_value=_manager(store),
     ):
         scope = await resolve_credential_scope("user-1", "expert-a")
         offered = await _ungranted_credentials(
@@ -282,8 +295,8 @@ async def test_grant_candidates_must_match_the_requested_mcp_server(experts):
         }
     }
     with patch(
-        f"{_PATH}.IntegrationCredentialsManager",
-        return_value=MagicMock(store=store),
+        _CREDENTIALS_MANAGER,
+        return_value=_manager(store),
     ):
         annotated = await annotate_expert_grants("user-1", "expert-a", missing)
     grant = annotated["mcp_credentials"]["expert_grant"]
@@ -313,8 +326,8 @@ async def test_untitled_grant_candidates_are_named_by_their_email(experts):
     )
     missing = {"google_credentials": {"provider": "google", "types": ["oauth2"]}}
     with patch(
-        f"{_PATH}.IntegrationCredentialsManager",
-        return_value=MagicMock(store=store),
+        _CREDENTIALS_MANAGER,
+        return_value=_manager(store),
     ):
         annotated = await annotate_expert_grants("user-1", "expert-a", missing)
     grant = annotated["google_credentials"]["expert_grant"]

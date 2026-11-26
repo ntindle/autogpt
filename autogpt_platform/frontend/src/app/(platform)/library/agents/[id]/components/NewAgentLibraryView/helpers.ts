@@ -1,5 +1,12 @@
+import { getTeamScopedQueryKey } from "@/components/contextual/TeamPicker/helpers";
+import {
+  getGetV2ListPresetsQueryKey,
+  type getV2ListPresetsResponse,
+} from "@/app/api/__generated__/endpoints/presets/presets";
 import type { LibraryAgent } from "@/app/api/__generated__/models/libraryAgent";
 import type { LibraryAgentPreset } from "@/app/api/__generated__/models/libraryAgentPreset";
+import { unpaginate } from "@/app/api/helpers";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 
 export const AGENT_LIBRARY_SECTION_PADDING_X = "px-4";
 
@@ -58,6 +65,28 @@ export function activeItemParamFor(kind: TriggerKind, id: string): string {
 /** Presets with a webhook show under "Triggers"; the rest are templates. */
 export function isWebhookPreset(preset: LibraryAgentPreset): boolean {
   return !!preset.webhook_id;
+}
+
+/**
+ * Refetch the workflow's presets and return them, so that a delete acts on
+ * what is left. The list is an infinite query whose key also holds its page
+ * params, so it is read by the key's prefix.
+ */
+export async function refetchPresets(args: {
+  queryClient: QueryClient;
+  graphID: string;
+  organizationId: string | null;
+  teamId: string | null;
+}) {
+  const queryKey = getTeamScopedQueryKey(
+    getGetV2ListPresetsQueryKey({ graph_id: args.graphID }),
+    args.organizationId,
+    args.teamId,
+  );
+  await args.queryClient.refetchQueries({ queryKey });
+  return args.queryClient
+    .getQueriesData<InfiniteData<getV2ListPresetsResponse>>({ queryKey })
+    .flatMap(([, data]) => (data?.pages ? unpaginate(data, "presets") : []));
 }
 
 /**

@@ -15,7 +15,7 @@ export function CreateTeamOrgPrompt() {
       data-testid="create-team-org-prompt"
     >
       <div className="flex min-w-0 flex-col gap-1">
-        <Text variant="body-medium" as="h2">
+        <Text variant="body" weight="medium" as="h2">
           Want to work with others?
         </Text>
         <Text variant="small" tone="muted">

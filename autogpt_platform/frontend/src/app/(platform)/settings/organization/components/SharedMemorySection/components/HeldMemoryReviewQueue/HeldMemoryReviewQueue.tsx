@@ -28,7 +28,9 @@ export function HeldMemoryReviewQueue({ orgId }: Props) {
       className="rounded-large border border-border-base p-4"
       data-testid="org-memory-review-queue"
     >
-      <Text variant="body-medium">Review queue</Text>
+      <Text variant="body" weight="medium">
+        Review queue
+      </Text>
       <Text variant="small" className="mt-1 block text-foreground-tertiary">
         Tentative memories awaiting an admin decision before they’re trusted
         org-wide.

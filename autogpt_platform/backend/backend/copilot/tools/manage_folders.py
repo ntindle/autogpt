@@ -9,6 +9,7 @@ from backend.api.features.library.db import collect_tree_ids
 from backend.copilot.model import ChatSession
 from backend.data.db_accessors import library_db
 from backend.data.tenancy import ResourceAccess
+from backend.util.exceptions import NotFoundError
 
 from .base import BaseTool
 from .external_scope import error_detail
@@ -593,7 +594,7 @@ class MoveAgentsToFolderTool(BaseTool):
                 "agent_ids": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Library agent IDs to move.",
+                    "description": "Library agent IDs to move (or graph IDs).",
                     "entity": "library_agent",
                 },
                 "folder_id": {
@@ -634,6 +635,12 @@ class MoveAgentsToFolderTool(BaseTool):
                 organization_id=session.organization_id,
                 team_id_restriction=session.team_id,
             )
+        except NotFoundError as e:
+            return ErrorResponse(
+                message=f"Nothing was moved. {e}",
+                error="not_found",
+                session_id=session_id,
+            )
         except Exception as e:
             return ErrorResponse(
                 message=f"Failed to move workflows: {error_detail(e, session)}",
@@ -641,14 +648,20 @@ class MoveAgentsToFolderTool(BaseTool):
                 session_id=session_id,
             )
 
+        # Unknown IDs raise above, so nothing moved means all are already there.
+        if not moved:
+            place = "in that folder" if folder_id else "at root level"
+            return ErrorResponse(
+                message=f"No workflows were moved: they're already {place}.",
+                error="no_agents_moved",
+                session_id=session_id,
+            )
+
         moved_ids = [a.id for a in moved]
         agent_names = [a.name for a in moved]
         dest = "the folder" if folder_id else "root level"
-        names_str = (
-            ", ".join(agent_names) if agent_names else f"{len(agent_ids)} workflow(s)"
-        )
         return AgentsMovedToFolderResponse(
-            message=f"Moved {names_str} to {dest}.",
+            message=f"Moved {', '.join(agent_names)} to {dest}.",
             agent_ids=moved_ids,
             agent_names=agent_names,
             folder_id=folder_id,

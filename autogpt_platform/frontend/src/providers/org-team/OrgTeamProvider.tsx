@@ -4,6 +4,10 @@ import type { OrgResponse } from "@/app/api/__generated__/models/orgResponse";
 import { ErrorCard } from "@/components/molecules/ErrorCard/ErrorCard";
 import { useAuth } from "@/lib/auth/hooks/useAuth";
 import { normalizeOrg } from "@/services/org-team/normalize";
+import {
+  selectIsSessionUnknown,
+  useAuthStore,
+} from "@/lib/auth/hooks/useAuthStore";
 import { useOrgTeamStore } from "@/services/org-team/store";
 import { getQueryClient } from "@/lib/react-query/queryClient";
 import { ORG_HEADER_NAME, TEAM_HEADER_NAME } from "@/services/org-team/headers";
@@ -66,6 +70,7 @@ export default function OrgTeamProvider({ children }: Props) {
     setLoaded,
     clearContext,
   } = useOrgTeamStore();
+  const isSessionUnknown = useAuthStore(selectIsSessionUnknown);
 
   const previousScope = useRef({ orgId: activeOrgID, teamId: activeTeamID });
 
@@ -80,8 +85,10 @@ export default function OrgTeamProvider({ children }: Props) {
     }
 
     if (!isLoggedIn || !user) {
-      clearContext();
-      setPersonalContext(null);
+      if (!isSessionUnknown) {
+        clearContext();
+        setPersonalContext(null);
+      }
       return;
     }
     // An unresolved flag is not a disabled cohort. Keep the saved scope
@@ -152,6 +159,7 @@ export default function OrgTeamProvider({ children }: Props) {
     isLoggedIn,
     user,
     isUserLoading,
+    isSessionUnknown,
     collaborationEnabled,
     collaborationReady,
     retry,

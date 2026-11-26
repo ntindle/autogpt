@@ -188,7 +188,7 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
                 <Link
                   href={getBuilderHref({
                     graphId: agent.graph_id,
-                    graphVersion: agent.graph_version,
+
                     organizationId: agent.organization_id ?? null,
                     teamId: agent.team_id ?? null,
                   })}
@@ -255,8 +255,7 @@ export function AgentCardMenu({ agent }: AgentCardMenuProps) {
               e.stopPropagation();
               setShowDeleteDialog(true);
             }}
-            // oxlint-disable-next-line design-system/no-restyle -- DropdownMenuItem has no destructive variant
-            className="text-error-foreground focus:bg-error-surface focus:text-error-foreground"
+            tone="error-strong"
           >
             Delete workflow
           </DropdownMenuItem>

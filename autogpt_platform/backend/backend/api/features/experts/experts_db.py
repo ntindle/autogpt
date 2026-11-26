@@ -11,7 +11,7 @@ import prisma.errors
 import prisma.models
 import prisma.types
 from prisma.enums import ResourceVisibility
-from pydantic import BaseModel, JsonValue, ValidationError
+from pydantic import BaseModel, JsonValue
 
 from backend.api.features.experts import raise_attachments, scheduling
 
@@ -29,6 +29,9 @@ from backend.api.features.experts.credentials import (
 )
 from backend.api.features.experts.credentials import (
     revoke_expert_credential as revoke_expert_credential,
+)
+from backend.api.features.experts.credentials import (
+    seeded_expert_credential_ids as seeded_expert_credential_ids,
 )
 from backend.api.features.experts.credentials import (
     settle_credential_seed as settle_credential_seed,
@@ -122,10 +125,10 @@ from backend.data.expert_attribution import (
 from backend.data.expert_run_output import (
     OutputType,
     classify_run_output,
+    moderation_cleared_io,
     reconstruct_run_outputs,
 )
 from backend.data.expert_spend import get_weekly_spend
-from backend.data.model import NodeExecutionStats
 from backend.data.onboarding import complete_onboarding_step
 from backend.data.onboarding_steps import OnboardingStep
 from backend.data.tenancy import (
@@ -144,6 +147,7 @@ from backend.util.exceptions import (
 )
 from backend.util.funnel_analytics import emit_funnel_event
 from backend.util.posthog_events import PostHogEvent
+from backend.util.sql import escape_like
 from backend.util.timezone_utils import get_user_timezone_or_utc
 
 logger = logging.getLogger(__name__)
@@ -422,7 +426,7 @@ def _template_where(
         # Not `category_filter_values`: with the canonical-category setting
         # on, that one hides uncategorised experts from the unfiltered roster.
         where["categories"] = {"has_some": category_match_values(category)}
-    if search_query and (needle := search_query.strip()):
+    if search_query and (needle := escape_like(search_query.strip())):
         where["OR"] = [
             {"name": {"contains": needle, "mode": "insensitive"}},
             {"role": {"contains": needle, "mode": "insensitive"}},
@@ -877,7 +881,7 @@ async def _classify_run_outputs(
     execution_ids: list[str],
 ) -> dict[str, tuple[OutputType, str | None]]:
     """Batch-classify run outputs: one bounded query for the OUTPUT-block
-    node executions (plus their small name/value input rows) of all listed
+    node executions (plus their input and output rows) of all listed
     executions, instead of a full ``get_graph_execution`` per run.
 
     ``execution_ids`` must already be user-scoped by the caller (they come
@@ -891,7 +895,7 @@ async def _classify_run_outputs(
             "Node": {"is": {"agentBlockId": {"in": list(get_output_block_ids())}}},
             "executionStatus": {"not": prisma.enums.AgentExecutionStatus.INCOMPLETE},
         },
-        include={"Input": True},
+        include={"Input": True, "Output": True},
     )
     by_execution: dict[str, list[prisma.models.AgentNodeExecution]] = defaultdict(list)
     for node_exec in node_execs:
@@ -917,7 +921,12 @@ def _outputs_from_node_execs(
 ) -> dict[str, list[JsonValue]]:
     return reconstruct_run_outputs(
         [
-            (node_exec.queuedTime, node_exec.addedTime, _node_exec_inputs(node_exec))
+            (
+                node_exec.queuedTime,
+                node_exec.addedTime,
+                _node_exec_inputs(node_exec),
+                _node_exec_outputs(node_exec),
+            )
             for node_exec in node_execs
         ]
     )
@@ -931,16 +940,9 @@ def _node_exec_inputs(
     Input rows. Skipping the cleared branch would drop the name/value pins of a
     moderated OUTPUT node and misclassify the run as ``unknown``.
     """
-    try:
-        stats = NodeExecutionStats.model_validate(node_exec.stats or {})
-    except (ValueError, ValidationError):
-        stats = NodeExecutionStats()
-
-    if stats.cleared_inputs:
-        return {
-            name: (messages[-1] if messages else "")
-            for name, messages in stats.cleared_inputs.items()
-        }
+    cleared_inputs, _ = moderation_cleared_io(node_exec.stats)
+    if cleared_inputs is not None:
+        return cleared_inputs
     if node_exec.executionData is not None:
         return cast(
             dict[str, JsonValue],
@@ -950,6 +952,18 @@ def _node_exec_inputs(
         row.name: type_utils.convert(row.data, JsonValue)
         for row in node_exec.Input or []
     }
+
+
+def _node_exec_outputs(
+    node_exec: prisma.models.AgentNodeExecution,
+) -> dict[str, list[JsonValue]]:
+    _, cleared_outputs = moderation_cleared_io(node_exec.stats)
+    if cleared_outputs is not None:
+        return cleared_outputs
+    outputs: dict[str, list[JsonValue]] = defaultdict(list)
+    for row in node_exec.Output or []:
+        outputs[row.name].append(type_utils.convert(row.data, JsonValue))
+    return outputs
 
 
 def _run_source(execution: prisma.models.AgentGraphExecution) -> ExpertRunSource:

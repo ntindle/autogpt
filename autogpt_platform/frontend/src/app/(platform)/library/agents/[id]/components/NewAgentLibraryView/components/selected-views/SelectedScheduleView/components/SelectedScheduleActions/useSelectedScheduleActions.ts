@@ -83,8 +83,6 @@ export function useSelectedScheduleActions({
     }
 
     try {
-      toast({ title: "Run started" });
-
       const res = await executeAgent({
         graphId: schedule.graph_id,
         graphVersion: schedule.graph_version,
@@ -94,6 +92,7 @@ export function useSelectedScheduleActions({
           source: "library",
         },
       });
+      toast({ title: "Run started" });
 
       const newRunID = okData(res)?.id;
 
@@ -122,7 +121,7 @@ export function useSelectedScheduleActions({
 
   const openInBuilderHref = getBuilderHref({
     graphId: agent.graph_id,
-    graphVersion: agent.graph_version,
+
     organizationId: organizationId ?? null,
     teamId: teamId ?? null,
   });

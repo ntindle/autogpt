@@ -10,7 +10,7 @@ from backend.data.entitlement import enforce_payment_paywall
 from backend.data.execution import ExecutionTrigger, GraphExecutionMeta
 from backend.data.model import CredentialsMetaInput
 from backend.data.tenancy import require_role_where_resource_lives
-from backend.executor.utils import add_graph_execution
+from backend.executor.utils import _enforce_expert_credential_scope, add_graph_execution
 from backend.util.exceptions import (
     ExpertRunPausedError,
     WebhookRegistrationError,
@@ -143,16 +143,21 @@ async def create_preset(
         models.LibraryAgentPreset: The created preset.
     """
     if isinstance(preset, models.LibraryAgentPresetCreatable):
+        expert_id = await experts_db.resolve_expert_for_graph(
+            user_id,
+            preset.graph_id,
+            organization_id=ctx.org_id,
+            team_id=ctx.team_id,
+            enforce_scope=True,
+        )
+        if expert_id:
+            await _enforce_expert_credential_scope(
+                user_id, expert_id, preset.credentials
+            )
         return await db.create_preset(
             user_id,
             preset,
-            expert_id=await experts_db.resolve_expert_for_graph(
-                user_id,
-                preset.graph_id,
-                organization_id=ctx.org_id,
-                team_id=ctx.team_id,
-                enforce_scope=True,
-            ),
+            expert_id=expert_id,
             organization_id=ctx.org_id,
             team_id=ctx.team_id,
             enforce_scope=True,

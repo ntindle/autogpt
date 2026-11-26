@@ -53,6 +53,7 @@ async def test_review_rechecks_creator_live_team_scope(mocker) -> None:
 
 @pytest.mark.asyncio
 async def test_review_rejects_inaccessible_subgraph_before_approval(mocker) -> None:
+    mocker.patch.object(db, "foreign_sub_graph_refs", AsyncMock(return_value=[]))
     submission = _submission()
     submission.AgentGraph.Nodes = [
         MagicMock(
@@ -77,6 +78,7 @@ async def test_review_rejects_inaccessible_subgraph_before_approval(mocker) -> N
 
 @pytest.mark.asyncio
 async def test_review_yields_stable_graphs_with_live_scope(mocker) -> None:
+    mocker.patch.object(db, "foreign_sub_graph_refs", AsyncMock(return_value=[]))
     submission = _submission()
     child = MagicMock(
         id="graph-2",

@@ -77,6 +77,20 @@ def _runners_belong_to_their_org(mocker):
 
 
 @pytest.fixture(autouse=True)
+def _turn_owners_belong_to_their_org(mocker):
+    """Treat a scheduled copilot turn's owner as a member of the org/team it was
+    scheduled in. Tests of an owner who has left override the returned mock."""
+    orgs = mocker.MagicMock()
+    orgs.has_live_resource_access = mocker.AsyncMock(return_value=True)
+    orgs.get_user_default_team = mocker.AsyncMock(return_value=(None, None))
+    mocker.patch(
+        "backend.executor.scheduler.get_database_manager_async_client",
+        return_value=orgs,
+    )
+    return orgs
+
+
+@pytest.fixture(autouse=True)
 def _orgs_are_not_personal(mocker):
     """Treat every org a run is given as a team org, whose balance pays.
 

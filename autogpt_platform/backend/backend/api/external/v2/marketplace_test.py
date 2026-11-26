@@ -17,6 +17,9 @@ from backend.api.features.library.exceptions import (
     LibraryAgentInAnotherOrganizationError,
 )
 from backend.api.features.store import db as store_db
+from backend.api.features.store.submission_deletion_test_helpers import (
+    mock_submission_deletion,
+)
 
 from .errors import add_v2_exception_handlers
 from .marketplace import (
@@ -228,27 +231,9 @@ def test_a_submission_that_cannot_be_deleted_says_why(
     status: SubmissionStatus,
     expected: int,
 ):
-    graph = Mock(
-        id="graph-1", version=1, userId="user-1", organizationId="org-1", teamId=None
+    mock_submission_deletion(
+        mocker, owning_user_id="user-1", owning_org_id=owning_org_id, status=status
     )
-    version = Mock(
-        id="slv-1",
-        storeListingId="sl-1",
-        submissionStatus=status,
-        agentGraphId=graph.id,
-        agentGraphVersion=graph.version,
-        AgentGraph=graph,
-        StoreListing=Mock(owningOrgId=owning_org_id, owningUserId="user-1"),
-    )
-    client = AsyncMock()
-    client.find_unique.return_value = version
-    # The delete leaves approved versions out, so an approved one deletes none.
-    client.delete_many.return_value = 0 if status == SubmissionStatus.APPROVED else 1
-    client.count.return_value = 1
-    mocker.patch.object(
-        prisma.models.StoreListingVersion, "prisma", return_value=client
-    )
-    _grant_live_graph_writes(mocker)
     app = fastapi.FastAPI()
     app.include_router(v2_router)
     add_v2_exception_handlers(app)

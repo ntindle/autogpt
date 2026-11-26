@@ -29,7 +29,7 @@ from . import cache as store_cache
 from . import categories as store_categories
 from . import db as store_db
 from . import image_gen as store_image_gen
-from . import local_media
+from . import live_submission, local_media
 from . import media as store_media
 from . import model as store_model
 from . import submission_media
@@ -476,13 +476,13 @@ async def delete_submission(
     ),
 ) -> bool:
     """Delete a marketplace listing submission"""
-    result = await store_db.delete_store_submission(
+    await store_db.delete_store_submission_or_raise(
         user_id=user_id,
         store_listing_version_id=submission_id,
         organization_id=getattr(ctx, "org_id", None),
         team_id_restriction=ctx.team_id,
     )
-    return result
+    return True
 
 
 @router.get(
@@ -538,6 +538,30 @@ def _parse_status_filter(
         return [prisma.enums.SubmissionStatus(p) for p in parts]
     except ValueError as exc:
         raise fastapi.HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.get(
+    "/submissions/live/{graph_id}",
+    summary="Get my live submission",
+    tags=["store", "private"],
+    dependencies=[Security(autogpt_libs.auth.requires_user)],
+)
+async def get_live_submission(
+    graph_id: str,
+    user_id: str = Security(autogpt_libs.auth.get_user_id),
+    ctx: autogpt_libs.auth.RequestContext = requires_live_resource_permission(
+        OrgAction.VIEW_RESOURCES, TeamAction.VIEW_AGENTS
+    ),
+) -> store_model.LiveStoreSubmission | None:
+    """The version of your listing for this workflow that the Marketplace
+    shows, with its recommended schedule, or null when the workflow has no
+    listing of yours or none of it is live."""
+    return await live_submission.get_live_submission(
+        user_id=user_id,
+        graph_id=graph_id,
+        organization_id=getattr(ctx, "org_id", None),
+        team_id=getattr(ctx, "team_id", None),
+    )
 
 
 @router.post(

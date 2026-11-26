@@ -331,7 +331,9 @@ export function SubSessionPendingCard({
           size={28}
         />
         <Text
-          variant="body-medium-tight"
+          variant="body"
+          weight="medium"
+          leading="5"
           tone="emphasis"
           className="min-w-0 flex-1 truncate"
         >
@@ -356,7 +358,7 @@ export function SubSessionPendingCard({
               liveSession?.team_id ?? scope.teamId,
             )}
             aria-label="Open sub-session"
-            className="shrink-0 rounded-full p-1 text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground-body"
+            className="shrink-0 rounded-pill p-1 text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground-body"
           >
             <Icon icon={LinkSquare01Icon} size={14} />
           </Link>

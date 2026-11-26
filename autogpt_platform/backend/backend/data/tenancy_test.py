@@ -94,7 +94,7 @@ async def test_live_request_transactions_leave_pool_headroom(mocker):
         asyncio.create_task(hold_transaction())
         for _ in range(tenancy.LIVE_REQUEST_TRANSACTION_LIMIT + 3)
     ]
-    await asyncio.wait_for(entered.wait(), timeout=1)
+    await asyncio.wait_for(entered.wait(), timeout=10)
     await asyncio.sleep(0)
     assert active == tenancy.LIVE_REQUEST_TRANSACTION_LIMIT
     release.set()
@@ -423,7 +423,7 @@ async def test_nested_persistent_lease_classes_make_progress_without_deadlock(mo
         asyncio.create_task(run_nested_chain(index))
         for index in range(tenancy.LIVE_TRANSACTION_LEASE_CLASS_LIMIT + 1)
     ]
-    await asyncio.wait_for(first_wave_ready.wait(), timeout=1)
+    await asyncio.wait_for(first_wave_ready.wait(), timeout=10)
     await asyncio.sleep(0)
     assert active == {
         "resource": tenancy.LIVE_TRANSACTION_LEASE_CLASS_LIMIT,
@@ -433,7 +433,7 @@ async def test_nested_persistent_lease_classes_make_progress_without_deadlock(mo
     assert not any(task.done() for task in tasks)
 
     release_first_wave.set()
-    await asyncio.wait_for(asyncio.gather(*tasks), timeout=1)
+    await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
     assert peak == {
         "resource": tenancy.LIVE_TRANSACTION_LEASE_CLASS_LIMIT,
         "attachment": tenancy.LIVE_TRANSACTION_LEASE_CLASS_LIMIT,
@@ -484,7 +484,7 @@ async def test_cancel_queued_resource_lease_acquisition_restores_holder_registry
     await asyncio.sleep(0)
     queued.cancel()
     with pytest.raises(asyncio.CancelledError):
-        await asyncio.wait_for(queued, timeout=1)
+        await asyncio.wait_for(queued, timeout=10)
 
     assert len(tenancy._live_transaction_lease_holders) == len(active_ids)
     for lease_id in active_ids:

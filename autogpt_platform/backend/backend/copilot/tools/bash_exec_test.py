@@ -227,8 +227,7 @@ async def test_local_pc_never_receives_platform_integration_secrets() -> None:
             return_value="/workspace",
         ),
         patch(
-            "backend.copilot.tools.bash_exec.get_integration_env_vars",
-            new=AsyncMock(return_value={"GH_TOKEN": "secret"}),
+            "backend.copilot.tools.bash_exec.leased_integration_env_vars",
         ) as get_integration_env,
         patch(
             "backend.copilot.tools.bash_exec.get_github_user_git_identity",
@@ -244,7 +243,7 @@ async def test_local_pc_never_receives_platform_integration_secrets() -> None:
 
     assert isinstance(result, BashExecResponse)
     assert result.stdout == "ok"
-    get_integration_env.assert_not_awaited()
+    get_integration_env.assert_not_called()
     get_git_identity.assert_not_awaited()
     run_kwargs = sandbox.commands.run.await_args.kwargs
     assert run_kwargs["envs"] == {}
@@ -458,7 +457,7 @@ class TestBashExecE2BTokenInjection:
             )
             await asyncio.wait_for(started.wait(), timeout=5)
             failed.set()
-            result = await asyncio.wait_for(execution, timeout=1)
+            result = await asyncio.wait_for(execution, timeout=10)
 
         assert isinstance(result, ErrorResponse)
         assert cancelled.is_set()

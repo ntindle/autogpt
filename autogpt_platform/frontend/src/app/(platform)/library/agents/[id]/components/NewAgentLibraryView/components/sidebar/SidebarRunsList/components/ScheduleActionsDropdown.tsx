@@ -87,8 +87,6 @@ export function ScheduleActionsDropdown({
     e.stopPropagation();
 
     try {
-      toast({ title: "Run started" });
-
       const res = await executeAgent({
         graphId: schedule.graph_id,
         graphVersion: schedule.graph_version,
@@ -98,6 +96,7 @@ export function ScheduleActionsDropdown({
           source: "library",
         },
       });
+      toast({ title: "Run started" });
 
       const newRunID = okData(res)?.id;
 

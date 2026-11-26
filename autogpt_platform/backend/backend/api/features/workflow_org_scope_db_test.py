@@ -230,11 +230,15 @@ async def _submit_to_marketplace(user_id: str, graph_id: str, org_id: str) -> No
             "links": [],
         }
     )
+    graph = await prisma.agentgraph.find_unique_or_raise(
+        where={"graphVersionId": {"id": graph_id, "version": 1}}
+    )
     listing = await prisma.storelisting.create(
         data={
             "slug": f"briefing-{uuid.uuid4().hex[:8]}",
             "agentGraphId": graph_id,
             "owningUserId": user_id,
+            "owningOrgId": graph.organizationId,
         }
     )
     await prisma.storelistingversion.create(
@@ -243,6 +247,8 @@ async def _submit_to_marketplace(user_id: str, graph_id: str, org_id: str) -> No
             "version": 1,
             "agentGraphId": graph_id,
             "agentGraphVersion": 1,
+            "organizationId": graph.organizationId,
+            "teamId": graph.teamId,
             "name": "Briefing",
             "subHeading": "",
             "description": "",

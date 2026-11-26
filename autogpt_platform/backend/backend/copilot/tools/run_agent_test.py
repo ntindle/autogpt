@@ -648,14 +648,11 @@ async def test_missing_credentials_reuses_one_credential_scope_snapshot(
         return_value=("expert-org", "expert-team")
     )
     experts.expert_allowed_credential_ids = AsyncMock(return_value=[])
+    experts.seeded_expert_credential_ids = AsyncMock(return_value=[])
 
     with (
         patch(
             "backend.copilot.tools.utils.IntegrationCredentialsManager",
-            return_value=credentials_manager,
-        ),
-        patch(
-            "backend.copilot.tools.expert_scope.IntegrationCredentialsManager",
             return_value=credentials_manager,
         ),
         patch(
@@ -693,9 +690,10 @@ async def test_missing_credentials_reuses_one_credential_scope_snapshot(
     selections.assert_awaited_once_with("test-session")
     store.scoped.assert_called_once_with("expert-org")
     store.get_all_creds.assert_awaited_once_with("test-user")
-    experts.expert_allowed_credential_ids.assert_awaited_once_with(
+    experts.seeded_expert_credential_ids.assert_awaited_once_with(
         "test-user", "expert-a"
     )
+    experts.expert_allowed_credential_ids.assert_not_awaited()
 
 
 def test_is_credential_validation_error_message_recognises_credential_strings():

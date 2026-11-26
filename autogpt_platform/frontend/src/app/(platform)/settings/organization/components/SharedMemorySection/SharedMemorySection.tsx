@@ -42,7 +42,9 @@ export function SharedMemorySection({ org, isAdmin, onSaved }: Props) {
       <div className="rounded-large border border-border-base p-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-col">
-            <Text variant="body-medium">Hold new memories for review</Text>
+            <Text variant="body" weight="medium">
+              Hold new memories for review
+            </Text>
             <Text variant="small" className="text-foreground-tertiary">
               Member-written organization and team memories stay tentative until
               an admin approves them.

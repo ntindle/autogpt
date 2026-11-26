@@ -110,7 +110,9 @@ def fire_env():
         add_copilot_turn_schedule=AsyncMock(), delete_schedule=AsyncMock()
     )
     limits = (3_000_000, 6_000_000, SubscriptionTier.PRO)
+    access = MagicMock(has_live_resource_access=AsyncMock(return_value=True))
     with (
+        patch(f"{_SCHEDULER}.get_database_manager_async_client", return_value=access),
         patch(
             f"{_SCHEDULER}.load_at_reset_chat", AsyncMock(return_value=_chat())
         ) as load,
@@ -123,6 +125,7 @@ def fire_env():
         patch(f"{_AT_RESET}.get_usage_status", AsyncMock()) as usage,
     ):
         yield SimpleNamespace(
+            access=access.has_live_resource_access,
             load=load,
             dispatch=dispatch,
             client=client,
@@ -131,6 +134,26 @@ def fire_env():
             gate=gate,
             usage=usage,
         )
+
+
+@pytest.mark.asyncio
+async def test_at_reset_refuses_revoked_saved_scope_without_moving_it(fire_env):
+    fire_env.access.return_value = False
+    await _fire(_args("send"))
+    fire_env.dispatch.assert_not_awaited()
+    fire_env.access.assert_awaited_once_with(USER, None, None, "execute")
+    retried = fire_env.client.add_copilot_turn_schedule.await_args.kwargs
+    assert retried["organization_id"] is None
+    assert retried["team_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["user_id", "organization_id", "team_id"])
+async def test_at_reset_refuses_a_chat_outside_saved_scope(fire_env, field):
+    setattr(fire_env.load.return_value.session, field, "foreign")
+    await _fire(_args("send"))
+    fire_env.dispatch.assert_not_awaited()
+    fire_env.access.assert_not_awaited()
 
 
 @pytest.fixture
@@ -423,6 +446,17 @@ async def test_a_refused_dispatch_puts_it_back(fire_env, chat_blocked_events):
     assert [(e["limit"], e["outcome"], e["cap"]) for e in chat_blocked_events] == [
         ("concurrency", "refused", 5)
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_membership_that_cannot_be_read_puts_it_back(fire_env):
+    fire_env.access.side_effect = RuntimeError("database manager unavailable")
+    fire_env.load.return_value.session.organization_id = "org-sched"
+    fire_env.load.return_value.session.team_id = "team-sched"
+    await _fire(_args("send", organization_id="org-sched", team_id="team-sched"))
+    fire_env.dispatch.assert_not_awaited()
+    readded = fire_env.client.add_copilot_turn_schedule.await_args.kwargs
+    assert (readded["purpose"], readded["cap_retry_count"]) == ("send", 1)
 
 
 @pytest.mark.asyncio

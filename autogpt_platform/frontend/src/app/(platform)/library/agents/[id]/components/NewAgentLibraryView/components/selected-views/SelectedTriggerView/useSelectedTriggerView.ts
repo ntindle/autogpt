@@ -16,6 +16,7 @@ import {
 import { useToast } from "@/components/molecules/Toast/use-toast";
 import type { CredentialsMetaInput } from "@/lib/autogpt-server-api/types";
 import { retryUnlessClientError } from "../../../helpers";
+import { withCalendarDates } from "../../modals/RunAgentInputs/helpers";
 import { mergeTriggerPresetInputs, splitTriggerPresetInputs } from "./helpers";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -31,6 +32,8 @@ export function useSelectedTriggerView({ triggerId, agent }: Args) {
   const organizationId = agent.organization_id ?? null;
   const teamId = agent.team_id ?? null;
   const graphId = agent.graph_id;
+  const inputSchema = agent.input_schema;
+  const triggerConfigSchema = agent.trigger_setup_info?.config_schema;
 
   const query = useGetV2GetASpecificPreset(triggerId, {
     request: getTenantRequestInit(organizationId, teamId),
@@ -55,17 +58,35 @@ export function useSelectedTriggerView({ triggerId, agent }: Args) {
     Record<string, CredentialsMetaInput>
   >({});
 
+  // The stored inputs, split into the graph's and the trigger's, each date as
+  // the day the form shows.
+  function applyPresetInputs(args: {
+    presetInputs: Record<string, unknown> | undefined;
+    inputSchema: LibraryAgent["input_schema"];
+    triggerConfigSchema:
+      | NonNullable<LibraryAgent["trigger_setup_info"]>["config_schema"]
+      | undefined;
+  }) {
+    const split = splitTriggerPresetInputs(args.presetInputs);
+    setInputs(withCalendarDates(args.inputSchema, split.inputs));
+    setTriggerConfig(
+      withCalendarDates(args.triggerConfigSchema, split.triggerConfig),
+    );
+    setMaskKey(split.maskKey);
+  }
+
   useEffect(() => {
     if (query.data) {
       setName(query.data.name || "");
       setDescription(query.data.description || "");
-      const split = splitTriggerPresetInputs(query.data.inputs);
-      setInputs(split.inputs);
-      setTriggerConfig(split.triggerConfig);
-      setMaskKey(split.maskKey);
+      applyPresetInputs({
+        presetInputs: query.data.inputs,
+        inputSchema,
+        triggerConfigSchema,
+      });
       setCredentials(query.data.credentials || {});
     }
-  }, [query.data]);
+  }, [query.data, inputSchema, triggerConfigSchema]);
 
   const updateMutation = usePatchV2UpdateAnExistingPreset({
     request: getTenantRequestInit(organizationId, teamId),
@@ -173,13 +194,14 @@ export function useSelectedTriggerView({ triggerId, agent }: Args) {
     if (updateMutation.isSuccess && query.data) {
       setName(query.data.name || "");
       setDescription(query.data.description || "");
-      const split = splitTriggerPresetInputs(query.data.inputs);
-      setInputs(split.inputs);
-      setTriggerConfig(split.triggerConfig);
-      setMaskKey(split.maskKey);
+      applyPresetInputs({
+        presetInputs: query.data.inputs,
+        inputSchema,
+        triggerConfigSchema,
+      });
       setCredentials(query.data.credentials || {});
     }
-  }, [updateMutation.isSuccess, query.data]);
+  }, [updateMutation.isSuccess, query.data, inputSchema, triggerConfigSchema]);
 
   return {
     trigger: query.data,
