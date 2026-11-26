@@ -20,10 +20,25 @@ export class ApiError extends Error {
   }
 }
 
+const planRequiredListeners = new Set<() => void>();
+
+/** Called whenever the server answers 402: this account has no plan (any more). */
+export function onPlanRequired(listener: () => void) {
+  planRequiredListeners.add(listener);
+  return () => {
+    planRequiredListeners.delete(listener);
+  };
+}
+
+export function reportPlanRequired() {
+  planRequiredListeners.forEach((listener) => listener());
+}
+
 interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   query?: Record<string, string | number | boolean | undefined>;
+  signal?: AbortSignal;
 }
 
 export async function authHeaders(): Promise<Record<string, string>> {
@@ -52,6 +67,7 @@ export async function apiRequest<T>(
     assertSameSession(mark);
   }
   if (!response.ok) {
+    if (response.status === 402) reportPlanRequired();
     const { message, code } = await readError(response);
     // Reading the body can outlast the session; a stale 401 must not reach
     // a handler that signs out whoever signed in meanwhile.
@@ -64,10 +80,11 @@ export async function apiRequest<T>(
 
 async function send(
   path: string,
-  { method = "GET", body, query }: RequestOptions,
+  { method = "GET", body, query, signal }: RequestOptions,
 ) {
   return workspaceFetch(apiUrl(path, query), {
     method,
+    signal,
     headers: {
       ...(await authHeaders()),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),

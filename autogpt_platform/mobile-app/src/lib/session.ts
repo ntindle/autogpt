@@ -1,7 +1,8 @@
 import { QueryCache, QueryClient } from "@tanstack/react-query";
 
+import { billingKeys } from "@/lib/api/billing";
 import { chatKeys } from "@/lib/api/chat";
-import { ApiError } from "@/lib/api/client";
+import { ApiError, onPlanRequired } from "@/lib/api/client";
 import { expertKeys } from "@/lib/api/experts";
 import { SignedOutError } from "@/lib/auth/errors";
 import { confirmSession, endSession } from "@/lib/auth/nativeSession";
@@ -10,6 +11,7 @@ import { PERSIST_MAX_AGE_MS, queryPersister } from "@/lib/queryPersist";
 import CookieManager from "@preeternal/react-native-cookie-manager";
 import { ACCESS_LOGIN_ORIGIN } from "@/lib/env";
 import { requestWorkspaceAccess } from "@/lib/workspaceAccess";
+import { clearSharedFiles } from "@/lib/sharedFiles";
 
 const SIGN_OUT_TIMEOUT_MS = 8_000;
 
@@ -31,6 +33,12 @@ queryClient.setQueryDefaults(["chat", "session"], {
   gcTime: PERSIST_MAX_AGE_MS,
 });
 queryClient.setQueryDefaults(expertKeys.list, { gcTime: PERSIST_MAX_AGE_MS });
+
+// A 402 means the plan ended while the app was open: ask again, and the
+// root layout swaps Home for the no-plan screen if the answer changed.
+onPlanRequired(() => {
+  void queryClient.invalidateQueries({ queryKey: billingKeys.all });
+});
 
 /** Several failing queries can ask at once; they share one sign-out. */
 export function signOut() {
@@ -75,6 +83,7 @@ async function clearSession() {
   void queryClient.cancelQueries();
   queryClient.clear();
   void queryPersister.removeClient();
+  clearSharedFiles();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), SIGN_OUT_TIMEOUT_MS);
   try {

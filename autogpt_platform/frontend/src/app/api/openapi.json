@@ -341,7 +341,7 @@
           "blocks"
         ],
         "summary": "Export Block Cost Estimates",
-        "description": "Aggregate per-block average credits-per-execution over [start, end].\n\nCapped at ANALYTICS_MAX_DAYS days. Returns only blocks whose current cost\ntype is dynamic (SECOND/ITEMS/COST_USD) — static-cost blocks already\ncharge correctly pre-flight and don't need an estimate override. TOKENS\nis excluded because `compute_token_credits` already supplies a per-model\nfloor at pre-flight; a per-block historical mean would lose that\ngranularity.",
+        "description": "Aggregate per-block average credits-per-execution over [start, end].\n\nCapped at ANALYTICS_MAX_DAYS days. Returns only blocks whose current cost\ntype is dynamic (SECOND/ITEMS/COST_USD) \u2014 static-cost blocks already\ncharge correctly pre-flight and don't need an estimate override. TOKENS\nis excluded because `compute_token_credits` already supplies a per-model\nfloor at pre-flight; a per-block historical mean would lose that\ngranularity.",
         "operationId": "getV2Export block cost estimates",
         "security": [
           {
@@ -1104,6 +1104,8 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
               "default": 100,
               "title": "Limit"
             }
@@ -1114,6 +1116,7 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "minimum": 0,
               "default": 0,
               "title": "Offset"
             }
@@ -1124,6 +1127,8 @@
             "required": false,
             "schema": {
               "type": "integer",
+              "maximum": 8760,
+              "minimum": 1,
               "default": 24,
               "title": "Hours"
             }
@@ -1165,7 +1170,7 @@
           "admin"
         ],
         "summary": "List Invalid Executions",
-        "description": "Get detailed list of executions in invalid states (READ-ONLY).\n\nInvalid states indicate data corruption and require manual investigation:\n- QUEUED but has startedAt (impossible - can't start while queued)\n- RUNNING but no startedAt (impossible - can't run without starting)\n\n⚠️ NO BULK ACTIONS PROVIDED - These need case-by-case investigation.\n\nEach invalid execution likely has a different root cause (crashes, race conditions,\nDB corruption). Investigate the execution history and logs to determine appropriate\naction (manual cleanup, status fix, or leave as-is if system recovered).\n\nArgs:\n    limit: Maximum number of executions to return (default 100)\n    offset: Number of executions to skip (default 0)\n\nReturns:\n    List of invalid state executions with details",
+        "description": "Get detailed list of executions in invalid states (READ-ONLY).\n\nInvalid states indicate data corruption and require manual investigation:\n- QUEUED but has startedAt (impossible - can't start while queued)\n- RUNNING but no startedAt (impossible - can't run without starting)\n\n\u26a0\ufe0f NO BULK ACTIONS PROVIDED - These need case-by-case investigation.\n\nEach invalid execution likely has a different root cause (crashes, race conditions,\nDB corruption). Investigate the execution history and logs to determine appropriate\naction (manual cleanup, status fix, or leave as-is if system recovered).\n\nArgs:\n    limit: Maximum number of executions to return (default 100)\n    offset: Number of executions to skip (default 0)\n\nReturns:\n    List of invalid state executions with details",
         "operationId": "getV2List invalid executions",
         "security": [
           {
@@ -1360,7 +1365,7 @@
           "admin"
         ],
         "summary": "Requeue Stuck Execution",
-        "description": "Requeue a stuck QUEUED execution (admin only).\n\nUses add_graph_execution with existing graph_exec_id to requeue.\n\n⚠️ WARNING: Only use for stuck executions. This will re-execute and may cost credits.\n\nArgs:\n    request: Contains execution_id to requeue\n\nReturns:\n    Success status and message",
+        "description": "Requeue a stuck QUEUED execution (admin only).\n\nUses add_graph_execution with existing graph_exec_id to requeue.\n\n\u26a0\ufe0f WARNING: Only use for stuck executions. This will re-execute and may cost credits.\n\nArgs:\n    request: Contains execution_id to requeue\n\nReturns:\n    Success status and message",
         "operationId": "postV2Requeue stuck execution",
         "requestBody": {
           "content": {
@@ -1413,7 +1418,7 @@
           "admin"
         ],
         "summary": "Requeue ALL Stuck Queued Executions",
-        "description": "Requeue ALL stuck queued executions (QUEUED >1h) by publishing to RabbitMQ.\nOperates on all executions, not just paginated results.\n\nUses add_graph_execution with existing graph_exec_id to requeue.\n\n⚠️ WARNING: This will re-execute ALL stuck executions and may cost significant credits.\n\nReturns:\n    Number of executions requeued and success message",
+        "description": "Requeue ALL stuck queued executions (QUEUED >1h) by publishing to RabbitMQ.\nOperates on all executions, not just paginated results.\n\nUses add_graph_execution with existing graph_exec_id to requeue.\n\n\u26a0\ufe0f WARNING: This will re-execute ALL stuck executions and may cost significant credits.\n\nReturns:\n    Number of executions requeued and success message",
         "operationId": "postV2Requeue all stuck queued executions",
         "responses": {
           "200": {
@@ -1446,7 +1451,7 @@
           "admin"
         ],
         "summary": "Requeue Multiple Stuck Executions",
-        "description": "Requeue multiple stuck QUEUED executions (admin only).\n\nUses add_graph_execution with existing graph_exec_id to requeue.\n\n⚠️ WARNING: Only use for stuck executions. This will re-execute and may cost credits.\n\nArgs:\n    request: Contains list of execution_ids to requeue\n\nReturns:\n    Number of executions requeued and success message",
+        "description": "Requeue multiple stuck QUEUED executions (admin only).\n\nUses add_graph_execution with existing graph_exec_id to requeue.\n\n\u26a0\ufe0f WARNING: Only use for stuck executions. This will re-execute and may cost credits.\n\nArgs:\n    request: Contains list of execution_ids to requeue\n\nReturns:\n    Number of executions requeued and success message",
         "operationId": "postV2Requeue multiple stuck executions",
         "requestBody": {
           "content": {
@@ -2150,11 +2155,11 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "Reserved — the fire-and-forget wrapper currently always honours the activity gate. Kept on the signature so the frontend hook doesn't need a contract change when the force flag is threaded through to the wrapper.",
+              "description": "Reserved \u2014 the fire-and-forget wrapper currently always honours the activity gate. Kept on the signature so the frontend hook doesn't need a contract change when the force flag is threaded through to the wrapper.",
               "default": false,
               "title": "Force"
             },
-            "description": "Reserved — the fire-and-forget wrapper currently always honours the activity gate. Kept on the signature so the frontend hook doesn't need a contract change when the force flag is threaded through to the wrapper."
+            "description": "Reserved \u2014 the fire-and-forget wrapper currently always honours the activity gate. Kept on the signature so the frontend hook doesn't need a contract change when the force flag is threaded through to the wrapper."
           }
         ],
         "responses": {
@@ -2260,7 +2265,7 @@
           "memory"
         ],
         "summary": "Trigger Dream Pass",
-        "description": "Fire a dream pass and return 202 + job_id immediately.\n\nFrontend polls ``GET /api/admin/memory/{user_id}/dream/{job_id}``\nfor progress. Runs ONLY the dream pass submitter — for the full\nnightly fan-out use ``POST /{user_id}/nightly``. The pass goes through\nthe same guard as the nightly one: it skips behind a fresh open pass of\nthe account unless ``force`` expires that pass first. ``force`` does not\ntake a lock another pass holds.",
+        "description": "Fire a dream pass and return 202 + job_id immediately.\n\nFrontend polls ``GET /api/admin/memory/{user_id}/dream/{job_id}``\nfor progress. Runs ONLY the dream pass submitter \u2014 for the full\nnightly fan-out use ``POST /{user_id}/nightly``. The pass goes through\nthe same guard as the nightly one: it skips behind a fresh open pass of\nthe account unless ``force`` expires that pass first. ``force`` does not\ntake a lock another pass holds.",
         "operationId": "postV2TriggerDreamPass",
         "security": [
           {
@@ -3257,7 +3262,7 @@
           "memory"
         ],
         "summary": "Get Graph",
-        "description": "Single-shot graph payload for the visualizer canvas (account scope).\n\nReturns nodes + edges in one round-trip so the frontend can hand\nthe whole thing to a force-directed layout without N+1 fetches.\n\nDefaults to entities + communities (the \"what does my memory know\nabout\" view). ``include_episodes=True`` adds the temporal\n:Episodic nodes — useful for debugging extraction but noisy for the\ntypical inspector view.",
+        "description": "Single-shot graph payload for the visualizer canvas (account scope).\n\nReturns nodes + edges in one round-trip so the frontend can hand\nthe whole thing to a force-directed layout without N+1 fetches.\n\nDefaults to entities + communities (the \"what does my memory know\nabout\" view). ``include_episodes=True`` adds the temporal\n:Episodic nodes \u2014 useful for debugging extraction but noisy for the\ntypical inspector view.",
         "operationId": "getV2GetGraph",
         "security": [
           {
@@ -3357,7 +3362,7 @@
           "memory"
         ],
         "summary": "Trigger Nightly Batch",
-        "description": "Fire the full nightly batch fan-out and return 202 + job_id immediately.\n\nFrontend polls ``GET /api/admin/memory/{user_id}/nightly/{job_id}``\nfor progress. Same composition as the 03:00 cron — every enabled\nbatch-family submitter runs in sequence sharing one ``nightly_id``\nfor cost-log attribution.",
+        "description": "Fire the full nightly batch fan-out and return 202 + job_id immediately.\n\nFrontend polls ``GET /api/admin/memory/{user_id}/nightly/{job_id}``\nfor progress. Same composition as the 03:00 cron \u2014 every enabled\nbatch-family submitter runs in sequence sharing one ``nightly_id``\nfor cost-log attribution.",
         "operationId": "postV2TriggerNightlyBatch",
         "security": [
           {
@@ -3536,7 +3541,7 @@
           "memory"
         ],
         "summary": "Trigger Ratification Pass",
-        "description": "Trigger an on-demand ratification sweep for the user (in isolation).\n\nForwards to ``Scheduler.execute_ratification_pass_now``. Runs ONLY\nthe ratification supersession sweep — does NOT run dream pass or\ncommunity rebuild. Useful for testing ratification behavior\nwithout the full nightly fan-out.",
+        "description": "Trigger an on-demand ratification sweep for the user (in isolation).\n\nForwards to ``Scheduler.execute_ratification_pass_now``. Runs ONLY\nthe ratification supersession sweep \u2014 does NOT run dream pass or\ncommunity rebuild. Useful for testing ratification behavior\nwithout the full nightly fan-out.",
         "operationId": "postV2TriggerRatificationPass",
         "security": [
           {
@@ -4809,6 +4814,74 @@
         ]
       }
     },
+    "/api/auth/sign-in-connection": {
+      "get": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "The OAuth clients a sign-in must use to bring its connection",
+        "description": "Public, like the client IDs themselves: every sign-in link carries one.",
+        "operationId": "getSignInConnectionClients",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInConnectionClients"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "integrations"
+        ],
+        "summary": "Keep the connection a Google or Microsoft sign-in granted",
+        "operationId": "connectFromSignIn",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInConnectionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not the frontend's sign-in connection token"
+          },
+          "409": {
+            "description": "Login and connections use different OAuth clients"
+          },
+          "422": {
+            "description": "The provider didn't accept the sign-in's tokens"
+          },
+          "501": {
+            "description": "The provider's connections aren't configured"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/auth/user": {
       "post": {
         "tags": [
@@ -5223,7 +5296,7 @@
           "briefings"
         ],
         "summary": "Get Latest Briefing",
-        "description": "Return the user's current briefing, or None if there isn't a fresh one.\n\nOnly briefings covering today or yesterday qualify; anything older is\nhistory, not \"this morning\".\n\nStored content that fails to validate against the current BriefingContent\nshape (e.g. written by an older/newer version of the composer) is skipped\nrather than 500ing the request — and rather than hiding every older\nbriefing behind one unreadable row on the newest date.",
+        "description": "Return the user's current briefing, or None if there isn't a fresh one.\n\nOnly briefings covering today or yesterday qualify; anything older is\nhistory, not \"this morning\".\n\nStored content that fails to validate against the current BriefingContent\nshape (e.g. written by an older/newer version of the composer) is skipped\nrather than 500ing the request \u2014 and rather than hiding every older\nbriefing behind one unreadable row on the newest date.",
         "operationId": "getBriefingsGet latest briefing",
         "responses": {
           "200": {
@@ -5785,7 +5858,7 @@
           "chat"
         ],
         "summary": "List Chat Connections",
-        "description": "Every AI connection the user can chat over, described by the server.\n\nAdditive alongside ``GET /transports``, which keeps its shape. This\ncarries what a client would otherwise have to infer — provider family,\nwhat backs a run, the quality tiers, and the limitations that apply —\nso product and billing statements come from the side that enforces them.",
+        "description": "Every AI connection the user can chat over, described by the server.\n\nAdditive alongside ``GET /transports``, which keeps its shape. This\ncarries what a client would otherwise have to infer \u2014 provider family,\nwhat backs a run, the quality tiers, and the limitations that apply \u2014\nso product and billing statements come from the side that enforces them.",
         "operationId": "getV2ListChatConnections",
         "responses": {
           "200": {
@@ -6639,7 +6712,7 @@
           "chat"
         ],
         "summary": "Cancel Session Task",
-        "description": "Cancel an in-flight task for a session.\n\nHandles both lifecycle states uniformly:\n\n* **Queued** (``chatStatus='queued'``) — the dispatcher hasn't\n  claimed the row yet.  Flip the session back to ``idle`` and\n  return; no executor cancel event needed.\n* **Running** (``chatStatus='running'``) — publish a cancel event\n  to the executor via RabbitMQ FANOUT, then poll Redis until the\n  task status flips out of ``running`` or a 5 s timeout is hit.",
+        "description": "Cancel an in-flight task for a session.\n\nHandles both lifecycle states uniformly:\n\n* **Queued** (``chatStatus='queued'``) \u2014 the dispatcher hasn't\n  claimed the row yet.  Flip the session back to ``idle`` and\n  return; no executor cancel event needed.\n* **Running** (``chatStatus='running'``) \u2014 publish a cancel event\n  to the executor via RabbitMQ FANOUT, then poll Redis until the\n  task status flips out of ``running`` or a 5 s timeout is hit.",
         "operationId": "postV2CancelSessionTask",
         "security": [
           {
@@ -7017,7 +7090,7 @@
             }
           },
           "429": {
-            "description": "Too many sandboxes are running"
+            "description": "Usage allowance spent, or too many sandboxes running"
           },
           "502": {
             "description": "The desktop could not be started"
@@ -7319,7 +7392,7 @@
           "share"
         ],
         "summary": "Disable Chat Sharing",
-        "description": "Revoke sharing for a chat session.\n\nCascade-revokes linked executions whose share originated here\n(``sharedVia == CHAT_LINK``).  User-initiated execution shares\nsurvive — see :func:`backend.copilot.sharing.db.disable_chat_session_share`.",
+        "description": "Revoke sharing for a chat session.\n\nCascade-revokes linked executions whose share originated here\n(``sharedVia == CHAT_LINK``).  User-initiated execution shares\nsurvive \u2014 see :func:`backend.copilot.sharing.db.disable_chat_session_share`.",
         "operationId": "deleteV2DisableChatSharing",
         "security": [
           {
@@ -7882,7 +7955,7 @@
           "chat"
         ],
         "summary": "List Chat Transports",
-        "description": "Every transport the user can chat over.\n\nExactly one carries ``default: true`` — the connection this user chose in\nSettings, or the server's own pick when they haven't chosen one.",
+        "description": "Every transport the user can chat over.\n\nExactly one carries ``default: true`` \u2014 the connection this user chose in\nSettings, or the server's own pick when they haven't chosen one.",
         "operationId": "getV2ListChatTransports",
         "responses": {
           "200": {
@@ -7914,7 +7987,7 @@
           "chat"
         ],
         "summary": "Set Default Chat Transport",
-        "description": "Save the connection every new chat starts on.\n\nApplies to chats nobody routed explicitly — a fresh session in the web\napp, and every conversation that arrives without a request to read a route\nfrom: bot links, schedules, briefings, dream passes. It does not touch a\nconversation that already exists; sessions keep the route they were\ncreated with.",
+        "description": "Save the connection every new chat starts on.\n\nApplies to chats nobody routed explicitly \u2014 a fresh session in the web\napp, and every conversation that arrives without a request to read a route\nfrom: bot links, schedules, briefings, dream passes. It does not touch a\nconversation that already exists; sessions keep the route they were\ncreated with.",
         "operationId": "putV2SetDefaultChatTransport",
         "requestBody": {
           "content": {
@@ -7969,7 +8042,7 @@
           "chat"
         ],
         "summary": "Get Copilot Usage",
-        "description": "Get CoPilot usage status for the authenticated user.\n\nReturns the percentage of the daily/weekly allowance used — not the\nraw spend or cap — so clients cannot derive per-turn cost or platform\nmargins. Global defaults sourced from PostHog (falling back to\nconfig). Includes the user's rate-limit tier.",
+        "description": "Get CoPilot usage status for the authenticated user.\n\nReturns the percentage of the daily/weekly allowance used \u2014 not the\nraw spend or cap \u2014 so clients cannot derive per-turn cost or platform\nmargins. Global defaults sourced from PostHog (falling back to\nconfig). Includes the user's rate-limit tier.",
         "operationId": "getV2GetCopilotUsage",
         "responses": {
           "200": {
@@ -8176,7 +8249,7 @@
           "admin"
         ],
         "summary": "Search Users by Name or Email",
-        "description": "Search users by partial email or name. Admin-only.\n\nQueries the User table directly — returns results even for users\nwithout credit transaction history.",
+        "description": "Search users by partial email or name. Admin-only.\n\nQueries the User table directly \u2014 returns results even for users\nwithout credit transaction history.",
         "operationId": "getV2Search users by name or email",
         "security": [
           {
@@ -11811,7 +11884,7 @@
             }
           },
           "429": {
-            "description": "Too many sandboxes are running"
+            "description": "Usage allowance spent, or too many sandboxes running"
           },
           "502": {
             "description": "The desktop could not be started"
@@ -12032,7 +12105,7 @@
           "private"
         ],
         "summary": "Get Expert Detach Preview",
-        "description": "What archiving this expert would pause — schedules and triggers —\nso the client can show a clear confirmation prompt.",
+        "description": "What archiving this expert would pause \u2014 schedules and triggers \u2014\nso the client can show a clear confirmation prompt.",
         "operationId": "get_expert_detach_preview",
         "security": [
           {
@@ -14904,7 +14977,7 @@
           "integrations"
         ],
         "summary": "Issue a short-lived access token for a provider-hosted picker",
-        "description": "Return the raw access token for an OAuth2 credential so the frontend\ncan initialize a provider-hosted picker (e.g. Google Drive Picker).\n\n`GET /{provider}/credentials/{cred_id}` deliberately strips secrets (see\n`CredentialsMetaResponse` + `TestGetCredentialReturnsMetaOnly` in\n`router_test.py`). That hardening broke the Drive picker, which needs the\nraw access token to call `google.picker.Builder.setOAuthToken(...)`. This\nendpoint carves a narrow, explicit hole: the caller must own the\ncredential, it must be OAuth2, and the endpoint returns only the access\ntoken + its expiry — nothing else about the credential. SDK-default\ncredentials are excluded for the same reason as `get_credential`.",
+        "description": "Return the raw access token for an OAuth2 credential so the frontend\ncan initialize a provider-hosted picker (e.g. Google Drive Picker).\n\n`GET /{provider}/credentials/{cred_id}` deliberately strips secrets (see\n`CredentialsMetaResponse` + `TestGetCredentialReturnsMetaOnly` in\n`router_test.py`). That hardening broke the Drive picker, which needs the\nraw access token to call `google.picker.Builder.setOAuthToken(...)`. This\nendpoint carves a narrow, explicit hole: the caller must own the\ncredential, it must be OAuth2, and the endpoint returns only the access\ntoken + its expiry \u2014 nothing else about the credential. SDK-default\ncredentials are excluded for the same reason as `get_credential`.",
         "operationId": "postV1GetPickerToken",
         "security": [
           {
@@ -16315,7 +16388,7 @@
             "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
           },
           "404": {
-            "description": "Folder not found"
+            "description": "Agent or folder not found"
           },
           "422": {
             "description": "Validation Error",
@@ -18621,7 +18694,7 @@
           "brain-dump"
         ],
         "summary": "Finalize Brain Dump",
-        "description": "Close out a take: assemble, scan, store, transcribe.\n\nExtraction and greeting generation continue in the background after\nthis responds — the preparing step polls ``/status`` until\n``greeting_ready``. Idempotent per ``recording_id`` — a client that\nretries after a timeout gets the stored result rather than a second\ntranscription.",
+        "description": "Close out a take: assemble, scan, store, transcribe.\n\nExtraction and greeting generation continue in the background after\nthis responds \u2014 the preparing step polls ``/status`` until\n``greeting_ready``. Idempotent per ``recording_id`` \u2014 a client that\nretries after a timeout gets the stored result rather than a second\ntranscription.",
         "operationId": "finalize_brain_dump",
         "requestBody": {
           "content": {
@@ -18674,7 +18747,7 @@
           "brain-dump"
         ],
         "summary": "Get Brain Dump Intro",
-        "description": "Content for the copilot home's onboarding greeting.\n\nPre-generated during finalize, so this is a plain row read — the\ncopilot home never waits on a model to render its first screen.\n``greeting_done=true`` means the client should show nothing and cache\nthat locally.",
+        "description": "Content for the copilot home's onboarding greeting.\n\nPre-generated during finalize, so this is a plain row read \u2014 the\ncopilot home never waits on a model to render its first screen.\n``greeting_done=true`` means the client should show nothing and cache\nthat locally.",
         "operationId": "get_brain_dump_intro",
         "responses": {
           "200": {
@@ -18707,7 +18780,7 @@
           "brain-dump"
         ],
         "summary": "Complete Brain Dump Greeting",
-        "description": "Mark the greeting as done — called when the first message is sent.\n\nPermanent and content-preserving: the flag flips, the stored greeting\nstays in the row.",
+        "description": "Mark the greeting as done \u2014 called when the first message is sent.\n\nPermanent and content-preserving: the flag flips, the stored greeting\nstays in the row.",
         "operationId": "complete_brain_dump_greeting",
         "responses": {
           "200": {
@@ -20864,7 +20937,7 @@
           "platform-config"
         ],
         "summary": "Get Platform Config",
-        "description": "This deployment's settings the browser needs, the same for every caller.",
+        "description": "Settings the browser and the mobile app need, the same for every caller.",
         "operationId": "get_platform_config",
         "responses": {
           "200": {
@@ -21333,7 +21406,7 @@
           "public"
         ],
         "summary": "Download a file from a shared chat",
-        "description": "Download a workspace file allowlisted by a shared chat (no auth).\n\nReturns uniform 404 for every failure mode to prevent enumeration —\nindistinguishable from \"unknown token\" or \"wrong file id\".",
+        "description": "Download a workspace file allowlisted by a shared chat (no auth).\n\nReturns uniform 404 for every failure mode to prevent enumeration \u2014\nindistinguishable from \"unknown token\" or \"wrong file id\".",
         "operationId": "download_shared_chat_file",
         "parameters": [
           {
@@ -21367,7 +21440,7 @@
             }
           },
           "404": {
-            "description": "Uniform 404 for every failure mode (unknown token, wrong file id, file no longer present) — prevents enumeration."
+            "description": "Uniform 404 for every failure mode (unknown token, wrong file id, file no longer present) \u2014 prevents enumeration."
           },
           "422": {
             "description": "Validation Error",
@@ -22472,11 +22545,11 @@
               "type": "integer",
               "maximum": 10,
               "minimum": 1,
-              "description": "Maximum items returned per bucket. The response contains *at most* this many agents, files, and chats — fewer when the bucket has no/few matches.",
+              "description": "Maximum items returned per bucket. The response contains *at most* this many agents, files, and chats \u2014 fewer when the bucket has no/few matches.",
               "default": 4,
               "title": "Per Type Limit"
             },
-            "description": "Maximum items returned per bucket. The response contains *at most* this many agents, files, and chats — fewer when the bucket has no/few matches."
+            "description": "Maximum items returned per bucket. The response contains *at most* this many agents, files, and chats \u2014 fewer when the bucket has no/few matches."
           }
         ],
         "responses": {
@@ -23123,7 +23196,7 @@
           "private"
         ],
         "summary": "Update Policy",
-        "description": "Pause learning, stop using, or toggle automatic improvements — separately.",
+        "description": "Pause learning, stop using, or toggle automatic improvements \u2014 separately.",
         "operationId": "update_skill_learning_policy",
         "security": [
           {
@@ -23563,7 +23636,7 @@
           "skills"
         ],
         "summary": "Upload a copilot skill as a zipped package",
-        "description": "Create a skill from a zipped package — a root ``SKILL.md`` plus the\nfiles beside it.\n\nThe zip is transport only: it is unpacked here and stored as the skill's\nfolder, so the model reaches ``scripts/`` and ``references/`` by path\nexactly as it does for a package copied from another skill.",
+        "description": "Create a skill from a zipped package \u2014 a root ``SKILL.md`` plus the\nfiles beside it.\n\nThe zip is transport only: it is unpacked here and stored as the skill's\nfolder, so the model reaches ``scripts/`` and ``references/`` by path\nexactly as it does for a package copied from another skill.",
         "operationId": "uploadCopilotSkillPackage",
         "security": [
           {
@@ -23643,7 +23716,7 @@
           "skills"
         ],
         "summary": "Delete a user-distilled copilot skill",
-        "description": "Delete a user-distilled skill by slug.\n\nBuilt-in defaults are not user-deletable — attempting to delete one\nreturns 400.  Missing skills return 404 so the UI can reconcile a\nstale list.  409 means the delete could not be ordered with another\nchange to the owner's skills; nothing was deleted, so try again.",
+        "description": "Delete a user-distilled skill by slug.\n\nBuilt-in defaults are not user-deletable \u2014 attempting to delete one\nreturns 400.  Missing skills return 404 so the UI can reconcile a\nstale list.  409 means the delete could not be ordered with another\nchange to the owner's skills; nothing was deleted, so try again.",
         "operationId": "deleteCopilotSkill",
         "security": [
           {
@@ -23792,7 +23865,7 @@
           "skills"
         ],
         "summary": "Download a copilot skill as a zipped package",
-        "description": "Return the skill's whole folder as a zip — ``SKILL.md`` at the root,\nsiblings at their relative paths, executable bits preserved — so a\ndownload re-uploads to the same tree.\n\nBuilt-in defaults are single on-disk files and are not downloadable here;\nGET ``/skills/{name}`` serves their body.",
+        "description": "Return the skill's whole folder as a zip \u2014 ``SKILL.md`` at the root,\nsiblings at their relative paths, executable bits preserved \u2014 so a\ndownload re-uploads to the same tree.\n\nBuilt-in defaults are single on-disk files and are not downloadable here;\nGET ``/skills/{name}`` serves their body.",
         "operationId": "downloadCopilotSkillPackage",
         "security": [
           {
@@ -26086,6 +26159,67 @@
         }
       }
     },
+    "/api/store/submissions/live/{graph_id}": {
+      "get": {
+        "tags": [
+          "v2",
+          "store",
+          "private"
+        ],
+        "summary": "Get my live submission",
+        "description": "The version of your listing for this workflow that the Marketplace\nshows, with its recommended schedule, or null when the workflow has no\nlisting of yours or none of it is live.",
+        "operationId": "getV2Get my live submission",
+        "security": [
+          {
+            "HTTPBearerJWT": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "graph_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Graph Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/LiveStoreSubmission"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Getv2Get My Live Submission"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/HTTP401NotAuthenticatedError"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/store/submissions/media": {
       "post": {
         "tags": [
@@ -26673,7 +26807,7 @@
           "workspace"
         ],
         "summary": "List workspace files",
-        "description": "List files in the user's workspace.\n\nWhen session_id is provided, only files for that session are returned.\nOtherwise, all files across sessions are listed. Results are paginated\nvia `limit`/`offset`; `has_more` indicates whether additional pages exist.\n\nThe Artifacts page uses ``q`` for name search and ``origin`` to filter\nbetween Uploaded (user-uploaded) and Generated (agent/block output) files.\n\n``session_id`` (a per-session view) and the folder filters (``folder_id`` /\n``root_only``) are distinct, mutually exclusive axes, and ``folder_id`` and\n``root_only`` likewise conflict; passing conflicting filters returns a 400\nrather than silently yielding an empty list.\n\n``expert_id`` narrows the listing to that hired expert's own\nconversations. It conflicts with ``session_id`` — both name which\nconversations to show — but composes with the folder filters, which select\nacross the whole workspace. An expert the caller does not own (or no\nlonger has) yields an empty list.\n\n``include_user_files`` widens an ``expert_id`` listing with the user's own\nfiles, which an expert may read but which are nobody's conversation. It is\nopt-in so that a view already filtered to one expert keeps showing that\nexpert's files and nothing else; the composer's picker sends it when its\n\"only this expert\" filter is switched off.\n\nThe listing is of the user's files: skill packages and Otto's working\nfiles (``isInternal``, decided when each file is written) are left out in\nthe query, so paging stays correct. ``include_internal`` lists them too,\nfor a view that shows them apart.",
+        "description": "List files in the user's workspace.\n\nWhen session_id is provided, only files for that session are returned.\nOtherwise, all files across sessions are listed. Results are paginated\nvia `limit`/`offset`; `has_more` indicates whether additional pages exist.\n\nThe Artifacts page uses ``q`` for name search and ``origin`` to filter\nbetween Uploaded (user-uploaded) and Generated (agent/block output) files.\n\n``session_id`` (a per-session view) and the folder filters (``folder_id`` /\n``root_only``) are distinct, mutually exclusive axes, and ``folder_id`` and\n``root_only`` likewise conflict; passing conflicting filters returns a 400\nrather than silently yielding an empty list.\n\n``expert_id`` narrows the listing to that hired expert's own\nconversations. It conflicts with ``session_id`` \u2014 both name which\nconversations to show \u2014 but composes with the folder filters, which select\nacross the whole workspace. An expert the caller does not own (or no\nlonger has) yields an empty list.\n\n``include_user_files`` widens an ``expert_id`` listing with the user's own\nfiles, which an expert may read but which are nobody's conversation. It is\nopt-in so that a view already filtered to one expert keeps showing that\nexpert's files and nothing else; the composer's picker sends it when its\n\"only this expert\" filter is switched off.\n\nThe listing is of the user's files: skill packages and Otto's working\nfiles (``isInternal``, decided when each file is written) are left out in\nthe query, so paging stays correct. ``include_internal`` lists them too,\nfor a view that shows them apart.",
         "operationId": "listWorkspaceFiles",
         "security": [
           {
@@ -26816,11 +26950,11 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "With expert_id, also return the user's own files — everything outside /sessions/, /experts/ and /skills/ — which the expert may read but which are not its own. Requires expert_id.",
+              "description": "With expert_id, also return the user's own files \u2014 everything outside /sessions/, /experts/ and /skills/ \u2014 which the expert may read but which are not its own. Requires expert_id.",
               "default": false,
               "title": "Include User Files"
             },
-            "description": "With expert_id, also return the user's own files — everything outside /sessions/, /experts/ and /skills/ — which the expert may read but which are not its own. Requires expert_id."
+            "description": "With expert_id, also return the user's own files \u2014 everything outside /sessions/, /experts/ and /skills/ \u2014 which the expert may read but which are not its own. Requires expert_id."
           },
           {
             "name": "include_internal",
@@ -28698,7 +28832,7 @@
                 "type": "null"
               }
             ],
-            "description": "Webhook-trigger setup info (provider, config_schema, credentials_input_name) for agents with an external trigger. Configure the trigger by passing config_schema fields to setup_agent_webhook_trigger — never by editing the trigger node in the graph. None for agents without a webhook trigger."
+            "description": "Webhook-trigger setup info (provider, config_schema, credentials_input_name) for agents with an external trigger. Configure the trigger by passing config_schema fields to setup_agent_webhook_trigger \u2014 never by editing the trigger node in the graph. None for agents without a webhook trigger."
           }
         },
         "type": "object",
@@ -29018,7 +29152,7 @@
                 "type": "null"
               }
             ],
-            "description": "Webhook-trigger setup info (provider, config_schema, credentials_input_name) for agents with an external trigger. Configure the trigger by passing config_schema fields to setup_agent_webhook_trigger — never by editing the trigger node in the graph. None for agents without a webhook trigger."
+            "description": "Webhook-trigger setup info (provider, config_schema, credentials_input_name) for agents with an external trigger. Configure the trigger by passing config_schema fields to setup_agent_webhook_trigger \u2014 never by editing the trigger node in the graph. None for agents without a webhook trigger."
           }
         },
         "type": "object",
@@ -30027,6 +30161,17 @@
                 "type": "null"
               }
             ]
+          },
+          "max_cost": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Cost"
           }
         },
         "type": "object",
@@ -30920,7 +31065,7 @@
           "live_servers": {
             "type": "integer",
             "title": "Live Servers",
-            "description": "Current count of servers the bot is in right now. Point-in-time gauge — intentionally ignores window_days. Use the server-count timeseries endpoint for the windowed growth curve."
+            "description": "Current count of servers the bot is in right now. Point-in-time gauge \u2014 intentionally ignores window_days. Use the server-count timeseries endpoint for the windowed growth curve."
           },
           "messages_received": {
             "type": "integer",
@@ -31121,7 +31266,7 @@
           "icon"
         ],
         "title": "BotPlatformInfo",
-        "description": "A bot platform enabled on this deployment plus the caller's links to it.\n\nPlatforms whose adapter isn't configured (missing token/credentials) are\nomitted from the response entirely — the Bots settings page hides them."
+        "description": "A bot platform enabled on this deployment plus the caller's links to it.\n\nPlatforms whose adapter isn't configured (missing token/credentials) are\nomitted from the response entirely \u2014 the Bots settings page hides them."
       },
       "BotServerActivity": {
         "properties": {
@@ -32085,7 +32230,7 @@
         },
         "type": "object",
         "title": "ChatShareStateResponse",
-        "description": "Surfaces the chat's current share state so the modal can open\nin the right mode (share-vs-revoke) without an extra round-trip.\n\nThe three counts power the consent-disclosure block above the\ntoggle so the owner sees exactly what they're about to expose.\nThey reflect live state — sharing is live (not snapshot-at-enable),\nso these numbers are also a lower bound for what subsequent\nviewers will see if more messages / runs / files land before\nrevocation."
+        "description": "Surfaces the chat's current share state so the modal can open\nin the right mode (share-vs-revoke) without an extra round-trip.\n\nThe three counts power the consent-disclosure block above the\ntoggle so the owner sees exactly what they're about to expose.\nThey reflect live state \u2014 sharing is live (not snapshot-at-enable),\nso these numbers are also a lower bound for what subsequent\nviewers will see if more messages / runs / files land before\nrevocation."
       },
       "ChatTransportResponse": {
         "properties": {
@@ -32391,7 +32536,7 @@
         },
         "type": "object",
         "title": "CoPilotUsagePublic",
-        "description": "Current usage status for a user — public (client-safe) shape."
+        "description": "Current usage status for a user \u2014 public (client-safe) shape."
       },
       "CodexAccountSnapshot": {
         "properties": {
@@ -32905,7 +33050,7 @@
         },
         "type": "object",
         "title": "ConfirmLinkRequest",
-        "description": "Optional confirm payload. ``telegram_auth`` carries the signed identity\nTelegram appends when the user reached this page via a login_url button —\nwhen present it must verify, and the link token must belong to that same\nTelegram user."
+        "description": "Optional confirm payload. ``telegram_auth`` carries the signed identity\nTelegram appends when the user reached this page via a login_url button \u2014\nwhen present it must verify, and the link token must belong to that same\nTelegram user."
       },
       "ConfirmLinkResponse": {
         "properties": {
@@ -33043,7 +33188,7 @@
           "selectable"
         ],
         "title": "ConnectionTier",
-        "description": "One quality level on a connection.\n\n``display_model`` is the model this tier resolves to, run through the\nsame router the turn will use — feature-flag cell, then registry, then\nconfig — so it cannot drift from what actually answers.\n\nOn a ChatGPT connection it is the model the catalog pins for that cell,\nread straight from the registry -- no lease, no call to the account.\nWhat a lease would add is confirmation that this particular account still\nadvertises it; the router checks that when the turn runs and falls back\nif not, so the name here is the routed model rather than a guarantee.\n``None`` only when the catalog pins nothing for the cell."
+        "description": "One quality level on a connection.\n\n``display_model`` is the model this tier resolves to, run through the\nsame router the turn will use \u2014 feature-flag cell, then registry, then\nconfig \u2014 so it cannot drift from what actually answers.\n\nOn a ChatGPT connection it is the model the catalog pins for that cell,\nread straight from the registry -- no lease, no call to the account.\nWhat a lease would add is confirmation that this particular account still\nadvertises it; the router checks that when the turn runs and falls back\nif not, so the name here is the routed model rather than a guarantee.\n``None`` only when the catalog pins nothing for the cell."
       },
       "ConsolidatedFact": {
         "properties": {
@@ -33230,7 +33375,7 @@
           "size_bytes"
         ],
         "title": "CopilotSkillFile",
-        "description": "One file of a skill package, by its path relative to the skill folder\n(``scripts/run.py``) — the path the SKILL.md body references it by."
+        "description": "One file of a skill package, by its path relative to the skill folder\n(``scripts/run.py``) \u2014 the path the SKILL.md body references it by."
       },
       "CopilotSkillInfo": {
         "properties": {
@@ -33295,7 +33440,7 @@
           "description"
         ],
         "title": "CopilotSkillInfo",
-        "description": "User-distilled copilot skill metadata for the library UI.\n\nDefaults (built-in agent-building / MCP-tool guides) are intentionally\nexcluded — they cannot be edited or deleted, so surfacing them in the\nuser-facing list would add noise without affordances."
+        "description": "User-distilled copilot skill metadata for the library UI.\n\nDefaults (built-in agent-building / MCP-tool guides) are intentionally\nexcluded \u2014 they cannot be edited or deleted, so surfacing them in the\nuser-facing list would add noise without affordances."
       },
       "CopilotTurnJobInfo": {
         "properties": {
@@ -34289,7 +34434,7 @@
         "additionalProperties": false,
         "type": "object",
         "title": "CreateSessionRequest",
-        "description": "Request model for creating (or get-or-creating) a chat session.\n\nTwo modes, selected by the body:\n\n- Default: create a fresh session. ``dry_run`` is a **top-level**\n  field — do not nest it inside ``metadata``.\n- Builder-bound: when ``builder_graph_id`` is set, the endpoint\n  switches to **get-or-create** keyed on\n  ``(user_id, builder_graph_id)``.  The builder panel calls this on\n  mount so the chat persists across refreshes.  Graph ownership is\n  validated inside :func:`get_or_create_builder_session`. Write-side\n  scope is enforced per-tool (``edit_agent`` / ``run_agent`` reject\n  any ``agent_id`` other than the bound graph) and a small blacklist\n  hides tools that conflict with the panel's scope\n  (``create_agent`` / ``customize_agent`` / ``get_agent_building_guide``\n  — see :data:`BUILDER_BLOCKED_TOOLS`). Read-side lookups\n  (``find_capability``, ``find_agent``, ``search_docs``, …) stay open.\n\n``expert_id`` scopes the session to a hired expert. It must reference\nan expert owned by the caller that is neither a template nor archived,\notherwise the request is rejected with 404. It is mutually exclusive\nwith ``builder_graph_id`` (422) — builder-bound sessions are never\nexpert-scoped.\n\n``expert_kickoff`` switches expert creation to an atomic create-or-adopt\nmode keyed by the authenticated user and expert. It is invalid without\n``expert_id``.\n\n``session_id`` lets the client name the session up front, which makes\nthe create idempotent: a retry after a lost response adopts the session\nthe first attempt committed (409 if the id is someone else's or scoped\nto another expert). Builder and kickoff sessions pick their own ids, so\nit is rejected alongside them (422).\n\nExtra/unknown fields are rejected (422) to prevent silent mis-use."
+        "description": "Request model for creating (or get-or-creating) a chat session.\n\nTwo modes, selected by the body:\n\n- Default: create a fresh session. ``dry_run`` is a **top-level**\n  field \u2014 do not nest it inside ``metadata``.\n- Builder-bound: when ``builder_graph_id`` is set, the endpoint\n  switches to **get-or-create** keyed on\n  ``(user_id, builder_graph_id)``.  The builder panel calls this on\n  mount so the chat persists across refreshes.  Graph ownership is\n  validated inside :func:`get_or_create_builder_session`. Write-side\n  scope is enforced per-tool (``edit_agent`` / ``run_agent`` reject\n  any ``agent_id`` other than the bound graph) and a small blacklist\n  hides tools that conflict with the panel's scope\n  (``create_agent`` / ``customize_agent`` / ``get_agent_building_guide``\n  \u2014 see :data:`BUILDER_BLOCKED_TOOLS`). Read-side lookups\n  (``find_capability``, ``find_agent``, ``search_docs``, \u2026) stay open.\n\n``expert_id`` scopes the session to a hired expert. It must reference\nan expert owned by the caller that is neither a template nor archived,\notherwise the request is rejected with 404. It is mutually exclusive\nwith ``builder_graph_id`` (422) \u2014 builder-bound sessions are never\nexpert-scoped.\n\n``expert_kickoff`` switches expert creation to an atomic create-or-adopt\nmode keyed by the authenticated user and expert. It is invalid without\n``expert_id``.\n\n``session_id`` lets the client name the session up front, which makes\nthe create idempotent: a retry after a lost response adopts the session\nthe first attempt committed (409 if the id is someone else's or scoped\nto another expert). Builder and kickoff sessions pick their own ids, so\nit is rejected alongside them (422).\n\nExtra/unknown fields are rejected (422) to prevent silent mis-use."
       },
       "CreateSessionResponse": {
         "properties": {
@@ -34834,6 +34979,18 @@
             ],
             "title": "Service Icon"
           },
+          "mcp_catalog_entry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mcp Catalog Entry",
+            "description": "The MCP catalog entry (e.g. mcp_linear) whose server this sign-in connects; null for other credentials and uncatalogued servers"
+          },
           "microsoft_identity": {
             "anyOf": [
               {
@@ -35312,7 +35469,7 @@
           "description": {
             "type": "string",
             "title": "Description",
-            "description": "Plain-English description of what this step does for the user. Do not put block class names or wiring verbs here — block_name and action carry that technical detail."
+            "description": "Plain-English description of what this step does for the user. Do not put block class names or wiring verbs here \u2014 block_name and action carry that technical detail."
           },
           "action": {
             "type": "string",
@@ -36087,7 +36244,7 @@
           "reason"
         ],
         "title": "DreamDemotion",
-        "description": "Demote an existing :RELATES_TO edge.\n\nSets ``expired_at`` and ``status``; ``invalid_at`` is reserved for\ncontradiction-detector world-changes per Snodgrass bi-temporal\nsemantics (see ``dream/p0-spec.md`` §4 and the audit at §6.13)."
+        "description": "Demote an existing :RELATES_TO edge.\n\nSets ``expired_at`` and ``status``; ``invalid_at`` is reserved for\ncontradiction-detector world-changes per Snodgrass bi-temporal\nsemantics (see ``dream/p0-spec.md`` \u00a74 and the audit at \u00a76.13)."
       },
       "DreamInput": {
         "properties": {
@@ -36318,7 +36475,7 @@
         },
         "type": "object",
         "title": "DreamOperations",
-        "description": "Phase 3 output — what apply.py writes back to the world.\n\nGuardrails enforced by phase 3's prompt and double-checked in\napply.py:\n  * ≤ ``max_demotions_per_pass`` demotions per pass (runaway-demotion\n    mitigation per spec §3 / TODO P0.3b).\n  * Scope match enforced — a write or proposal citing a fact of\n    another scope (a fact's scope, else ``real:global``) is dropped\n    whole, as is one citing nothing the pass read\n    (``dream/citations.py``); episode citations are not scoped. A\n    source in the same scope that the write does not truly rest on is\n    not caught.\n  * Empty ``writes`` and ``proposals`` is fine; a pass can be no-op."
+        "description": "Phase 3 output \u2014 what apply.py writes back to the world.\n\nGuardrails enforced by phase 3's prompt and double-checked in\napply.py:\n  * \u2264 ``max_demotions_per_pass`` demotions per pass (runaway-demotion\n    mitigation per spec \u00a73 / TODO P0.3b).\n  * Scope match enforced \u2014 a write or proposal citing a fact of\n    another scope (a fact's scope, else ``real:global``) is dropped\n    whole, as is one citing nothing the pass read\n    (``dream/citations.py``); episode citations are not scoped. A\n    source in the same scope that the write does not truly rest on is\n    not caught.\n  * Empty ``writes`` and ``proposals`` is fine; a pass can be no-op."
       },
       "DreamOperationsSnapshot": {
         "properties": {
@@ -37030,7 +37187,7 @@
           "reason"
         ],
         "title": "EntityInvalidation",
-        "description": "Demote every :RELATES_TO edge directly attached to an entity.\n\nSingle-hop only — demotions.py calls ``invalidate_entity_direct_neighbors``\nwhich clamps to ``[r:RELATES_TO]-(other)``; never expands to\nneighbors-of-neighbors."
+        "description": "Demote every :RELATES_TO edge directly attached to an entity.\n\nSingle-hop only \u2014 demotions.py calls ``invalidate_entity_direct_neighbors``\nwhich clamps to ``[r:RELATES_TO]-(other)``; never expands to\nneighbors-of-neighbors."
       },
       "EntityInvalidationSummary": {
         "properties": {
@@ -37221,7 +37378,7 @@
           "erased"
         ],
         "title": "EraseMemoryResponse",
-        "description": "Result of a scope wipe. ``deleted_nodes`` counts every node removed —\nentities, episodes (raw text included), and communities."
+        "description": "Result of a scope wipe. ``deleted_nodes`` counts every node removed \u2014\nentities, episodes (raw text included), and communities."
       },
       "ErrorResponse": {
         "properties": {
@@ -38783,7 +38940,7 @@
           "trigger_names"
         ],
         "title": "ExpertDetachPreview",
-        "description": "What archiving the expert would pause — drives the confirm dialog."
+        "description": "What archiving the expert would pause \u2014 drives the confirm dialog."
       },
       "ExpertIdentity": {
         "properties": {
@@ -41434,6 +41591,11 @@
             ],
             "title": "Expert Id"
           },
+          "paused_by_expert_archive": {
+            "type": "boolean",
+            "title": "Paused By Expert Archive",
+            "default": false
+          },
           "id": {
             "type": "string",
             "title": "Id"
@@ -43785,7 +43947,7 @@
           "timed_out"
         ],
         "title": "IngestionDrainStatus",
-        "description": "Fate of a dream pass's enqueued graph writes at the moment the pass\nwas reported complete.\n\nFive distinct states, so consumers (and a future Memory Visualizer)\ncan tell a healthy by-design skip from a real failure:\n\n  * ``drained`` — the worker finished every one of the pass's own\n    episodes before the pass returned (sync path): each was written,\n    dropped for resting on a forget (``dropped_forgotten``), or failed\n    with a logged error; or the pass enqueued nothing to drain. Healthy.\n  * ``skipped`` — the drain was intentionally not run to avoid stalling\n    a shared serial loop (batch path). The episodes process\n    fire-and-forget, counted pending; healthy by design, NOT a failure\n    signal.\n  * ``not_applied`` — this pass never began applying, so no drain ran.\n  * ``unknown`` — this pass began applying but recorded no outcome: it\n    may still be applying, or have applied before it ended (a cancel\n    after its last check does not stop an apply), or failed partway. Its\n    writes may have been enqueued, so whether they drained is not known.\n  * ``timed_out`` — the sync-path drain was attempted but did not finish\n    within its budget. The episodes not written yet are counted pending,\n    not written; they stay queued in-process, and are lost if the\n    worker's pod restarts. This is the only value that warrants an\n    operator warning."
+        "description": "Fate of a dream pass's enqueued graph writes at the moment the pass\nwas reported complete.\n\nFive distinct states, so consumers (and a future Memory Visualizer)\ncan tell a healthy by-design skip from a real failure:\n\n  * ``drained`` \u2014 the worker finished every one of the pass's own\n    episodes before the pass returned (sync path): each was written,\n    dropped for resting on a forget (``dropped_forgotten``), or failed\n    with a logged error; or the pass enqueued nothing to drain. Healthy.\n  * ``skipped`` \u2014 the drain was intentionally not run to avoid stalling\n    a shared serial loop (batch path). The episodes process\n    fire-and-forget, counted pending; healthy by design, NOT a failure\n    signal.\n  * ``not_applied`` \u2014 this pass never began applying, so no drain ran.\n  * ``unknown`` \u2014 this pass began applying but recorded no outcome: it\n    may still be applying, or have applied before it ended (a cancel\n    after its last check does not stop an apply), or failed partway. Its\n    writes may have been enqueued, so whether they drained is not known.\n  * ``timed_out`` \u2014 the sync-path drain was attempted but did not finish\n    within its budget. The episodes not written yet are counted pending,\n    not written; they stay queued in-process, and are lost if the\n    worker's pod restarts. This is the only value that warrants an\n    operator warning."
       },
       "InputValidationErrorResponse": {
         "properties": {
@@ -43896,7 +44058,7 @@
             },
             "type": "array",
             "title": "Required Providers",
-            "description": "Integrations the skill's instructions assume. Not a precondition — the install has already succeeded."
+            "description": "Integrations the skill's instructions assume. Not a precondition \u2014 the install has already succeeded."
           }
         },
         "type": "object",
@@ -43967,7 +44129,7 @@
           "greeting"
         ],
         "title": "IntroCardResponse",
-        "description": "Content for the copilot home's onboarding greeting.\n\n``path`` is \"A\" when we have something to reflect back and \"B\" when\nthe greeting's job is to invite a recording instead. ``greeting_done``\nis the server-side \"already seen it\" flag — when true the client\nshows nothing and caches the fact locally."
+        "description": "Content for the copilot home's onboarding greeting.\n\n``path`` is \"A\" when we have something to reflect back and \"B\" when\nthe greeting's job is to invite a recording instead. ``greeting_done``\nis the server-side \"already seen it\" flag \u2014 when true the client\nshows nothing and caches the fact locally."
       },
       "InvitationCreateResponse": {
         "properties": {
@@ -44153,7 +44315,7 @@
           "status"
         ],
         "title": "InvoiceListItem",
-        "description": "A single invoice surfaced from Stripe for the billing UI.\n\nMirrors the subset of `stripe.Invoice` we expose to the client. ``hosted_invoice_url``\nopens the Stripe-hosted view; ``invoice_pdf_url`` lets users download the PDF directly.\n\n``total_cents`` is the invoice total (what the user owes / will be charged); use it\nfor the displayed amount. ``amount_paid_cents`` is what Stripe has actually settled\nso far — `0` for ``open``/``draft`` invoices — and is kept for callers that need to\nshow outstanding balances separately."
+        "description": "A single invoice surfaced from Stripe for the billing UI.\n\nMirrors the subset of `stripe.Invoice` we expose to the client. ``hosted_invoice_url``\nopens the Stripe-hosted view; ``invoice_pdf_url`` lets users download the PDF directly.\n\n``total_cents`` is the invoice total (what the user owes / will be charged); use it\nfor the displayed amount. ``amount_paid_cents`` is what Stripe has actually settled\nso far \u2014 `0` for ``open``/``draft`` invoices \u2014 and is kept for callers that need to\nshow outstanding balances separately."
       },
       "JobTriggerResponse": {
         "properties": {
@@ -44200,7 +44362,7 @@
           "started_at"
         ],
         "title": "JobTriggerResponse",
-        "description": "202 response from a fire-and-forget admin trigger.\n\nFrontend captures ``job_id`` and polls ``GET .../{job_id}`` for\nprogress. ``state`` is always ``\"queued\"`` at this point — the\nscheduler picks the job up within sub-second and flips it to\n``running``."
+        "description": "202 response from a fire-and-forget admin trigger.\n\nFrontend captures ``job_id`` and polls ``GET .../{job_id}`` for\nprogress. ``state`` is always ``\"queued\"`` at this point \u2014 the\nscheduler picks the job up within sub-second and flips it to\n``running``."
       },
       "LearningActionResult": {
         "properties": {
@@ -45677,6 +45839,207 @@
         "title": "ListSessionsResponse",
         "description": "Response model for listing chat sessions."
       },
+      "LiveStoreSubmission": {
+        "properties": {
+          "listing_id": {
+            "type": "string",
+            "title": "Listing Id"
+          },
+          "user_id": {
+            "type": "string",
+            "title": "User Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "listing_version_id": {
+            "type": "string",
+            "title": "Listing Version Id"
+          },
+          "listing_version": {
+            "type": "integer",
+            "title": "Listing Version"
+          },
+          "graph_id": {
+            "type": "string",
+            "title": "Graph Id"
+          },
+          "graph_version": {
+            "type": "integer",
+            "title": "Graph Version"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sub_heading": {
+            "type": "string",
+            "title": "Sub Heading"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Categories"
+          },
+          "image_urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Image Urls"
+          },
+          "video_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Video Url"
+          },
+          "agent_output_demo_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Output Demo Url"
+          },
+          "submitted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Submitted At"
+          },
+          "changes_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changes Summary"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SubmissionStatus"
+          },
+          "reviewed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewed At"
+          },
+          "reviewer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reviewer Id"
+          },
+          "review_comments": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Review Comments"
+          },
+          "run_count": {
+            "type": "integer",
+            "title": "Run Count",
+            "default": 0
+          },
+          "review_count": {
+            "type": "integer",
+            "title": "Review Count",
+            "default": 0
+          },
+          "review_avg_rating": {
+            "type": "number",
+            "title": "Review Avg Rating",
+            "default": 0.0
+          },
+          "recommended_schedule_cron": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Schedule Cron"
+          }
+        },
+        "type": "object",
+        "required": [
+          "listing_id",
+          "user_id",
+          "slug",
+          "listing_version_id",
+          "listing_version",
+          "graph_id",
+          "graph_version",
+          "name",
+          "sub_heading",
+          "description",
+          "instructions",
+          "categories",
+          "image_urls",
+          "video_url",
+          "agent_output_demo_url",
+          "submitted_at",
+          "changes_summary",
+          "status",
+          "recommended_schedule_cron"
+        ],
+        "title": "LiveStoreSubmission",
+        "description": "The version of a listing that the Marketplace shows, with the\nrecommended schedule it carries. An update starts from it."
+      },
       "LocalExecutionTargetRequest": {
         "properties": {
           "kind": {
@@ -46693,7 +47056,7 @@
           "reason"
         ],
         "title": "MemoryForgetFailure",
-        "description": "One edge that could not be deleted, with an actionable reason.\n\nSurfaced so the assistant (and user) can tell *why* a delete failed —\ne.g. the edge was not found vs. the query itself errored — instead of a\nbare \"N failed\" count that gives the model nothing to act on."
+        "description": "One edge that could not be deleted, with an actionable reason.\n\nSurfaced so the assistant (and user) can tell *why* a delete failed \u2014\ne.g. the edge was not found vs. the query itself errored \u2014 instead of a\nbare \"N failed\" count that gives the model nothing to act on."
       },
       "MemoryForgetFailureCode": {
         "type": "string",
@@ -47941,7 +48304,6 @@
           },
           "email": {
             "type": "string",
-            "format": "email",
             "title": "Email"
           },
           "briefing_frequency": {
@@ -47970,13 +48332,12 @@
           "email"
         ],
         "title": "NotificationPreference",
-        "description": "The volume knob from the Briefing footer, not a checkbox list. Billing\nand account messages are service mail and are not represented here — they\nare sent regardless of these settings."
+        "description": "The volume knob from the Briefing footer, not a checkbox list. Billing\nand account messages are service mail and are not represented here \u2014 they\nare sent regardless of these settings."
       },
       "NotificationPreferenceDTO": {
         "properties": {
           "email": {
             "type": "string",
-            "format": "email",
             "title": "Email",
             "description": "The account's address, as shown in the form. Ignored on update: an account's address changes only through the verified change-email flow."
           },
@@ -48963,7 +49324,7 @@
           "count"
         ],
         "title": "PeekPendingMessagesResponse",
-        "description": "Response for the pending-message peek (GET) endpoint.\n\nReturns a read-only view of the pending buffer — messages are NOT\nconsumed.  The frontend uses this to restore the queued-message\nindicator after a page refresh and to decide when to clear it once\na turn has ended."
+        "description": "Response for the pending-message peek (GET) endpoint.\n\nReturns a read-only view of the pending buffer \u2014 messages are NOT\nconsumed.  The frontend uses this to restore the queued-message\nindicator after a page refresh and to decide when to clear it once\na turn has ended."
       },
       "PendingExpertOnboarding": {
         "properties": {
@@ -49544,6 +49905,18 @@
             "type": "boolean",
             "title": "Payment Enabled",
             "description": "Whether the platform is paid for, so an account without a plan is paywalled (`ENABLE_PLATFORM_PAYMENT`)."
+          },
+          "mobile_min_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mobile Min Version",
+            "description": "Oldest mobile app version still allowed in; an older app asks to be updated (`MOBILE_MIN_APP_VERSION`). Null means no minimum."
           }
         },
         "type": "object",
@@ -50708,7 +51081,7 @@
           },
           "memory_kind": {
             "$ref": "#/components/schemas/MemoryKind",
-            "description": "Envelope kind — finding | rule | preference | plan.",
+            "description": "Envelope kind \u2014 finding | rule | preference | plan.",
             "default": "finding"
           },
           "confidence": {
@@ -50721,7 +51094,7 @@
           "rationale": {
             "type": "string",
             "title": "Rationale",
-            "description": "Why the dream pass proposes this — recorded for audit."
+            "description": "Why the dream pass proposes this \u2014 recorded for audit."
           },
           "source_episode_uuids": {
             "items": {
@@ -51752,7 +52125,7 @@
           "turn_in_flight"
         ],
         "title": "QueuePendingMessageResponse",
-        "description": "Response returned when a message is queued because the session already\nhas a turn in flight.\n\n- ``buffer_length``: how many messages are now in the session's\n  pending buffer (after this push)\n- ``max_buffer_length``: the per-session cap (server-side constant)\n- ``turn_in_flight``: ``True`` if a copilot turn was running when\n  we checked — purely informational for UX feedback."
+        "description": "Response returned when a message is queued because the session already\nhas a turn in flight.\n\n- ``buffer_length``: how many messages are now in the session's\n  pending buffer (after this push)\n- ``max_buffer_length``: the per-session cap (server-side constant)\n- ``turn_in_flight``: ``True`` if a copilot turn was running when\n  we checked \u2014 purely informational for UX feedback."
       },
       "RaiseAttachment": {
         "properties": {
@@ -51786,7 +52159,7 @@
           "id"
         ],
         "title": "RaiseAttachment",
-        "description": "One workflow or skill to attach while raising an expert.\n\n``id`` is a store listing version UUID (marketplace workflow), a library\nagent UUID (library workflow), or a skill slug — the caller's own skill\nfor ``library``, a Hub :class:`SkillListing` slug for ``marketplace``.\nEither skill slug ends up on ``Expert.skills``."
+        "description": "One workflow or skill to attach while raising an expert.\n\n``id`` is a store listing version UUID (marketplace workflow), a library\nagent UUID (library workflow), or a skill slug \u2014 the caller's own skill\nfor ``library``, a Hub :class:`SkillListing` slug for ``marketplace``.\nEither skill slug ends up on ``Expert.skills``."
       },
       "RaiseAttachmentFailure": {
         "properties": {
@@ -52179,7 +52552,7 @@
           "role"
         ],
         "title": "RecommendedExpert",
-        "description": "One roster template Otto suggests hiring first.\n\n``template_id`` is always a live template — the model only ever picks\nids off the roster it was shown, and anything else is dropped before\nstorage. ``name``/``role``/``avatar_url`` are copied from that\ntemplate server-side rather than trusted from the model, so a card\ncan never introduce an expert who does not exist."
+        "description": "One roster template Otto suggests hiring first.\n\n``template_id`` is always a live template \u2014 the model only ever picks\nids off the roster it was shown, and anything else is dropped before\nstorage. ``name``/``role``/``avatar_url`` are copied from that\ntemplate server-side rather than trusted from the model, so a card\ncan never introduce an expert who does not exist."
       },
       "RecommendedExpertsResponse": {
         "properties": {
@@ -52203,7 +52576,7 @@
           "ready"
         ],
         "title": "RecommendedExpertsResponse",
-        "description": "The team section's content, polled by the onboarding loading screen.\n\n``ready`` is false only while the background job is still running.\n``team`` is null when the feature is off — a team with no experts is\na real answer, so the client cannot use emptiness to tell them apart."
+        "description": "The team section's content, polled by the onboarding loading screen.\n\n``ready`` is false only while the background job is still running.\n``team`` is null when the feature is off \u2014 a team with no experts is\na real answer, so the client cannot use emptiness to tell them apart."
       },
       "RecommendedProvider": {
         "properties": {
@@ -52244,7 +52617,7 @@
           "ready"
         ],
         "title": "RecommendedProvidersResponse",
-        "description": "Recommendations for the \"Connect your tools\" panel.\n\n``ready`` is false while the background job is still running — the\nclient keeps polling. Once true, ``providers`` is the final answer,\nempty included (\"nothing worth recommending\" is a real result)."
+        "description": "Recommendations for the \"Connect your tools\" panel.\n\n``ready`` is false while the background job is still running \u2014 the\nclient keeps polling. Once true, ``providers`` is the final answer,\nempty included (\"nothing worth recommending\" is a real result)."
       },
       "RecordUserConsentRequest": {
         "properties": {
@@ -52415,7 +52788,7 @@
         },
         "type": "object",
         "title": "RecordingSummary",
-        "description": "RECORDING_SUMMARY payload after STOP_RECORDING (§6)."
+        "description": "RECORDING_SUMMARY payload after STOP_RECORDING (\u00a76)."
       },
       "RefundRequest": {
         "properties": {
@@ -54840,6 +55213,125 @@
         "title": "SharedExecutionResponse",
         "description": "Public-safe response for shared executions"
       },
+      "SignInConnectionClients": {
+        "properties": {
+          "google": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Google"
+          },
+          "microsoft": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Microsoft"
+          }
+        },
+        "type": "object",
+        "title": "SignInConnectionClients",
+        "description": "The OAuth client each provider's connections use, or null when this\ndeployment has no such connections."
+      },
+      "SignInConnectionRequest": {
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "google",
+              "microsoft"
+            ],
+            "title": "Provider"
+          },
+          "access_token": {
+            "type": "string",
+            "maxLength": 16384,
+            "format": "password",
+            "title": "Access Token",
+            "writeOnly": true
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16384,
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "scope": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Scope",
+            "default": ""
+          },
+          "id_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16384,
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "provider",
+          "access_token"
+        ],
+        "title": "SignInConnectionRequest"
+      },
+      "SignInConnectionResponse": {
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": [
+              "created",
+              "updated",
+              "kept",
+              "skipped",
+              "held"
+            ],
+            "title": "Result"
+          }
+        },
+        "type": "object",
+        "required": [
+          "result"
+        ],
+        "title": "SignInConnectionResponse"
+      },
       "SkillLearningDetail": {
         "properties": {
           "skill_name": {
@@ -55082,7 +55574,7 @@
           "size_bytes"
         ],
         "title": "SkillPackageFile",
-        "description": "One file beside the published ``SKILL.md``, by its path relative to the\nskill folder. The contents are not inlined — a package runs to 20 MiB."
+        "description": "One file beside the published ``SKILL.md``, by its path relative to the\nskill folder. The contents are not inlined \u2014 a package runs to 20 MiB."
       },
       "SkillPolicyRequest": {
         "properties": {
@@ -55915,7 +56407,7 @@
         },
         "type": "object",
         "title": "StepEnrichment",
-        "description": "The additive enrichment block on a TrajectoryStep (§1).\n\n``kind`` is ``dom`` | ``ax`` | ``none``; the floor is always present\nregardless. ``selectors`` are browser-DOM only, most-stable-first (§7)."
+        "description": "The additive enrichment block on a TrajectoryStep (\u00a71).\n\n``kind`` is ``dom`` | ``ax`` | ``none``; the floor is always present\nregardless. ``selectors`` are browser-DOM only, most-stable-first (\u00a77)."
       },
       "StepValue": {
         "properties": {
@@ -55941,7 +56433,7 @@
         },
         "type": "object",
         "title": "StepValue",
-        "description": "The value block on a TrajectoryStep (§1).\n\n``raw`` is the demonstration value — handled per interpretation route.\n``is_parameter`` is ``None`` until inferred AND confirmed during\ngeneralization (§8); a None here means \"not yet decided\", which is\nwhy a single-row recording can't auto-save (§8)."
+        "description": "The value block on a TrajectoryStep (\u00a71).\n\n``raw`` is the demonstration value \u2014 handled per interpretation route.\n``is_parameter`` is ``None`` until inferred AND confirmed during\ngeneralization (\u00a78); a None here means \"not yet decided\", which is\nwhy a single-row recording can't auto-save (\u00a78)."
       },
       "StopExecutionRequest": {
         "properties": {
@@ -57208,7 +57700,7 @@
               }
             ],
             "title": "Message Id",
-            "description": "Optional per-click UUID generated by the frontend. The server scopes it to the authenticated user and session before using the result as ``ChatMessage.id``. Frontend / network / RMQ-redelivery retransmits of the same logical send reuse the key, and the server claims it once: a retransmit neither starts a parallel turn nor, while a turn is running, queues the message again, and gets a subscribe-only response. Distinct user clicks (even with identical text) MUST send different ids — the frontend's per-click ``crypto.randomUUID()`` guarantees that."
+            "description": "Optional per-click UUID generated by the frontend. The server scopes it to the authenticated user and session before using the result as ``ChatMessage.id``. Frontend / network / RMQ-redelivery retransmits of the same logical send reuse the key, and the server claims it once: a retransmit neither starts a parallel turn nor, while a turn is running, queues the message again, and gets a subscribe-only response. Distinct user clicks (even with identical text) MUST send different ids \u2014 the frontend's per-click ``crypto.randomUUID()`` guarantees that."
           },
           "expert_kickoff": {
             "type": "boolean",
@@ -57308,7 +57800,7 @@
           "average_rating"
         ],
         "title": "SubmissionStats",
-        "description": "Creator-wide aggregates over a user's non-deleted submissions.\n\nComputed server-side so values stay accurate regardless of pagination —\nsumming client-side over the current page silently undercounts once the\ncreator has more submissions than fit on one page."
+        "description": "Creator-wide aggregates over a user's non-deleted submissions.\n\nComputed server-side so values stay accurate regardless of pagination \u2014\nsumming client-side over the current page silently undercounts once the\ncreator has more submissions than fit on one page."
       },
       "SubmissionStatus": {
         "type": "string",
@@ -57352,7 +57844,7 @@
             },
             "type": "object",
             "title": "Tier Costs Yearly",
-            "description": "Tier → yearly amount in cents. Populated only for tiers with a yearly Stripe price configured in PostHog. Empty for monthly-only configurations."
+            "description": "Tier \u2192 yearly amount in cents. Populated only for tiers with a yearly Stripe price configured in PostHog. Empty for monthly-only configurations."
           },
           "billing_cycle": {
             "type": "string",
@@ -57370,7 +57862,7 @@
             },
             "type": "object",
             "title": "Tier Multipliers",
-            "description": "Tier → rate-limit multiplier. Covers the same tiers listed in ``tier_costs`` so the frontend can render rate-limit badges relative to the lowest visible tier without knowing backend defaults."
+            "description": "Tier \u2192 rate-limit multiplier. Covers the same tiers listed in ``tier_costs`` so the frontend can render rate-limit badges relative to the lowest visible tier without knowing backend defaults."
           },
           "proration_credit_cents": {
             "type": "integer",
@@ -57444,12 +57936,12 @@
               }
             ],
             "title": "Pending Billing Cycle",
-            "description": "Billing cycle of the queued change, when resolvable. Set alongside ``pending_tier`` for tier downgrades and same-tier cycle switches (yearly→monthly). The frontend uses this to differentiate a cycle-only schedule (``pending_tier == current tier``) from a real tier downgrade so the UI copy can describe the actual change. ``None`` for cancellations and unconfigured legacy prices."
+            "description": "Billing cycle of the queued change, when resolvable. Set alongside ``pending_tier`` for tier downgrades and same-tier cycle switches (yearly\u2192monthly). The frontend uses this to differentiate a cycle-only schedule (``pending_tier == current tier``) from a real tier downgrade so the UI copy can describe the actual change. ``None`` for cancellations and unconfigured legacy prices."
           },
           "url": {
             "type": "string",
             "title": "Url",
-            "description": "Populated only when POST /credits/subscription starts a Stripe Checkout Session (BASIC → paid upgrade), or when a trial ending early needs the customer's bank to confirm its payment, on Stripe's invoice page. Empty string in all other branches — the client sends the customer to this URL when non-empty.",
+            "description": "Populated only when POST /credits/subscription starts a Stripe Checkout Session (BASIC \u2192 paid upgrade), or when a trial ending early needs the customer's bank to confirm its payment, on Stripe's invoice page. Empty string in all other branches \u2014 the client sends the customer to this URL when non-empty.",
             "default": ""
           }
         },
@@ -57778,7 +58270,7 @@
           "prompt"
         ],
         "title": "SuggestedPrompt",
-        "description": "One pickable prompt under the greeting.\n\n``title`` is the short line the user sees; ``prompt`` is the full\nmessage that gets sent when they pick it. ``icon`` is a Phosphor icon\nslug from ``intro.PROMPT_ICONS`` — the frontend maps it to the actual\nicon component and falls back to a sparkle for anything unknown."
+        "description": "One pickable prompt under the greeting.\n\n``title`` is the short line the user sees; ``prompt`` is the full\nmessage that gets sent when they pick it. ``icon`` is a Phosphor icon\nslug from ``intro.PROMPT_ICONS`` \u2014 the frontend maps it to the actual\nicon component and falls back to a sparkle for anything unknown."
       },
       "SuggestedPromptsResponse": {
         "properties": {
@@ -58121,7 +58613,7 @@
           "steps"
         ],
         "title": "TaskDecompositionResponse",
-        "description": "Response for decompose_goal tool — shows the plan to the user."
+        "description": "Response for decompose_goal tool \u2014 shows the plan to the user."
       },
       "TeamMemberResponse": {
         "properties": {
@@ -59034,7 +59526,7 @@
           "message"
         ],
         "title": "TodoWriteResponse",
-        "description": "Ack returned by ``TodoWrite``.\n\nThe tool is effectively stateless — the authoritative task list lives in\nthe assistant's latest tool-call arguments, which are replayed from the\ntranscript on each turn. The tool output only needs to confirm that the\nupdate was accepted so the model can proceed."
+        "description": "Ack returned by ``TodoWrite``.\n\nThe tool is effectively stateless \u2014 the authoritative task list lives in\nthe assistant's latest tool-call arguments, which are replayed from the\ntranscript on each turn. The tool output only needs to confirm that the\nupdate was accepted so the model can proceed."
       },
       "TokenIntrospectionResult": {
         "properties": {
@@ -59155,7 +59647,7 @@
           "output_usd_per_1m"
         ],
         "title": "TokenRateDisplay",
-        "description": "Public per-1M-token USD rates surfaced to the builder UI.\n\nPopulated only on LLM block costs whose model has a TOKEN_COST rate.\ncache_* fields are set only when the provider publishes a distinct\ncached-token rate (Anthropic). Display-only — billing always uses the\ninternal credit math in `BlockCost.cost_amount`."
+        "description": "Public per-1M-token USD rates surfaced to the builder UI.\n\nPopulated only on LLM block costs whose model has a TOKEN_COST rate.\ncache_* fields are set only when the provider publishes a distinct\ncached-token rate (Anthropic). Display-only \u2014 billing always uses the\ninternal credit math in `BlockCost.cost_amount`."
       },
       "TokenResponse": {
         "properties": {
@@ -59308,7 +59800,7 @@
         },
         "type": "object",
         "title": "TrajectoryStep",
-        "description": "One ordered step in a recording (§1 TrajectoryStep)."
+        "description": "One ordered step in a recording (\u00a71 TrajectoryStep)."
       },
       "TransactionHistory": {
         "properties": {
@@ -60988,7 +61480,7 @@
           "resets_at"
         ],
         "title": "UsageWindowPublic",
-        "description": "Public view of a usage window — only the percentage and reset time.\n\nHides the raw spend and the cap so clients cannot derive per-turn cost\nor reverse-engineer platform margins.  ``percent_used`` is capped at 100."
+        "description": "Public view of a usage window \u2014 only the percentage and reset time.\n\nHides the raw spend and the cap so clients cannot derive per-turn cost\nor reverse-engineer platform margins.  ``percent_used`` is capped at 100."
       },
       "UserAgentCostRollup": {
         "properties": {
@@ -61880,6 +62372,33 @@
             ],
             "title": "Wizarduserid"
           },
+          "wizardWriterId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wizardwriterid"
+          },
+          "wizardWriteSeq": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 2147483647.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wizardwriteseq"
+          },
           "walletShown": {
             "anyOf": [
               {
@@ -62456,7 +62975,7 @@
         },
         "type": "object",
         "title": "WorkflowRecording",
-        "description": "A full recording as returned by RECORDING_DATA / RECORDING_FETCH (§1)."
+        "description": "A full recording as returned by RECORDING_DATA / RECORDING_FETCH (\u00a71)."
       },
       "WorkflowStep": {
         "properties": {
@@ -62940,7 +63459,7 @@
           "content"
         ],
         "title": "WriteSummary",
-        "description": "One line per envelope written by apply.py.\n\nCarries the durable Graphiti edge uuid so the eval / admin UI / the\nfuture inline chat-stream `dream.operations` event (P9 daydreaming)\ncan render or audit individual operations. ``edge_uuid`` is None\nwhen the underlying ``enqueue_episode`` call did not return one\n(FalkorDB unreachable, etc.) — we still record the attempted write."
+        "description": "One line per envelope written by apply.py.\n\nCarries the durable Graphiti edge uuid so the eval / admin UI / the\nfuture inline chat-stream `dream.operations` event (P9 daydreaming)\ncan render or audit individual operations. ``edge_uuid`` is None\nwhen the underlying ``enqueue_episode`` call did not return one\n(FalkorDB unreachable, etc.) \u2014 we still record the attempted write."
       }
     },
     "securitySchemes": {
