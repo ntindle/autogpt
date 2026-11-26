@@ -34,6 +34,7 @@ export async function showResult(
           parts={[part]}
           messageID="connected-message"
           isCurrentlyStreaming={false}
+          isLatestAnswer={true}
           readOnly={readOnly}
         />
       </CopilotChatActionsProvider>

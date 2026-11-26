@@ -64,6 +64,7 @@ function cardElement(
         parts={[part]}
         messageID="saved-message"
         isCurrentlyStreaming={false}
+        isLatestAnswer={true}
       />
     </CopilotChatActionsProvider>
   );

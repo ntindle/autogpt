@@ -39,7 +39,7 @@ export function FieldView({
         {...handlers}
         id={id}
         label={props.label}
-        labelVariant="body-medium"
+        labelVariant="body"
         value={
           typeof field.value === "string" ? field.value : (props.value ?? "")
         }
@@ -48,7 +48,7 @@ export function FieldView({
         aria-invalid={!!error}
         aria-describedby={`${id}-error`}
         className={cn(
-          error && "border-red-500 focus:border-red-500 focus:ring-red-500",
+          error && "border-error focus:border-error focus:ring-error",
         )}
         maxLength={500}
         disabled={disabled}
@@ -79,7 +79,9 @@ export function FormView({
   return (
     <FormNameContext.Provider value={props.name}>
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
-        <h3 className="text-sm text-zinc-800 font-semibold">{props.title}</h3>
+        <h3 className="text-body font-semibold text-foreground-emphasis">
+          {props.title}
+        </h3>
         {renderNode(props.fields?.slice(0, 6))}
         <Button
           type="submit"

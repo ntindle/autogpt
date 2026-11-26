@@ -36,10 +36,10 @@ export function ScheduleTaskRow({
   );
   return (
     <li
-      className={`space-y-2 border-b border-border p-3 ${highlighted ? "rounded-lg bg-muted/40" : ""}`}
+      className={`space-y-2 border-b border-border-base p-3 ${highlighted ? "rounded-lg bg-surface-hover/40" : ""}`}
     >
       {children}
-      <label className="flex min-h-11 items-center gap-2 text-sm font-medium text-foreground">
+      <label className="flex min-h-11 items-center gap-2 text-body font-medium text-foreground-base">
         <input
           type="checkbox"
           checked={task.done}
@@ -60,7 +60,7 @@ export function ScheduleTaskRow({
               id={id}
               label="Minutes"
               aria-label={`${task.title} minutes`}
-              labelVariant="body-medium"
+              labelVariant="body"
               type="text"
               inputMode="numeric"
               maxLength={10}
@@ -100,11 +100,11 @@ export function ScheduleTaskRow({
       <p
         id={`${id}-error`}
         aria-live="polite"
-        className="text-xs text-destructive"
+        className="text-caption text-error"
       >
         {error}
       </p>
-      <div className="text-sm text-muted-foreground">
+      <div className="text-body text-foreground-tertiary">
         {task.done ? (
           <p>Completed · excluded from remaining work</p>
         ) : (
@@ -112,7 +112,7 @@ export function ScheduleTaskRow({
             {times.map((time) => (
               <p key={time}>{time}</p>
             ))}
-            {conflict && <p className="text-destructive">{conflict}</p>}
+            {conflict && <p className="text-error">{conflict}</p>}
             {task.earliest && (
               <p>
                 Not before day {task.earliest.day + 1}, {task.earliest.time}

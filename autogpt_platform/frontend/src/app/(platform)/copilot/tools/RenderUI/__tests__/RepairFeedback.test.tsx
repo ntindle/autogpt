@@ -56,6 +56,7 @@ describe("OpenUI repair feedback", () => {
             ]}
             messageID="repaired-message"
             isCurrentlyStreaming={false}
+            isLatestAnswer={true}
           />
         </CopilotChatActionsProvider>,
       );

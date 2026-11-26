@@ -40,6 +40,7 @@ function showResult(
           parts={[part]}
           messageID="ui-message"
           isCurrentlyStreaming={false}
+          isLatestAnswer={true}
           readOnly={options.readOnly}
         />
       </CopilotChatActionsProvider>
@@ -95,6 +96,7 @@ describe("OpenUI results in a Copilot conversation", () => {
             ]}
             messageID="mixed-message"
             isCurrentlyStreaming={false}
+            isLatestAnswer={true}
           />
         </CopilotChatActionsProvider>,
       );
@@ -217,6 +219,7 @@ describe("OpenUI results in a Copilot conversation", () => {
             parts={message.parts}
             messageID={message.id}
             isCurrentlyStreaming={false}
+            isLatestAnswer={true}
           />
         ))}
       </CopilotChatActionsProvider>,
